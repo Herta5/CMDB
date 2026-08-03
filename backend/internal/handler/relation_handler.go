@@ -1,4 +1,4 @@
-package handler
+﻿package handler
 
 import (
 	"strconv"
@@ -86,4 +86,14 @@ func (h *RelationHandler) ImpactAnalysis(c *gin.Context) {
 	nodes, err := h.svc.ImpactAnalysis(ciID, depth)
 	if err != nil { response.InternalError(c, err.Error()); return }
 	response.Success(c, nodes)
+}
+
+func (h *RelationHandler) MultiLevelTopology(c *gin.Context) {
+	ciID, err := strconv.ParseUint(c.Query("ci_id"), 10, 64)
+	if err != nil { response.BadRequest(c, "invalid ci_id"); return }
+	depth := 3
+	if d, err := strconv.Atoi(c.DefaultQuery("depth", "3")); err == nil { depth = d }
+	graph, err := h.svc.MultiLevelTopology(ciID, depth)
+	if err != nil { response.InternalError(c, err.Error()); return }
+	response.Success(c, graph)
 }

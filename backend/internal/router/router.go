@@ -1,4 +1,4 @@
-package router
+﻿package router
 
 import (
 	"github-cmdb/internal/handler"
@@ -13,6 +13,8 @@ type Handlers struct {
 	Dashboard  *handler.DashboardHandler
 	Discovery  *handler.DiscoveryHandler
 	Snapshot   *handler.SnapshotHandler
+	Change     *handler.ChangeHandler
+	Batch      *handler.BatchHandler
 }
 
 func Setup(r *gin.Engine, h *Handlers) {
@@ -44,6 +46,9 @@ func Setup(r *gin.Engine, h *Handlers) {
 			ciInstances.PUT("/:id", middleware.RequireRole("asset_mgr", "cmdb_admin"), h.CIInstance.Update)
 			ciInstances.DELETE("/:id", middleware.RequireRole("asset_mgr", "cmdb_admin"), h.CIInstance.Delete)
 			ciInstances.PATCH("/:id/status", middleware.RequireRole("asset_mgr", "cmdb_admin"), h.CIInstance.UpdateStatus)
+			// Batch
+			ciInstances.POST("/import", middleware.RequireRole("asset_mgr", "cmdb_admin"), h.Batch.ImportCSV)
+			ciInstances.GET("/export", h.Batch.ExportCSV)
 		}
 
 		// --- Relations ---
@@ -58,8 +63,25 @@ func Setup(r *gin.Engine, h *Handlers) {
 			relations.POST("/instances", middleware.RequireRole("asset_mgr", "cmdb_admin"), h.Relation.CreateInstance)
 			relations.DELETE("/instances/:id", middleware.RequireRole("asset_mgr", "cmdb_admin"), h.Relation.DeleteInstance)
 
-			relations.GET("/topology", h.Relation.Topology)
+			relations.GET("/topology", h.Relation.MultiLevelTopology)
 			relations.GET("/impact", h.Relation.ImpactAnalysis)
+		}
+
+		// --- Changes ---
+		changes := api.Group("/changes")
+		{
+			changes.GET("", h.Change.List)
+			changes.POST("", middleware.RequireRole("asset_mgr", "cmdb_admin"), h.Change.Create)
+			changes.GET("/:id", h.Change.Get)
+			changes.PUT("/:id", middleware.RequireRole("asset_mgr", "cmdb_admin"), h.Change.Update)
+			changes.DELETE("/:id", middleware.RequireRole("cmdb_admin"), h.Change.Delete)
+			changes.POST("/:id/submit", middleware.RequireRole("asset_mgr", "cmdb_admin"), h.Change.Submit)
+			changes.POST("/:id/approve", middleware.RequireRole("cmdb_admin"), h.Change.Approve)
+			changes.POST("/:id/reject", middleware.RequireRole("cmdb_admin"), h.Change.Reject)
+			changes.POST("/:id/execute", middleware.RequireRole("asset_mgr", "cmdb_admin"), h.Change.Execute)
+			changes.POST("/:id/complete", middleware.RequireRole("asset_mgr", "cmdb_admin"), h.Change.Complete)
+			changes.POST("/:id/rollback", middleware.RequireRole("asset_mgr", "cmdb_admin"), h.Change.Rollback)
+			changes.POST("/:id/fail", middleware.RequireRole("asset_mgr", "cmdb_admin"), h.Change.Fail)
 		}
 
 		// --- Discovery ---
@@ -92,6 +114,7 @@ func Setup(r *gin.Engine, h *Handlers) {
 			dashboard.GET("/summary", h.Dashboard.Summary)
 			dashboard.GET("/distribution", h.Dashboard.Distribution)
 			dashboard.GET("/trends", h.Dashboard.Trends)
+			dashboard.GET("/capacity", h.Dashboard.Capacity)
 		}
 	}
 

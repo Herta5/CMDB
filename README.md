@@ -107,18 +107,32 @@ github-cmdb/
 | POST | `/api/v1/ci-instances` | 创建 CI 实例 |
 | GET  | `/api/v1/relations/rules` | 关系规则列表 |
 | GET  | `/api/v1/relations/instances` | 关系实例列表 |
-| GET  | `/api/v1/relations/topology?ci_id=1` | 拓扑查询 |
+| GET  | `/api/v1/relations/topology?ci_id=1&depth=3` | 多层拓扑图谱 (nodes+edges) |
+POST | `/api/v1/ci-instances/import` | CSV 批量导入 |
+GET  | `/api/v1/ci-instances/export` | CSV 批量导出 |
 GET  | `/api/v1/discovery/collectors` | 采集器类型列表 |
 POST | `/api/v1/discovery/strategies` | 创建发现策略 |
 GET  | `/api/v1/discovery/strategies` | 发现策略列表 |
 GET  | `/api/v1/discovery/strategies/:id` | 获取发现策略 |
 PUT  | `/api/v1/discovery/strategies/:id` | 更新发现策略 |
 DELETE | `/api/v1/discovery/strategies/:id` | 删除发现策略 |
+POST | `/api/v1/changes` | 创建变更单 |
+GET  | `/api/v1/changes` | 变更单列表 |
+GET  | `/api/v1/changes/:id` | 变更单详情 |
+PUT  | `/api/v1/changes/:id` | 更新变更单 |
+POST | `/api/v1/changes/:id/submit` | 提交审批 |
+POST | `/api/v1/changes/:id/approve` | 批准变更 |
+POST | `/api/v1/changes/:id/reject` | 驳回变更 |
+POST | `/api/v1/changes/:id/execute` | 执行变更 |
+POST | `/api/v1/changes/:id/complete` | 标记完成 |
+POST | `/api/v1/changes/:id/rollback` | 回滚变更 |
+POST | `/api/v1/changes/:id/fail` | 标记失败 |
 GET  | `/api/v1/discovery/strategies/:id/history` | 策略执行历史 |
 GET  | `/api/v1/snapshots` | 配置快照列表 |
 GET  | `/api/v1/snapshots/:id` | 获取快照详情 |
 GET  | `/api/v1/snapshots/diff?from=X&to=Y` | 快照差异对比 |
 | GET  | `/api/v1/dashboard/summary` | 仪表盘汇总 |
+GET  | `/api/v1/dashboard/capacity` | 容量概览 |
 
 详细 API 设计见 [CMDB-ARCHITECTURE.md](docs/CMDB-ARCHITECTURE.md)。
 

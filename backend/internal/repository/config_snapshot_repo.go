@@ -1,4 +1,4 @@
-package repository
+﻿package repository
 
 import (
 	"github-cmdb/internal/model"
@@ -33,4 +33,10 @@ func (r *ConfigSnapshotRepo) GetByID(id uint64) (*model.ConfigSnapshot, error) {
 
 func (r *ConfigSnapshotRepo) Create(snap *model.ConfigSnapshot) error {
 	return r.db.Create(snap).Error
+}
+func (r *ConfigSnapshotRepo) GetLatestByCIID(ciID uint64) (*model.ConfigSnapshot, error) {
+	var snap model.ConfigSnapshot
+	err := r.db.Where("ci_id = ?", ciID).Order("created_at DESC").First(&snap).Error
+	if err != nil { return nil, err }
+	return &snap, nil
 }

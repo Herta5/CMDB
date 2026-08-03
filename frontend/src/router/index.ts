@@ -1,4 +1,4 @@
-import { createRouter, createWebHistory } from 'vue-router'
+﻿import { createRouter, createWebHistory } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
 
 const routes = [
@@ -48,6 +48,18 @@ const routes = [
         name: 'Topology',
         component: () => import('@/views/Topology.vue'),
         meta: { title: '拓扑图谱', icon: 'Share' },
+      },
+      {
+        path: 'changes',
+        name: 'ChangeList',
+        component: () => import('@/views/ChangeList.vue'),
+        meta: { title: '变更管理', icon: 'Document' },
+      },
+      {
+        path: 'changes/:id',
+        name: 'ChangeDetail',
+        component: () => import('@/views/ChangeDetail.vue'),
+        meta: { title: '变更详情', hidden: true },
       },
       {
         path: 'discovery/strategies',

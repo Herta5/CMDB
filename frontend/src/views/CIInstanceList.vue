@@ -2,7 +2,13 @@
   <div class="page">
     <div class="page-header">
       <h3>CI 实例</h3>
-      <el-button type="primary" @click="openCreate"><el-icon><Plus /></el-icon>新建实例</el-button>
+      <div style="display:flex;gap:8px">
+        <el-button @click="handleExport">导出CSV</el-button>
+        <el-upload :show-file-list="false" :before-upload="handleImport" accept=".csv">
+          <el-button>导入CSV</el-button>
+        </el-upload>
+        <el-button type="primary" @click="openCreate"><el-icon><Plus /></el-icon>新建实例</el-button>
+      </div>
     </div>
 
     <el-card shadow="never" style="margin-bottom:16px">
@@ -185,5 +191,35 @@ async function handleStatusUpdate() {
   ElMessage.success('状态更新成功')
   statusDialogVisible.value = false
   fetchData()
+}
+
+function handleExport() {
+  const params = new URLSearchParams()
+  if (filter.ci_type_id) params.set('ci_type_id', String(filter.ci_type_id))
+  if (filter.status) params.set('status', filter.status)
+  const url = `${import.meta.env.VITE_API_BASE || '/api/v1'}/ci-instances/export?${params.toString()}`
+  window.open(url, '_blank')
+}
+
+async function handleImport(file: File) {
+  const formData = new FormData()
+  formData.append('file', file)
+  try {
+    const res = await fetch(`${import.meta.env.VITE_API_BASE || '/api/v1'}/ci-instances/import`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${localStorage.getItem('cmdb_token')}` },
+      body: formData,
+    })
+    const data = await res.json()
+    if (data.code === 0) {
+      ElMessage.success(`导入完成: 成功 ${data.data.created} 条, 失败 ${data.data.failed} 条`)
+      fetchData()
+    } else {
+      ElMessage.error(data.message || '导入失败')
+    }
+  } catch {
+    ElMessage.error('导入请求失败')
+  }
+  return false
 }
 </script>

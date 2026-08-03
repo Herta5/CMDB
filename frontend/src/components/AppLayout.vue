@@ -1,4 +1,4 @@
-<template>
+﻿<template>
   <el-container class="app-container">
     <el-aside :width="isCollapse ? '64px' : '220px'" class="sidebar">
       <div class="logo">
@@ -33,6 +33,10 @@
         <el-menu-item index="/relations/topology">
           <el-icon><Share /></el-icon>
           <span>拓扑图谱</span>
+        </el-menu-item>
+        <el-menu-item index="/changes">
+          <el-icon><Document /></el-icon>
+          <span>变更管理</span>
         </el-menu-item>
         <el-menu-item index="/discovery/strategies">
           <el-icon><Search /></el-icon>

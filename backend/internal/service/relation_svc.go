@@ -1,4 +1,4 @@
-package service
+﻿package service
 
 import (
 	"github-cmdb/internal/model"
@@ -42,4 +42,9 @@ func (s *RelationSvc) Topology(ciID uint64, depth int) ([]model.CIRelationInstan
 func (s *RelationSvc) ImpactAnalysis(ciID uint64, depth int) ([]repository.ImpactNode, error) {
 	if depth <= 0 { depth = 5 }
 	return s.repo.ImpactAnalysis(ciID, depth)
+}
+
+func (s *RelationSvc) MultiLevelTopology(ciID uint64, depth int) (*repository.TopologyGraph, error) {
+	if depth <= 0 { depth = 3 }
+	return s.repo.MultiLevelTopology(ciID, depth)
 }

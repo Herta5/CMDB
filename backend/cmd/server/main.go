@@ -1,4 +1,4 @@
-package main
+﻿package main
 
 import (
 	"log"
@@ -36,6 +36,7 @@ func main() {
 		&model.ConfigSnapshot{},
 		&model.DiscoveryStrategy{},
 		&model.DiscoveryHistory{},
+		&model.ChangeTicket{},
 	); err != nil {
 		log.Fatalf("failed to migrate: %v", err)
 	}
@@ -47,12 +48,14 @@ func main() {
 	snapRepo := repository.NewConfigSnapshotRepo(db)
 	relationRepo := repository.NewRelationRepo(db)
 	discoveryRepo := repository.NewDiscoveryRepo(db)
+	changeRepo := repository.NewChangeRepo(db)
 
 	// --- Services ---
 	ciTypeSvc := service.NewCITypeSvc(ciTypeRepo)
 	ciInstanceSvc := service.NewCIInstanceSvc(ciInstanceRepo, ciTypeRepo, snapRepo)
 	relationSvc := service.NewRelationSvc(relationRepo)
 	discoverySvc := service.NewDiscoverySvc(discoveryRepo)
+	changeSvc := service.NewChangeSvc(changeRepo, ciInstanceRepo, snapRepo)
 
 	// --- Handlers ---
 	ciTypeHandler := handler.NewCITypeHandler(ciTypeSvc)
@@ -61,6 +64,8 @@ func main() {
 	dashboardHandler := handler.NewDashboardHandler(ciInstanceSvc)
 	discoveryHandler := handler.NewDiscoveryHandler(discoverySvc, ciTypeRepo)
 	snapshotHandler := handler.NewSnapshotHandler(snapRepo)
+	changeHandler := handler.NewChangeHandler(changeSvc)
+	batchHandler := handler.NewBatchHandler(ciInstanceSvc)
 
 	// --- Discovery Executor & Scheduler ---
 	exec := collector.NewDiscoveryExecutor(ciInstanceRepo, ciTypeRepo, snapRepo, relationRepo, discoveryRepo)
@@ -84,6 +89,8 @@ func main() {
 		Dashboard:  dashboardHandler,
 		Discovery:  discoveryHandler,
 		Snapshot:   snapshotHandler,
+		Change:     changeHandler,
+		Batch:      batchHandler,
 	})
 
 	// --- Graceful shutdown ---
