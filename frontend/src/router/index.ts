@@ -49,6 +49,24 @@ const routes = [
         component: () => import('@/views/Topology.vue'),
         meta: { title: '拓扑图谱', icon: 'Share' },
       },
+      {
+        path: 'discovery/strategies',
+        name: 'DiscoveryStrategy',
+        component: () => import('@/views/DiscoveryStrategy.vue'),
+        meta: { title: '采集策略', icon: 'Search' },
+      },
+      {
+        path: 'discovery/history',
+        name: 'DiscoveryHistory',
+        component: () => import('@/views/DiscoveryHistory.vue'),
+        meta: { title: '采集历史', hidden: true },
+      },
+      {
+        path: 'snapshots',
+        name: 'SnapshotDiff',
+        component: () => import('@/views/SnapshotDiff.vue'),
+        meta: { title: '配置快照', icon: 'Timer' },
+      },
     ],
   },
 ]

@@ -2,6 +2,8 @@ package repository
 
 import (
 	"fmt"
+	"time"
+
 	"github-cmdb/internal/model"
 	"gorm.io/gorm"
 )
@@ -67,9 +69,28 @@ func (r *CIInstanceRepo) GetByCICode(code string) (*model.CIInstance, error) {
 	return &ci, nil
 }
 
+func (r *CIInstanceRepo) GetByExternalID(externalID string) (*model.CIInstance, error) {
+	var ci model.CIInstance
+	err := r.db.Where("source_detail = ? AND source = ?", externalID, "auto_discovery").First(&ci).Error
+	if err != nil { return nil, err }
+	return &ci, nil
+}
+
+func (r *CIInstanceRepo) GetByTypeAndIP(ciTypeID uint64, ip string) (*model.CIInstance, error) {
+	var ci model.CIInstance
+	err := r.db.Where("ci_type_id = ? AND ip_address = ?", ciTypeID, ip).First(&ci).Error
+	if err != nil { return nil, err }
+	return &ci, nil
+}
+
 func (r *CIInstanceRepo) Create(ci *model.CIInstance) error { return r.db.Create(ci).Error }
 func (r *CIInstanceRepo) Update(ci *model.CIInstance) error { return r.db.Save(ci).Error }
 func (r *CIInstanceRepo) Delete(id uint64) error            { return r.db.Delete(&model.CIInstance{}, id).Error }
+
+func (r *CIInstanceRepo) UpdateLastSeen(id uint64) error {
+	now := time.Now()
+	return r.db.Model(&model.CIInstance{}).Where("id = ?", id).Update("last_seen_at", now).Error
+}
 
 func (r *CIInstanceRepo) GenerateCICode(typeName string) (string, error) {
 	var maxID uint64
@@ -94,7 +115,7 @@ func (r *CIInstanceRepo) DistributionByType() ([]TypeDistribution, error) {
 }
 
 func (r *CIInstanceRepo) DistributionByStatus() (map[string]int64, error) {
-	type row struct { Status string; Count int64 }
+	type row struct{ Status string; Count int64 }
 	var rows []row
 	err := r.db.Model(&model.CIInstance{}).Select("status, COUNT(*) as count").Group("status").Scan(&rows).Error
 	if err != nil { return nil, err }

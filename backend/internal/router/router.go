@@ -11,6 +11,8 @@ type Handlers struct {
 	CIInstance *handler.CIInstanceHandler
 	Relation   *handler.RelationHandler
 	Dashboard  *handler.DashboardHandler
+	Discovery  *handler.DiscoveryHandler
+	Snapshot   *handler.SnapshotHandler
 }
 
 func Setup(r *gin.Engine, h *Handlers) {
@@ -19,6 +21,7 @@ func Setup(r *gin.Engine, h *Handlers) {
 	api := r.Group("/api/v1")
 	api.Use(middleware.AuthRequired())
 	{
+		// --- CI Types ---
 		ciTypes := api.Group("/ci-types")
 		{
 			ciTypes.GET("", h.CIType.ListTree)
@@ -32,6 +35,7 @@ func Setup(r *gin.Engine, h *Handlers) {
 			ciTypes.DELETE("/:id/attributes/:attrId", middleware.RequireRole("cmdb_admin"), h.CIType.DeleteAttribute)
 		}
 
+		// --- CI Instances ---
 		ciInstances := api.Group("/ci-instances")
 		{
 			ciInstances.GET("", h.CIInstance.List)
@@ -42,6 +46,7 @@ func Setup(r *gin.Engine, h *Handlers) {
 			ciInstances.PATCH("/:id/status", middleware.RequireRole("asset_mgr", "cmdb_admin"), h.CIInstance.UpdateStatus)
 		}
 
+		// --- Relations ---
 		relations := api.Group("/relations")
 		{
 			relations.GET("/rules", h.Relation.ListRules)
@@ -57,6 +62,31 @@ func Setup(r *gin.Engine, h *Handlers) {
 			relations.GET("/impact", h.Relation.ImpactAnalysis)
 		}
 
+		// --- Discovery ---
+		discovery := api.Group("/discovery")
+		{
+			discovery.GET("/collectors", h.Discovery.CollectorTypes)
+
+			strategies := discovery.Group("/strategies")
+			{
+				strategies.GET("", h.Discovery.ListStrategies)
+				strategies.POST("", middleware.RequireRole("cmdb_admin"), h.Discovery.CreateStrategy)
+				strategies.GET("/:id", h.Discovery.GetStrategy)
+				strategies.PUT("/:id", middleware.RequireRole("cmdb_admin"), h.Discovery.UpdateStrategy)
+				strategies.DELETE("/:id", middleware.RequireRole("cmdb_admin"), h.Discovery.DeleteStrategy)
+				strategies.GET("/:id/history", h.Discovery.ListHistory)
+			}
+		}
+
+		// --- Snapshots ---
+		snapshots := api.Group("/snapshots")
+		{
+			snapshots.GET("", h.Snapshot.List)
+			snapshots.GET("/:id", h.Snapshot.Get)
+			snapshots.GET("/diff", h.Snapshot.Diff)
+		}
+
+		// --- Dashboard ---
 		dashboard := api.Group("/dashboard")
 		{
 			dashboard.GET("/summary", h.Dashboard.Summary)
@@ -65,6 +95,7 @@ func Setup(r *gin.Engine, h *Handlers) {
 		}
 	}
 
+	// --- Auth (public) ---
 	r.POST("/api/v1/auth/login", func(c *gin.Context) {
 		var req struct {
 			Username string `json:"username"`

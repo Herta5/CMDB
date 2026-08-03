@@ -26,6 +26,14 @@ func (r *CITypeRepo) GetByID(id uint64) (*model.CIType, error) {
 	return &t, nil
 }
 
+// GetByName finds a CI type by its unique name.
+func (r *CITypeRepo) GetByName(name string) (*model.CIType, error) {
+	var t model.CIType
+	err := r.db.Where("name = ?", name).First(&t).Error
+	if err != nil { return nil, err }
+	return &t, nil
+}
+
 func (r *CITypeRepo) GetByIDWithAttributes(id uint64) (*model.CIType, error) {
 	var t model.CIType
 	err := r.db.Preload("Attributes", func(db *gorm.DB) *gorm.DB {

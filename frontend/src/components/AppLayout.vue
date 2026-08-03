@@ -34,6 +34,14 @@
           <el-icon><Share /></el-icon>
           <span>拓扑图谱</span>
         </el-menu-item>
+        <el-menu-item index="/discovery/strategies">
+          <el-icon><Search /></el-icon>
+          <span>采集策略</span>
+        </el-menu-item>
+        <el-menu-item index="/snapshots">
+          <el-icon><Timer /></el-icon>
+          <span>配置快照</span>
+        </el-menu-item>
       </el-menu>
     </el-aside>
     <el-container>
