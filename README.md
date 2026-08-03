@@ -1,4 +1,4 @@
-﻿# CMDB - 企业级配置管理数据库系统
+# CMDB - 企业级配置管理数据库系统
 
 基于 Gin + Vue 3 + MySQL 8.4 构建的 IT 资产与配置管理平台，适用于 500+ 服务器规模的企业基础设施。
 
@@ -78,7 +78,9 @@ github-cmdb/
 │   │   ├── handler/            # HTTP Handler
 │   │   ├── service/            # 业务逻辑
 │   │   ├── repository/         # 数据访问
-│   │   ├── middleware/         # JWT/RBAC/CORS
+│   │   ├── middleware/         # JWT/RBAC/CORS/审计
+│   │   ├── collector/          # 自动发现采集器
+│   │   ├── eventbus/           # 事件总线
 │   │   └── router/             # 路由定义
 │   ├── migrations/             # SQL 初始化脚本
 │   └── pkg/response/           # 统一响应格式
@@ -97,42 +99,72 @@ github-cmdb/
 
 ## API 概览
 
+### 认证
 | 方法 | 路径 | 说明 |
 |------|------|------|
 | POST | `/api/v1/auth/login` | 登录获取 Token |
+
+### CI 管理
+| 方法 | 路径 | 说明 |
+|------|------|------|
 | GET  | `/api/v1/ci-types` | CI 类型树 |
 | POST | `/api/v1/ci-types` | 创建 CI 类型 |
 | GET  | `/api/v1/ci-types/:id/attributes` | 获取类型属性 |
 | GET  | `/api/v1/ci-instances` | CI 实例列表 (支持分页/筛选) |
 | POST | `/api/v1/ci-instances` | 创建 CI 实例 |
+| GET  | `/api/v1/ci-instances/:id` | CI 实例详情 |
+| POST | `/api/v1/ci-instances/import` | CSV 批量导入 |
+| GET  | `/api/v1/ci-instances/export` | CSV 批量导出 |
+
+### 关系与拓扑
+| 方法 | 路径 | 说明 |
+|------|------|------|
 | GET  | `/api/v1/relations/rules` | 关系规则列表 |
 | GET  | `/api/v1/relations/instances` | 关系实例列表 |
 | GET  | `/api/v1/relations/topology?ci_id=1&depth=3` | 多层拓扑图谱 (nodes+edges) |
-POST | `/api/v1/ci-instances/import` | CSV 批量导入 |
-GET  | `/api/v1/ci-instances/export` | CSV 批量导出 |
-GET  | `/api/v1/discovery/collectors` | 采集器类型列表 |
-POST | `/api/v1/discovery/strategies` | 创建发现策略 |
-GET  | `/api/v1/discovery/strategies` | 发现策略列表 |
-GET  | `/api/v1/discovery/strategies/:id` | 获取发现策略 |
-PUT  | `/api/v1/discovery/strategies/:id` | 更新发现策略 |
-DELETE | `/api/v1/discovery/strategies/:id` | 删除发现策略 |
-POST | `/api/v1/changes` | 创建变更单 |
-GET  | `/api/v1/changes` | 变更单列表 |
-GET  | `/api/v1/changes/:id` | 变更单详情 |
-PUT  | `/api/v1/changes/:id` | 更新变更单 |
-POST | `/api/v1/changes/:id/submit` | 提交审批 |
-POST | `/api/v1/changes/:id/approve` | 批准变更 |
-POST | `/api/v1/changes/:id/reject` | 驳回变更 |
-POST | `/api/v1/changes/:id/execute` | 执行变更 |
-POST | `/api/v1/changes/:id/complete` | 标记完成 |
-POST | `/api/v1/changes/:id/rollback` | 回滚变更 |
-POST | `/api/v1/changes/:id/fail` | 标记失败 |
-GET  | `/api/v1/discovery/strategies/:id/history` | 策略执行历史 |
-GET  | `/api/v1/snapshots` | 配置快照列表 |
-GET  | `/api/v1/snapshots/:id` | 获取快照详情 |
-GET  | `/api/v1/snapshots/diff?from=X&to=Y` | 快照差异对比 |
+| GET  | `/api/v1/relations/impact?ci_id=1` | 影响分析 |
+
+### 变更管理
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| POST | `/api/v1/changes` | 创建变更单 |
+| GET  | `/api/v1/changes` | 变更单列表 |
+| POST | `/api/v1/changes/:id/submit` | 提交审批 |
+| POST | `/api/v1/changes/:id/approve` | 批准变更 |
+| POST | `/api/v1/changes/:id/execute` | 执行变更 |
+| POST | `/api/v1/changes/:id/complete` | 标记完成 |
+| POST | `/api/v1/changes/:id/rollback` | 回滚变更 |
+
+### 自动发现
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| GET  | `/api/v1/discovery/collectors` | 采集器类型列表 |
+| POST | `/api/v1/discovery/strategies` | 创建发现策略 |
+| GET  | `/api/v1/discovery/strategies/:id/history` | 策略执行历史 |
+
+### 快照
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| GET  | `/api/v1/snapshots` | 配置快照列表 |
+| GET  | `/api/v1/snapshots/diff?from=X&to=Y` | 快照差异对比 |
+
+### 仪表盘
+| 方法 | 路径 | 说明 |
+|------|------|------|
 | GET  | `/api/v1/dashboard/summary` | 仪表盘汇总 |
-GET  | `/api/v1/dashboard/capacity` | 容量概览 |
+| GET  | `/api/v1/dashboard/distribution` | CI 分布统计 |
+| GET  | `/api/v1/dashboard/trends` | 趋势数据 |
+| GET  | `/api/v1/dashboard/capacity` | 容量概览 |
+
+### 系统集成 (Phase 4)
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| GET  | `/api/v1/integration/prometheus/targets` | Prometheus HTTP SD 目标 (公开) |
+| GET  | `/api/v1/integration/ansible/inventory` | Ansible 动态清单 (公开) |
+| POST | `/api/v1/integration/webhook/alertmanager` | 接收 Alertmanager 告警 (公开) |
+| POST | `/api/v1/integration/webhook/generic` | 通用 Webhook 接收端 (公开) |
+| GET  | `/api/v1/integration/webhooks` | Webhook 接收历史 |
+| GET  | `/api/v1/audit/logs` | 操作审计日志 (cmdb_admin) |
 
 详细 API 设计见 [CMDB-ARCHITECTURE.md](docs/CMDB-ARCHITECTURE.md)。
 
@@ -142,13 +174,16 @@ GET  | `/api/v1/dashboard/capacity` | 容量概览 |
 - **MySQL CTE 递归查询**：实现拓扑影响分析，500 台规模下无需图数据库
 - **RBAC 权限**：超级管理员 / CMDB管理员 / 资产管理员 / 只读用户
 - **插件式采集器**：Go interface 注册模式，新增采集源无需改核心代码
+- **事件总线**：发布/订阅模式，change 状态变更和 CI 生命周期变更可被外部系统订阅
+- **审计日志**：基于 Gin 中间件，异步写入，记录用户操作、请求参数、响应状态等
 
 ## MVP 路线图
 
-- **Phase 1** (已完成): 资产 CRUD、CI模型、RBAC、基础搜索
-- **Phase 2** (规划中): 自动发现(Agent/SSH/K8s/Cloud)、配置快照Diff
-- **Phase 3** (规划中): 拓扑图谱可视化、变更管理、Dashboard
-- **Phase 4** (规划中): 监控/工单/自动化平台集成、审计增强
+- **Phase 1 (已完成)**: 资产 CRUD、CI模型、RBAC、基础搜索
+- **Phase 2 (已完成)**: 自动发现(Agent/SSH/K8s/Cloud)、配置快照Diff、采集历史
+- **Phase 3 (已完成)**: 拓扑图谱可视化、变更管理(审批流)、Dashboard、批量导入导出
+- **Phase 4 (已完成)**: 系统集成(Prometheus/Ansible/Webhook)、审计日志、事件总线
+- **Phase 5 (规划中)**: 细粒度权限(CMDB策略模型)、多级审批流、集成自动化平台(Jenkins/GitLab CI)
 
 ## License
 

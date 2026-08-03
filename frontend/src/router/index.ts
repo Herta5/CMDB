@@ -1,4 +1,4 @@
-﻿import { createRouter, createWebHistory } from 'vue-router'
+import { createRouter, createWebHistory } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
 
 const routes = [
@@ -78,6 +78,18 @@ const routes = [
         name: 'SnapshotDiff',
         component: () => import('@/views/SnapshotDiff.vue'),
         meta: { title: '配置快照', icon: 'Timer' },
+      },
+      {
+        path: 'integrations',
+        name: 'IntegrationSettings',
+        component: () => import('@/views/IntegrationSettings.vue'),
+        meta: { title: '集成中心', icon: 'Connection' },
+      },
+      {
+        path: 'audit',
+        name: 'AuditLog',
+        component: () => import('@/views/AuditLog.vue'),
+        meta: { title: '审计日志', icon: 'List' },
       },
     ],
   },

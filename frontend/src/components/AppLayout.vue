@@ -1,4 +1,4 @@
-﻿<template>
+<template>
   <el-container class="app-container">
     <el-aside :width="isCollapse ? '64px' : '220px'" class="sidebar">
       <div class="logo">
@@ -45,6 +45,14 @@
         <el-menu-item index="/snapshots">
           <el-icon><Timer /></el-icon>
           <span>配置快照</span>
+        </el-menu-item>
+        <el-menu-item index="/integrations">
+          <el-icon><Connection /></el-icon>
+          <span>集成中心</span>
+        </el-menu-item>
+        <el-menu-item index="/audit">
+          <el-icon><List /></el-icon>
+          <span>审计日志</span>
         </el-menu-item>
       </el-menu>
     </el-aside>

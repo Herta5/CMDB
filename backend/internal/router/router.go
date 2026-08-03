@@ -1,4 +1,4 @@
-﻿package router
+package router
 
 import (
 	"github-cmdb/internal/handler"
@@ -7,18 +7,27 @@ import (
 )
 
 type Handlers struct {
-	CIType     *handler.CITypeHandler
-	CIInstance *handler.CIInstanceHandler
-	Relation   *handler.RelationHandler
-	Dashboard  *handler.DashboardHandler
-	Discovery  *handler.DiscoveryHandler
-	Snapshot   *handler.SnapshotHandler
-	Change     *handler.ChangeHandler
-	Batch      *handler.BatchHandler
+	CIType      *handler.CITypeHandler
+	CIInstance  *handler.CIInstanceHandler
+	Relation    *handler.RelationHandler
+	Dashboard   *handler.DashboardHandler
+	Discovery   *handler.DiscoveryHandler
+	Snapshot    *handler.SnapshotHandler
+	Change      *handler.ChangeHandler
+	Batch       *handler.BatchHandler
+	Integration *handler.IntegrationHandler
+	Audit       *handler.AuditHandler
 }
 
 func Setup(r *gin.Engine, h *Handlers) {
 	r.Use(middleware.CORS())
+	r.Use(middleware.AuditLog())
+
+	// --- Public integration endpoints (no auth) ---
+	r.GET("/api/v1/integration/prometheus/targets", h.Integration.PrometheusTargets)
+	r.GET("/api/v1/integration/ansible/inventory", h.Integration.AnsibleInventory)
+	r.POST("/api/v1/integration/webhook/alertmanager", h.Integration.AlertmanagerWebhook)
+	r.POST("/api/v1/integration/webhook/generic", h.Integration.GenericWebhook)
 
 	api := r.Group("/api/v1")
 	api.Use(middleware.AuthRequired())
@@ -115,6 +124,19 @@ func Setup(r *gin.Engine, h *Handlers) {
 			dashboard.GET("/distribution", h.Dashboard.Distribution)
 			dashboard.GET("/trends", h.Dashboard.Trends)
 			dashboard.GET("/capacity", h.Dashboard.Capacity)
+		}
+
+		// --- Integration ---
+		integration := api.Group("/integration")
+		{
+			integration.GET("/webhooks", h.Integration.WebhookHistory)
+		}
+
+		// --- Audit Logs ---
+		audit := api.Group("/audit")
+		audit.Use(middleware.RequireRole("cmdb_admin"))
+		{
+			audit.GET("/logs", h.Audit.List)
 		}
 	}
 

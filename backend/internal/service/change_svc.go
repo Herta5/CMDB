@@ -1,9 +1,10 @@
-﻿package service
+package service
 
 import (
 	"errors"
 	"time"
 
+	"github-cmdb/internal/eventbus"
 	"github-cmdb/internal/model"
 	"github-cmdb/internal/repository"
 )
@@ -31,7 +32,16 @@ func (s *ChangeSvc) Create(ticket *model.ChangeTicket) error {
 	ci, err := s.ciRepo.GetByID(ticket.CITargetID)
 	if err != nil { return errors.New("target CI not found") }
 	ticket.CITargetName = ci.Name
-	return s.repo.Create(ticket)
+	if err := s.repo.Create(ticket); err != nil { return err }
+
+	eventbus.PublishJSON(eventbus.EventChangeCreated, "change_svc", map[string]interface{}{
+		"ticket_id":    ticket.ID,
+		"ci_id":        ticket.CITargetID,
+		"ci_name":      ticket.CITargetName,
+		"change_type":  ticket.ChangeType,
+		"title":        ticket.Title,
+	})
+	return nil
 }
 
 func (s *ChangeSvc) Update(ticket *model.ChangeTicket) error {
@@ -58,11 +68,17 @@ func (s *ChangeSvc) Approve(id uint64, approvedBy string) error {
 	ticket.Status = "approved"
 	ticket.ApprovedBy = &approvedBy
 	ticket.ApprovedAt = &now
-	// optional: snapshot before
 	if snap, err := s.snapRepo.GetLatestByCIID(ticket.CITargetID); err == nil {
 		ticket.BeforeSnapshotID = &snap.ID
 	}
-	return s.repo.Update(ticket)
+	if err := s.repo.Update(ticket); err != nil { return err }
+
+	eventbus.PublishJSON(eventbus.EventChangeApproved, "change_svc", map[string]interface{}{
+		"ticket_id":   id,
+		"ci_id":       ticket.CITargetID,
+		"approved_by": approvedBy,
+	})
+	return nil
 }
 
 func (s *ChangeSvc) Reject(id uint64, rejectedBy string) error {
@@ -83,7 +99,14 @@ func (s *ChangeSvc) Execute(id uint64, executedBy string) error {
 	ticket.Status = "executing"
 	ticket.ExecutedBy = &executedBy
 	ticket.ExecutedAt = &now
-	return s.repo.Update(ticket)
+	if err := s.repo.Update(ticket); err != nil { return err }
+
+	eventbus.PublishJSON(eventbus.EventChangeExecuted, "change_svc", map[string]interface{}{
+		"ticket_id":   id,
+		"ci_id":       ticket.CITargetID,
+		"executed_by": executedBy,
+	})
+	return nil
 }
 
 func (s *ChangeSvc) Complete(id uint64) error {
@@ -91,7 +114,13 @@ func (s *ChangeSvc) Complete(id uint64) error {
 	if err != nil { return err }
 	if ticket.Status != "executing" { return errors.New("only executing tickets can be completed") }
 	ticket.Status = "completed"
-	return s.repo.Update(ticket)
+	if err := s.repo.Update(ticket); err != nil { return err }
+
+	eventbus.PublishJSON(eventbus.EventChangeCompleted, "change_svc", map[string]interface{}{
+		"ticket_id": id,
+		"ci_id":     ticket.CITargetID,
+	})
+	return nil
 }
 
 func (s *ChangeSvc) Rollback(id uint64) error {
@@ -101,7 +130,13 @@ func (s *ChangeSvc) Rollback(id uint64) error {
 		return errors.New("can only rollback completed or executing tickets")
 	}
 	ticket.Status = "rolled_back"
-	return s.repo.Update(ticket)
+	if err := s.repo.Update(ticket); err != nil { return err }
+
+	eventbus.PublishJSON(eventbus.EventChangeRollback, "change_svc", map[string]interface{}{
+		"ticket_id": id,
+		"ci_id":     ticket.CITargetID,
+	})
+	return nil
 }
 
 func (s *ChangeSvc) Fail(id uint64) error {

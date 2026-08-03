@@ -1,4 +1,4 @@
-﻿package main
+package main
 
 import (
 	"log"
@@ -37,6 +37,8 @@ func main() {
 		&model.DiscoveryStrategy{},
 		&model.DiscoveryHistory{},
 		&model.ChangeTicket{},
+		&model.AuditLog{},
+		&model.WebhookRecord{},
 	); err != nil {
 		log.Fatalf("failed to migrate: %v", err)
 	}
@@ -49,6 +51,7 @@ func main() {
 	relationRepo := repository.NewRelationRepo(db)
 	discoveryRepo := repository.NewDiscoveryRepo(db)
 	changeRepo := repository.NewChangeRepo(db)
+	auditRepo := repository.NewAuditRepo(db)
 
 	// --- Services ---
 	ciTypeSvc := service.NewCITypeSvc(ciTypeRepo)
@@ -66,6 +69,8 @@ func main() {
 	snapshotHandler := handler.NewSnapshotHandler(snapRepo)
 	changeHandler := handler.NewChangeHandler(changeSvc)
 	batchHandler := handler.NewBatchHandler(ciInstanceSvc)
+	integrationHandler := handler.NewIntegrationHandler(ciInstanceRepo, ciTypeRepo, auditRepo, changeSvc)
+	auditHandler := handler.NewAuditHandler(auditRepo)
 
 	// --- Discovery Executor & Scheduler ---
 	exec := collector.NewDiscoveryExecutor(ciInstanceRepo, ciTypeRepo, snapRepo, relationRepo, discoveryRepo)
@@ -76,6 +81,9 @@ func main() {
 	// --- JWT Secret ---
 	middleware.SetJWTSecret(cfg.JWT.Secret)
 
+	// --- Audit Middleware ---
+	middleware.SetAuditRepo(auditRepo)
+
 	// --- Gin Engine ---
 	if cfg.Server.Mode == "release" {
 		gin.SetMode(gin.ReleaseMode)
@@ -83,14 +91,16 @@ func main() {
 	r := gin.Default()
 
 	router.Setup(r, &router.Handlers{
-		CIType:     ciTypeHandler,
-		CIInstance: ciInstanceHandler,
-		Relation:   relationHandler,
-		Dashboard:  dashboardHandler,
-		Discovery:  discoveryHandler,
-		Snapshot:   snapshotHandler,
-		Change:     changeHandler,
-		Batch:      batchHandler,
+		CIType:      ciTypeHandler,
+		CIInstance:  ciInstanceHandler,
+		Relation:    relationHandler,
+		Dashboard:   dashboardHandler,
+		Discovery:   discoveryHandler,
+		Snapshot:    snapshotHandler,
+		Change:      changeHandler,
+		Batch:       batchHandler,
+		Integration: integrationHandler,
+		Audit:       auditHandler,
 	})
 
 	// --- Graceful shutdown ---

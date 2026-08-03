@@ -2,6 +2,8 @@ package service
 
 import (
 	"fmt"
+
+	"github-cmdb/internal/eventbus"
 	"github-cmdb/internal/model"
 	"github-cmdb/internal/repository"
 )
@@ -32,7 +34,16 @@ func (s *CIInstanceSvc) Create(ci *model.CIInstance) error {
 	if err != nil { return err }
 	ci.CICode = code
 	ci.Source = "manual"
-	return s.repo.Create(ci)
+	if err := s.repo.Create(ci); err != nil { return err }
+
+	eventbus.PublishJSON(eventbus.EventCICreated, "ci_instance_svc", map[string]interface{}{
+		"ci_id":      ci.ID,
+		"ci_code":    ci.CICode,
+		"ci_name":    ci.Name,
+		"ci_type_id": ci.CITypeID,
+		"source":     ci.Source,
+	})
+	return nil
 }
 
 func (s *CIInstanceSvc) Update(ci *model.CIInstance) error {
@@ -40,17 +51,30 @@ func (s *CIInstanceSvc) Update(ci *model.CIInstance) error {
 	if err != nil { return err }
 	ci.SyncRedundantFields()
 	if err := s.repo.Update(ci); err != nil { return err }
-	// write snapshot asynchronously
 	go func() {
 		snap := &model.ConfigSnapshot{
 			CIID: ci.ID, SnapshotData: existing.Attributes, ChangeType: "update", Source: strPtr("manual"),
 		}
 		_ = s.snapRepo.Create(snap)
 	}()
+
+	eventbus.PublishJSON(eventbus.EventCIUpdated, "ci_instance_svc", map[string]interface{}{
+		"ci_id":      ci.ID,
+		"ci_code":    ci.CICode,
+		"ci_name":    ci.Name,
+		"ci_type_id": ci.CITypeID,
+	})
 	return nil
 }
 
-func (s *CIInstanceSvc) Delete(id uint64) error { return s.repo.Delete(id) }
+func (s *CIInstanceSvc) Delete(id uint64) error {
+	if err := s.repo.Delete(id); err != nil { return err }
+
+	eventbus.PublishJSON(eventbus.EventCIDeleted, "ci_instance_svc", map[string]interface{}{
+		"ci_id": id,
+	})
+	return nil
+}
 
 func (s *CIInstanceSvc) GetDistributionByType() ([]repository.TypeDistribution, error) {
 	return s.repo.DistributionByType()
