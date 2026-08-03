@@ -1,4 +1,4 @@
-# CMDB - 企业级配置管理数据库系统
+﻿# CMDB - 企业级配置管理数据库系统
 
 基于 Gin + Vue 3 + MySQL 8.4 构建的 IT 资产与配置管理平台，适用于 500+ 服务器规模的企业基础设施。
 
@@ -108,6 +108,16 @@ github-cmdb/
 | GET  | `/api/v1/relations/rules` | 关系规则列表 |
 | GET  | `/api/v1/relations/instances` | 关系实例列表 |
 | GET  | `/api/v1/relations/topology?ci_id=1` | 拓扑查询 |
+GET  | `/api/v1/discovery/collectors` | 采集器类型列表 |
+POST | `/api/v1/discovery/strategies` | 创建发现策略 |
+GET  | `/api/v1/discovery/strategies` | 发现策略列表 |
+GET  | `/api/v1/discovery/strategies/:id` | 获取发现策略 |
+PUT  | `/api/v1/discovery/strategies/:id` | 更新发现策略 |
+DELETE | `/api/v1/discovery/strategies/:id` | 删除发现策略 |
+GET  | `/api/v1/discovery/strategies/:id/history` | 策略执行历史 |
+GET  | `/api/v1/snapshots` | 配置快照列表 |
+GET  | `/api/v1/snapshots/:id` | 获取快照详情 |
+GET  | `/api/v1/snapshots/diff?from=X&to=Y` | 快照差异对比 |
 | GET  | `/api/v1/dashboard/summary` | 仪表盘汇总 |
 
 详细 API 设计见 [CMDB-ARCHITECTURE.md](docs/CMDB-ARCHITECTURE.md)。
