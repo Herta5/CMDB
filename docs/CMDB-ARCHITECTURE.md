@@ -1,6 +1,6 @@
-﻿# CMDB 企业级配置管理数据库系统 架构设计文档
+# CMDB 企业级配置管理数据库系统 架构设计文档
 
-技术栈: Gin + Vue 3 + MySQL 8.4 | 版本: v1.0
+技术栈: Gin + Vue 3 + MySQL 8.4 | 版本: v1.1
 
 ---
 
@@ -26,10 +26,10 @@
 |  +-----+-------+  +------+------+  +-------------+-------------+ |
 |        |                 |                       |               |
 |  +-----+-------+  +------+------+  +-------------+-------------+ |
-|  |  Dashboard  |  |  API 网关    |  |  集成中心                  | |
-|  |  资产大盘    |  |  RESTful     |  |  Prometheus/Zabbix        | |
-|  |  容量看板    |  |  Webhook     |  |  Jira/ITSM 工单           | |
-|  |  合规报表    |  |  限流鉴权    |  |  Ansible/Jenkins 自动化    | |
+|  |  Dashboard  |  |  用户管理    |  |  集成中心                  | |
+|  |  资产大盘    |  |  用户CRUD    |  |  Prometheus/Zabbix        | |
+|  |  容量看板    |  |  角色分配    |  |  Jira/ITSM 工单           | |
+|  |  合规报表    |  |  密码管理    |  |  Ansible/Jenkins 自动化    | |
 |  +-------------+  +-------------+  +---------------------------+ |
 +------------------------------------------------------------------+
 ```
@@ -44,8 +44,8 @@
 | **关系拓扑** | CI 间关系的建模、查询与可视化 | 拓扑图谱、影响分析、依赖追溯、关系校验 |
 | **变更管理** | 控制配置变更的申请、审批、执行与回滚 | 变更单、审批流、灰度窗口、回滚记录 |
 | **审计日志** | 全量操作审计与变更轨迹追踪 | 操作日志、数据快照、合规报告、异常告警 |
+| **用户管理** | 系统用户生命周期管理与权限分配 | 用户CRUD、角色分配、密码策略、登录审计 |
 | **Dashboard** | 多维度的资产与配置可视化 | 资产大盘、容量预测、合规评分、趋势分析 |
-| **API 网关** | 统一的对外服务接口层 | RESTful、Webhook、限流、Token 鉴权 |
 | **集成中心** | 与监控、工单、自动化等平台的双向同步 | ESB/Webhook 双通道、字段映射、同步策略 |
 
 ---
@@ -156,7 +156,30 @@ CREATE TABLE config_snapshot (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='配置变更快照';
 ```
 
-### 2.6 模型 ER 关系
+### 2.6 用户表 `cmdb_user`
+
+```sql
+CREATE TABLE cmdb_user (
+    id              BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    username        VARCHAR(64)   NOT NULL COMMENT '登录用户名',
+    password_hash   VARCHAR(256)  NOT NULL COMMENT 'bcrypt 哈希密码',
+    display_name    VARCHAR(128)  COMMENT '显示姓名',
+    email           VARCHAR(256)  COMMENT '邮箱',
+    phone           VARCHAR(32)   COMMENT '手机号',
+    roles           JSON          NOT NULL COMMENT '角色列表，如 ["super_admin","viewer"]',
+    departments     JSON          COMMENT '所属部门ID列表',
+    status          VARCHAR(32)   DEFAULT 'active' COMMENT '状态: active/disabled',
+    last_login_at   DATETIME      COMMENT '最后登录时间',
+    created_at      DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at      DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    UNIQUE KEY uk_username (username),
+    KEY idx_status (status)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='系统用户表';
+```
+
+密码使用 Go `golang.org/x/crypto/bcrypt` 加盐哈希存储，首次启动时自动创建默认管理员 `admin / admin123`。
+
+### 2.7 模型 ER 关系
 
 ```
 ci_type (1) ----< (N) ci_attribute
@@ -171,6 +194,8 @@ ci_type (1) ----< (N) ci_attribute
                           |
                           +--- ci_relation_instance --+
                                   (source / target)
+
+cmdb_user (独立表，不直接关联 CI)
 ```
 
 ---
@@ -373,9 +398,11 @@ ORDER BY ic.depth;
 
 ### 5.1 角色定义（RBAC）
 
+系统用户存储在 `cmdb_user` 表中，密码使用 bcrypt 哈希。每个用户可分配多个角色，角色以 JSON 数组形式存储（`["super_admin", "viewer"]`）。
+
 | 角色 | 标识 | 权限范围 |
 |------|------|---------|
-| 超级管理员 | super_admin | 全部权限，包括系统配置、角色分配 |
+| 超级管理员 | super_admin | 全部权限，包括系统配置、角色分配、用户管理 |
 | CMDB 管理员 | cmdb_admin | CI类型/属性定义、关系规则管理、批量操作、采集策略配置 |
 | 资产管理员 | asset_mgr | CI实例的CRUD、关系维护、资产盘点 |
 | 变更执行人 | change_op | 提交变更单、执行变更(需审批) |
@@ -394,6 +421,7 @@ ORDER BY ic.depth;
 | 配置快照     | R/D     | R/D     | R | R | R | R |
 | 变更单       | C/R/U/D | C/R/U/D | R | C/R/U | R | R |
 | 采集策略     | C/R/U/D | C/R/U/D | R | - | - | R |
+| 用户管理     | C/R/U/D | - | - | - | - | - |
 | 审计日志     | R       | R       | R | R | R | - |
 | 系统配置     | C/R/U/D | R | - | - | - | - |
 | 角色分配     | C/R/U/D | - | - | - | - | - |
@@ -420,6 +448,18 @@ WHERE department_id IN (
   "scope": ["ci:read", "ci:write", "relation:read"],
   "exp": 1700000000
 }
+```
+
+### 5.5 用户管理 API
+
+```
+GET    /api/v1/users               # 用户列表 (分页+筛选)
+POST   /api/v1/users               # 创建用户 (需指定角色和初始密码)
+GET    /api/v1/users/:id           # 用户详情
+PUT    /api/v1/users/:id           # 更新用户信息/角色/状态
+DELETE /api/v1/users/:id           # 删除用户 (受保护: 不能删除最后一个 super_admin)
+PUT    /api/v1/users/:id/password  # 管理员重置用户密码
+PUT    /api/v1/profile/password    # 当前用户自助修改密码
 ```
 
 ---
@@ -526,6 +566,24 @@ GET    /api/v1/dashboard/summary         # 资产大盘摘要
 GET    /api/v1/dashboard/distribution    # 按类型/部门/状态分布
 GET    /api/v1/dashboard/trends          # 趋势数据(新增/退役/变更)
 GET    /api/v1/dashboard/capacity        # 容量使用率
+```
+
+#### 用户管理
+
+```
+GET    /api/v1/users                     # 用户列表 (cmdb_admin+)
+POST   /api/v1/users                     # 创建用户
+GET    /api/v1/users/:id                 # 用户详情
+PUT    /api/v1/users/:id                 # 更新用户
+DELETE /api/v1/users/:id                 # 删除用户
+PUT    /api/v1/users/:id/password        # 管理员重置密码
+PUT    /api/v1/profile/password          # 当前用户自助修改密码
+```
+
+#### 认证
+
+```
+POST   /api/v1/auth/login                # 登录获取 Token
 ```
 
 ### 6.3 请求/响应示例
@@ -749,9 +807,21 @@ Phase 1 (MVP)         Phase 2            Phase 3             Phase 4
   |基础搜索   |        |配置快照  |        |Dashboard |        |AI辅助     |
   |RBAC      |        |Diff比对  |        |批量导入导出|       |合规报表   |
   +----------+        +----------+        +----------+        +----------+
+
+Phase 5 (当前)
+  持续迭代
+  ---------
+  用户管理 & 权限
+  +----------+
+  |用户CRUD  |
+  |角色分配  |
+  |密码管理  |
+  |登录审计  |
+  |多级审批  |
+  +----------+
 ```
 
-### 9.2 Phase 1 — MVP（4-6 周）
+### 9.2 Phase 1 — MVP（已完成）
 
 **目标：** 手动管理的资产登记系统，跑通 CI 模型和 RBAC。
 
@@ -764,7 +834,7 @@ Phase 1 (MVP)         Phase 2            Phase 3             Phase 4
 | 用户权限 | 超级管理员 + 资产管理员 + 只读用户三个角色 |
 | 前端 | Vue 3 管理界面：资产列表、详情、分类树、关系列表 |
 
-### 9.3 Phase 2 — 自动发现（6-8 周）
+### 9.3 Phase 2 — 自动发现（已完成）
 
 **目标：** 让系统自动感知基础设施变化，减少人工录入。
 
@@ -776,9 +846,8 @@ Phase 1 (MVP)         Phase 2            Phase 3             Phase 4
 | 采集调度 | Cron 调度、采集历史记录、失败重试 |
 | Diff 引擎 | 采集数据与已有 CI 比对，自动更新 + 写快照 |
 | 配置快照 | 快照列表 + 两次快照 Diff 对比 |
-| 变更通知 | CI 属性变更时发送通知（钉钉/企微/邮件） |
 
-### 9.4 Phase 3 — 高级拓扑与变更（6-8 周）
+### 9.4 Phase 3 — 高级拓扑与变更（已完成）
 
 **目标：** 可视化拓扑 + 变更管理闭环。
 
@@ -791,7 +860,7 @@ Phase 1 (MVP)         Phase 2            Phase 3             Phase 4
 | Dashboard | 资产大盘：总数、按类型/状态/部门分布、趋势图 |
 | 批量操作 | CSV 批量导入/导出、Excel 模板下载 |
 
-### 9.5 Phase 4 — 集成与智能化（持续迭代）
+### 9.5 Phase 4 — 集成与审计（已完成）
 
 **目标：** CMDB 成为运维数据中枢。
 
@@ -800,9 +869,20 @@ Phase 1 (MVP)         Phase 2            Phase 3             Phase 4
 | 监控集成 | Prometheus file_sd、告警关联、Grafana iframe |
 | 工单集成 | Jira/ITSM 双向 Webhook |
 | 自动化集成 | Ansible 动态 Inventory、Jenkins 部署校验 |
-| 审计增强 | 细粒度操作审计、合规报表（SOC2/等保） |
-| 事件总线 | NATS 驱动的变更事件发布/订阅 |
-| AI 辅助 | 自然语言查询 "哪些应用依赖了 10.0.1.50 这台机器？" |
+| 审计增强 | 细粒度操作审计、中间件异步写入 |
+| 事件总线 | 内存事件总线，发布/订阅模式 |
+
+### 9.6 Phase 5 — 用户管理 & 权限增强（当前）
+
+**目标：** 完整的用户生命周期管理，替换硬编码登录。
+
+| 模块 | 范围 |
+|------|------|
+| 用户管理 | `cmdb_user` 表、用户 CRUD、bcrypt 密码哈希 |
+| 登录认证 | DB 验证替代硬编码、Token 携带角色信息 |
+| 角色分配 | 多人多角色、5 种预设角色 |
+| 密码策略 | 自助修改密码、管理员重置密码 |
+| 安全策略 | 不能删除最后一个 super_admin、禁用账号拦截登录 |
 
 ---
 
@@ -818,8 +898,7 @@ Phase 1 (MVP)         Phase 2            Phase 3             Phase 4
 | **前端** | Vue 3 + TypeScript + Vite | Composition API、Type-safe |
 | **UI 组件库** | Element Plus / Ant Design Vue | 企业级后台组件 |
 | **图表** | ECharts / D3.js | Dashboard 图表 + 拓扑图谱 |
-| **API 文档** | Swagger (swaggo/gin-swagger) | 自动生成 OpenAPI 3.0 |
-| **消息队列** | NATS / Redis Streams | Phase 4 事件总线 |
+| **密码哈希** | golang.org/x/crypto/bcrypt | 防彩虹表攻击 |
 | **构建部署** | Docker + Docker Compose / K8s | 容器化部署 |
 
 ### 10.2 项目目录结构（建议）
@@ -838,6 +917,7 @@ github-cmdb/
 |   |   |   +-- relation.go
 |   |   |   +-- change.go
 |   |   |   +-- dashboard.go
+|   |   |   +-- user.go         # 用户管理 Handler
 |   |   +-- service/            # 业务逻辑层
 |   |   +-- repository/         # 数据访问层
 |   |   +-- middleware/         # Auth, CORS, Logger, RBAC
@@ -847,10 +927,8 @@ github-cmdb/
 |   |   |   +-- agent.go
 |   |   |   +-- ssh.go
 |   |   |   +-- k8s.go
-|   |   |   +-- aliyun.go
 |   |   +-- integration/        # 外部集成Webhook
 |   +-- pkg/                    # 公共工具包
-|   +-- docs/                   # Swagger 生成的文档
 |   +-- go.mod
 |   +-- go.sum
 +-- frontend/                   # Vue 3 前端
@@ -883,7 +961,9 @@ github-cmdb/
 | 采集器架构 | 插件注册模式 (Go interface) | 新增采集源只需实现接口+注册，符合开闭原则 |
 | 变更版本追溯 | 全量快照 (config_snapshot) | 存储成本低（JSON 增量不大），恢复和 Diff 比事件溯源简单 |
 | 权限模型 | RBAC + 部门数据隔离 | 足够覆盖 90% 企业场景，前期无需引入 ABAC 复杂度 |
-| 集成方式 | RESTful API + Webhook | 通用性强，无需额外中间件；Phase 4 再引入事件总线 |
+| 密码存储 | bcrypt 加盐哈希 | 防彩虹表、防暴力破解，Go 标准库生态 |
+| 集成方式 | RESTful API + Webhook + 事件总线 | 通用性强，事件总线解耦内部模块 |
+| 用户认证 | JWT (令牌) | 无状态、可扩展，适合微服务/前后端分离 |
 
 ---
 
@@ -898,6 +978,6 @@ github-cmdb/
 
 ---
 
-文档状态: v1.0 待评审
+文档状态: v1.1 已实施
 适用范围: 500 台服务器规模的企业 IT 基础设施
 技术栈: Gin + Vue 3 + MySQL 8.4

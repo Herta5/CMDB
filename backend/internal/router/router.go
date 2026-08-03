@@ -17,6 +17,7 @@ type Handlers struct {
 	Batch       *handler.BatchHandler
 	Integration *handler.IntegrationHandler
 	Audit       *handler.AuditHandler
+	User        *handler.UserHandler
 }
 
 func Setup(r *gin.Engine, h *Handlers) {
@@ -55,7 +56,6 @@ func Setup(r *gin.Engine, h *Handlers) {
 			ciInstances.PUT("/:id", middleware.RequireRole("asset_mgr", "cmdb_admin"), h.CIInstance.Update)
 			ciInstances.DELETE("/:id", middleware.RequireRole("asset_mgr", "cmdb_admin"), h.CIInstance.Delete)
 			ciInstances.PATCH("/:id/status", middleware.RequireRole("asset_mgr", "cmdb_admin"), h.CIInstance.UpdateStatus)
-			// Batch
 			ciInstances.POST("/import", middleware.RequireRole("asset_mgr", "cmdb_admin"), h.Batch.ImportCSV)
 			ciInstances.GET("/export", h.Batch.ExportCSV)
 		}
@@ -138,27 +138,23 @@ func Setup(r *gin.Engine, h *Handlers) {
 		{
 			audit.GET("/logs", h.Audit.List)
 		}
+
+		// --- User Management ---
+		users := api.Group("/users")
+		users.Use(middleware.RequireRole("cmdb_admin"))
+		{
+			users.GET("", h.User.List)
+			users.POST("", h.User.Create)
+			users.GET("/:id", h.User.Get)
+			users.PUT("/:id", h.User.Update)
+			users.DELETE("/:id", h.User.Delete)
+			users.PUT("/:id/password", h.User.ResetPassword)
+		}
+
+		// --- Self-service (all authenticated users) ---
+		api.PUT("/profile/password", h.User.ChangePassword)
 	}
 
 	// --- Auth (public) ---
-	r.POST("/api/v1/auth/login", func(c *gin.Context) {
-		var req struct {
-			Username string `json:"username"`
-			Password string `json:"password"`
-		}
-		if err := c.ShouldBindJSON(&req); err != nil {
-			c.JSON(400, gin.H{"code": -1, "message": err.Error()})
-			return
-		}
-		if req.Username != "admin" || req.Password != "admin123" {
-			c.JSON(401, gin.H{"code": -1, "message": "invalid credentials"})
-			return
-		}
-		token, err := middleware.GenerateToken(1, "admin", []string{"super_admin"}, 24)
-		if err != nil {
-			c.JSON(500, gin.H{"code": -1, "message": "failed to generate token"})
-			return
-		}
-		c.JSON(200, gin.H{"code": 0, "message": "ok", "data": gin.H{"token": token}})
-	})
+	r.POST("/api/v1/auth/login", h.User.Login)
 }

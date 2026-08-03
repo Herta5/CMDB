@@ -50,6 +50,10 @@
           <el-icon><Connection /></el-icon>
           <span>集成中心</span>
         </el-menu-item>
+        <el-menu-item index="/users">
+          <el-icon><User /></el-icon>
+          <span>用户管理</span>
+        </el-menu-item>
         <el-menu-item index="/audit">
           <el-icon><List /></el-icon>
           <span>审计日志</span>

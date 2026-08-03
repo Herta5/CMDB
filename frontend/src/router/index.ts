@@ -86,6 +86,12 @@ const routes = [
         meta: { title: '集成中心', icon: 'Connection' },
       },
       {
+        path: 'users',
+        name: 'UserManagement',
+        component: () => import('@/views/UserManagement.vue'),
+        meta: { title: '用户管理', icon: 'User' },
+      },
+      {
         path: 'audit',
         name: 'AuditLog',
         component: () => import('@/views/AuditLog.vue'),

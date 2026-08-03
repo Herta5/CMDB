@@ -39,10 +39,14 @@ func main() {
 		&model.ChangeTicket{},
 		&model.AuditLog{},
 		&model.WebhookRecord{},
+		&model.User{},
 	); err != nil {
 		log.Fatalf("failed to migrate: %v", err)
 	}
 	log.Println("database migration completed")
+
+	// --- Seed default admin ---
+	model.SeedDefaultAdmin(db)
 
 	// --- Repositories ---
 	ciTypeRepo := repository.NewCITypeRepo(db)
@@ -52,6 +56,7 @@ func main() {
 	discoveryRepo := repository.NewDiscoveryRepo(db)
 	changeRepo := repository.NewChangeRepo(db)
 	auditRepo := repository.NewAuditRepo(db)
+	userRepo := repository.NewUserRepo(db)
 
 	// --- Services ---
 	ciTypeSvc := service.NewCITypeSvc(ciTypeRepo)
@@ -59,6 +64,7 @@ func main() {
 	relationSvc := service.NewRelationSvc(relationRepo)
 	discoverySvc := service.NewDiscoverySvc(discoveryRepo)
 	changeSvc := service.NewChangeSvc(changeRepo, ciInstanceRepo, snapRepo)
+	userSvc := service.NewUserSvc(userRepo)
 
 	// --- Handlers ---
 	ciTypeHandler := handler.NewCITypeHandler(ciTypeSvc)
@@ -71,6 +77,7 @@ func main() {
 	batchHandler := handler.NewBatchHandler(ciInstanceSvc)
 	integrationHandler := handler.NewIntegrationHandler(ciInstanceRepo, ciTypeRepo, auditRepo, changeSvc)
 	auditHandler := handler.NewAuditHandler(auditRepo)
+	userHandler := handler.NewUserHandler(userSvc)
 
 	// --- Discovery Executor & Scheduler ---
 	exec := collector.NewDiscoveryExecutor(ciInstanceRepo, ciTypeRepo, snapRepo, relationRepo, discoveryRepo)
@@ -101,6 +108,7 @@ func main() {
 		Batch:       batchHandler,
 		Integration: integrationHandler,
 		Audit:       auditHandler,
+		User:        userHandler,
 	})
 
 	// --- Graceful shutdown ---

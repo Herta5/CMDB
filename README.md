@@ -23,7 +23,7 @@ docker-compose up -d
 docker-compose logs -f backend
 ```
 
-访问 http://localhost:8080，默认账号 `admin / admin123`。
+访问 http://localhost:8080，首次启动自动创建默认账号 `admin / admin123`。
 
 ### 3. 方式二：本地开发
 
@@ -60,7 +60,9 @@ npm run dev
 
 ### 4. 初始化数据
 
-Docker Compose 启动时会自动执行 `backend/migrations/001_seed.sql` 初始化 CI 类型、属性和关系规则。本地开发时可手动导入：
+Docker Compose 启动时会自动执行 `backend/migrations/001_seed.sql` 初始化 CI 类型、属性和关系规则。默认管理员账号由 `SeedDefaultAdmin()` 在首次迁移时自动创建。
+
+本地开发时可手动导入：
 
 ```bash
 mysql -u root -p cmdb < backend/migrations/001_seed.sql
@@ -103,6 +105,17 @@ github-cmdb/
 | 方法 | 路径 | 说明 |
 |------|------|------|
 | POST | `/api/v1/auth/login` | 登录获取 Token |
+
+### 用户管理 (Phase 5)
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| GET  | `/api/v1/users` | 用户列表 (分页+筛选) |
+| POST | `/api/v1/users` | 创建用户 |
+| GET  | `/api/v1/users/:id` | 用户详情 |
+| PUT  | `/api/v1/users/:id` | 更新用户 |
+| DELETE | `/api/v1/users/:id` | 删除用户 |
+| PUT  | `/api/v1/users/:id/password` | 管理员重置密码 |
+| PUT  | `/api/v1/profile/password` | 当前用户自助修改密码 |
 
 ### CI 管理
 | 方法 | 路径 | 说明 |
@@ -156,7 +169,7 @@ github-cmdb/
 | GET  | `/api/v1/dashboard/trends` | 趋势数据 |
 | GET  | `/api/v1/dashboard/capacity` | 容量概览 |
 
-### 系统集成 (Phase 4)
+### 系统集成
 | 方法 | 路径 | 说明 |
 |------|------|------|
 | GET  | `/api/v1/integration/prometheus/targets` | Prometheus HTTP SD 目标 (公开) |
@@ -172,7 +185,8 @@ github-cmdb/
 
 - **EAV + JSON 混合模型**：动态属性存 JSON，高频查询字段冗余索引列，兼顾灵活性与性能
 - **MySQL CTE 递归查询**：实现拓扑影响分析，500 台规模下无需图数据库
-- **RBAC 权限**：超级管理员 / CMDB管理员 / 资产管理员 / 只读用户
+- **RBAC 权限**：super_admin / cmdb_admin / asset_mgr / change_op / viewer 五种角色
+- **bcrypt 密码哈希**：用户密码加盐存储，防彩虹表与暴力破解
 - **插件式采集器**：Go interface 注册模式，新增采集源无需改核心代码
 - **事件总线**：发布/订阅模式，change 状态变更和 CI 生命周期变更可被外部系统订阅
 - **审计日志**：基于 Gin 中间件，异步写入，记录用户操作、请求参数、响应状态等
@@ -183,7 +197,8 @@ github-cmdb/
 - **Phase 2 (已完成)**: 自动发现(Agent/SSH/K8s/Cloud)、配置快照Diff、采集历史
 - **Phase 3 (已完成)**: 拓扑图谱可视化、变更管理(审批流)、Dashboard、批量导入导出
 - **Phase 4 (已完成)**: 系统集成(Prometheus/Ansible/Webhook)、审计日志、事件总线
-- **Phase 5 (规划中)**: 细粒度权限(CMDB策略模型)、多级审批流、集成自动化平台(Jenkins/GitLab CI)
+- **Phase 5 (进行中)**: 用户管理(DB-backed登录、用户CRUD、角色分配、密码策略)
+- **Phase 6 (规划中)**: 多级审批流、集成自动化平台(Jenkins/GitLab CI)、合规报表
 
 ## License
 
