@@ -1,8 +1,10 @@
 ﻿package handler
 
 import (
+	"net/http"
 	"strconv"
 
+	"github-cmdb/internal/middleware"
 	"github-cmdb/internal/model"
 	"github-cmdb/internal/repository"
 	"github-cmdb/internal/service"
@@ -61,6 +63,7 @@ func (h *ChangeHandler) Delete(c *gin.Context) {
 func (h *ChangeHandler) Submit(c *gin.Context) {
 	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
 	if err != nil { response.BadRequest(c, "invalid id"); return }
+	if _, ok := requireChangeOperator(c); !ok { return }
 	if err := h.svc.Submit(id); err != nil { response.BadRequest(c, err.Error()); return }
 	response.Success(c, nil)
 }
@@ -68,39 +71,34 @@ func (h *ChangeHandler) Submit(c *gin.Context) {
 func (h *ChangeHandler) Approve(c *gin.Context) {
 	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
 	if err != nil { response.BadRequest(c, "invalid id"); return }
-	var req struct {
-		ApprovedBy string `json:"approved_by"`
-	}
-	if err := c.ShouldBindJSON(&req); err != nil { response.BadRequest(c, err.Error()); return }
-	if err := h.svc.Approve(id, req.ApprovedBy); err != nil { response.BadRequest(c, err.Error()); return }
+	operator, ok := requireChangeOperator(c)
+	if !ok { return }
+	if err := h.svc.Approve(id, operator); err != nil { response.BadRequest(c, err.Error()); return }
 	response.Success(c, nil)
 }
 
 func (h *ChangeHandler) Reject(c *gin.Context) {
 	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
 	if err != nil { response.BadRequest(c, "invalid id"); return }
-	var req struct {
-		RejectedBy string `json:"rejected_by"`
-	}
-	if err := c.ShouldBindJSON(&req); err != nil { response.BadRequest(c, err.Error()); return }
-	if err := h.svc.Reject(id, req.RejectedBy); err != nil { response.BadRequest(c, err.Error()); return }
+	operator, ok := requireChangeOperator(c)
+	if !ok { return }
+	if err := h.svc.Reject(id, operator); err != nil { response.BadRequest(c, err.Error()); return }
 	response.Success(c, nil)
 }
 
 func (h *ChangeHandler) Execute(c *gin.Context) {
 	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
 	if err != nil { response.BadRequest(c, "invalid id"); return }
-	var req struct {
-		ExecutedBy string `json:"executed_by"`
-	}
-	if err := c.ShouldBindJSON(&req); err != nil { response.BadRequest(c, err.Error()); return }
-	if err := h.svc.Execute(id, req.ExecutedBy); err != nil { response.BadRequest(c, err.Error()); return }
+	operator, ok := requireChangeOperator(c)
+	if !ok { return }
+	if err := h.svc.Execute(id, operator); err != nil { response.BadRequest(c, err.Error()); return }
 	response.Success(c, nil)
 }
 
 func (h *ChangeHandler) Complete(c *gin.Context) {
 	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
 	if err != nil { response.BadRequest(c, "invalid id"); return }
+	if _, ok := requireChangeOperator(c); !ok { return }
 	if err := h.svc.Complete(id); err != nil { response.BadRequest(c, err.Error()); return }
 	response.Success(c, nil)
 }
@@ -108,6 +106,7 @@ func (h *ChangeHandler) Complete(c *gin.Context) {
 func (h *ChangeHandler) Rollback(c *gin.Context) {
 	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
 	if err != nil { response.BadRequest(c, "invalid id"); return }
+	if _, ok := requireChangeOperator(c); !ok { return }
 	if err := h.svc.Rollback(id); err != nil { response.BadRequest(c, err.Error()); return }
 	response.Success(c, nil)
 }
@@ -115,6 +114,16 @@ func (h *ChangeHandler) Rollback(c *gin.Context) {
 func (h *ChangeHandler) Fail(c *gin.Context) {
 	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
 	if err != nil { response.BadRequest(c, "invalid id"); return }
+	if _, ok := requireChangeOperator(c); !ok { return }
 	if err := h.svc.Fail(id); err != nil { response.BadRequest(c, err.Error()); return }
 	response.Success(c, nil)
+}
+
+func requireChangeOperator(c *gin.Context) (string, bool) {
+	username := middleware.GetCurrentUsername(c)
+	if username == "" {
+		response.Error(c, http.StatusUnauthorized, "authenticated username required")
+		return "", false
+	}
+	return username, true
 }
