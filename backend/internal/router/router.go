@@ -52,12 +52,12 @@ func Setup(r *gin.Engine, h *Handlers) {
 		{
 			ciInstances.GET("", h.CIInstance.List)
 			ciInstances.POST("", middleware.RequireRole("asset_mgr", "cmdb_admin"), h.CIInstance.Create)
+			ciInstances.POST("/import", middleware.RequireRole("asset_mgr", "cmdb_admin"), h.Batch.ImportCSV)
+			ciInstances.GET("/export", h.Batch.ExportCSV)
 			ciInstances.GET("/:id", h.CIInstance.Get)
 			ciInstances.PUT("/:id", middleware.RequireRole("asset_mgr", "cmdb_admin"), h.CIInstance.Update)
 			ciInstances.DELETE("/:id", middleware.RequireRole("asset_mgr", "cmdb_admin"), h.CIInstance.Delete)
 			ciInstances.PATCH("/:id/status", middleware.RequireRole("asset_mgr", "cmdb_admin"), h.CIInstance.UpdateStatus)
-			ciInstances.POST("/import", middleware.RequireRole("asset_mgr", "cmdb_admin"), h.Batch.ImportCSV)
-			ciInstances.GET("/export", h.Batch.ExportCSV)
 		}
 
 		// --- Relations ---
@@ -113,8 +113,8 @@ func Setup(r *gin.Engine, h *Handlers) {
 		snapshots := api.Group("/snapshots")
 		{
 			snapshots.GET("", h.Snapshot.List)
-			snapshots.GET("/:id", h.Snapshot.Get)
 			snapshots.GET("/diff", h.Snapshot.Diff)
+			snapshots.GET("/:id", h.Snapshot.Get)
 		}
 
 		// --- Dashboard ---

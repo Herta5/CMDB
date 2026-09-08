@@ -25,6 +25,10 @@ func (s *CIInstanceSvc) List(filter repository.CIInstanceFilter) ([]model.CIInst
 func (s *CIInstanceSvc) Get(id uint64) (*model.CIInstance, error) { return s.repo.GetByID(id) }
 
 func (s *CIInstanceSvc) Create(ci *model.CIInstance) error {
+	ci.Source = NormalizeCISource(ci.Source)
+	if !isSupportedCISource(ci.Source) {
+		return fmt.Errorf("unsupported ci source %q", ci.Source)
+	}
 	ciType, err := s.typeRepo.GetByID(ci.CITypeID)
 	if err != nil { return fmt.Errorf("ci type not found: %w", err) }
 	if ciType.IsAbstract { return fmt.Errorf("cannot create instance of abstract type '%s'", ciType.Name) }
@@ -33,7 +37,6 @@ func (s *CIInstanceSvc) Create(ci *model.CIInstance) error {
 	code, err := s.repo.GenerateCICode(ciType.Name)
 	if err != nil { return err }
 	ci.CICode = code
-	ci.Source = "manual"
 	if err := s.repo.Create(ci); err != nil { return err }
 
 	eventbus.PublishJSON(eventbus.EventCICreated, "ci_instance_svc", map[string]interface{}{
@@ -44,6 +47,23 @@ func (s *CIInstanceSvc) Create(ci *model.CIInstance) error {
 		"source":     ci.Source,
 	})
 	return nil
+}
+
+// NormalizeCISource applies the model default without changing a supplied source.
+func NormalizeCISource(source string) string {
+	if source == "" {
+		return "manual"
+	}
+	return source
+}
+
+func isSupportedCISource(source string) bool {
+	switch source {
+	case "manual", "auto_discovery", "api", "import":
+		return true
+	default:
+		return false
+	}
 }
 
 func (s *CIInstanceSvc) Update(ci *model.CIInstance) error {
