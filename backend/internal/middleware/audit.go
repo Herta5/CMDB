@@ -26,6 +26,7 @@ func SetAuditRepo(repo *repository.AuditRepo) {
 // recorded. Credentials and password updates must never be read for audit
 // logging.
 func ShouldCaptureAuditBody(path string) bool {
+	path = strings.TrimSuffix(path, "/")
 	if path == "/api/v1/auth/login" || path == "/api/v1/profile/password" {
 		return false
 	}
@@ -55,13 +56,15 @@ func captureAuditBody(request *http.Request) *string {
 // is present. Public and pre-auth requests have no trusted context identity,
 // so their audit entry may use an unverified JWT only as a best-effort label.
 func ReadAuditIdentity(c *gin.Context) (uint64, string) {
-	userID := GetCurrentUserID(c)
-	username := GetCurrentUsername(c)
-	if userID != 0 || username != "" {
+	contextUserID, hasUserID := c.Get("user_id")
+	contextUsername, hasUsername := c.Get("username")
+	if hasUserID || hasUsername {
+		userID, _ := contextUserID.(uint64)
+		username, _ := contextUsername.(string)
 		return userID, username
 	}
 
-	username = "anonymous"
+	username := "anonymous"
 	authHeader := c.GetHeader("Authorization")
 	parts := strings.Fields(authHeader)
 	if len(parts) != 2 || !strings.EqualFold(parts[0], "Bearer") {

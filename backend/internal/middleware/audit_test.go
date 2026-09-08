@@ -18,8 +18,11 @@ func TestShouldCaptureAuditBodyRedactsSensitivePaths(t *testing.T) {
 		want bool
 	}{
 		{path: "/api/v1/auth/login", want: false},
+		{path: "/api/v1/auth/login/", want: false},
 		{path: "/api/v1/profile/password", want: false},
+		{path: "/api/v1/profile/password/", want: false},
 		{path: "/api/v1/users/42/password", want: false},
+		{path: "/api/v1/users/42/password/", want: false},
 		{path: "/api/v1/assets", want: true},
 	}
 
@@ -69,6 +72,19 @@ func TestReadAuditIdentityPrefersAuthenticatedContext(t *testing.T) {
 	userID, username := ReadAuditIdentity(context)
 	if userID != 42 || username != "authenticated-user" {
 		t.Fatalf("ReadAuditIdentity() = (%d, %q), want (42, authenticated-user)", userID, username)
+	}
+}
+
+func TestReadAuditIdentityPrefersPresentZeroValueContext(t *testing.T) {
+	context, _ := gin.CreateTestContext(httptest.NewRecorder())
+	context.Request = httptest.NewRequest(http.MethodGet, "/api/v1/assets", nil)
+	context.Request.Header.Set("Authorization", "Bearer "+auditToken(t, 99, "token-user"))
+	context.Set("user_id", uint64(0))
+	context.Set("username", "")
+
+	userID, username := ReadAuditIdentity(context)
+	if userID != 0 || username != "" {
+		t.Fatalf("ReadAuditIdentity() = (%d, %q), want present context values (0, empty)", userID, username)
 	}
 }
 
