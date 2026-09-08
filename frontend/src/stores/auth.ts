@@ -1,6 +1,7 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import { login as loginApi } from '@/api/auth'
+import { clearAuthStorage } from '@/utils/auth-storage'
 
 export const useAuthStore = defineStore('auth', () => {
   const token = ref(localStorage.getItem('cmdb_token') || '')
@@ -37,11 +38,7 @@ export const useAuthStore = defineStore('auth', () => {
     username.value = ''
     displayName.value = ''
     roles.value = []
-    localStorage.removeItem('cmdb_token')
-    localStorage.removeItem('cmdb_user_id')
-    localStorage.removeItem('cmdb_username')
-    localStorage.removeItem('cmdb_display_name')
-    localStorage.removeItem('cmdb_roles')
+    clearAuthStorage()
   }
 
   return { token, userId, username, displayName, roles, isLoggedIn, isAdmin, hasAnyRole, login, logout }

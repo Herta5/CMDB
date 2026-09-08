@@ -47,6 +47,7 @@ describe('auth store', () => {
     expect(store.username).toBe('alice')
     expect(store.displayName).toBe('Alice Chen')
     expect(store.roles).toEqual(['asset_mgr'])
+    expect(storage.getItem('cmdb_token')).toBe('token-123')
     expect(storage.getItem('cmdb_roles')).toBe('["asset_mgr"]')
   })
 
@@ -65,6 +66,7 @@ describe('auth store', () => {
     setActivePinia(createPinia())
     const restored = useAuthStore()
 
+    expect(restored.token).toBe('token-123')
     expect(restored.userId).toBe(42)
     expect(restored.username).toBe('alice')
     expect(restored.displayName).toBe('Alice Chen')

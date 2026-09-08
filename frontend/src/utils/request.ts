@@ -1,5 +1,6 @@
 import axios from 'axios'
 import { ElMessage } from 'element-plus'
+import { clearAuthStorage } from './auth-storage'
 
 const request = axios.create({
   baseURL: '/api/v1',
@@ -18,14 +19,16 @@ request.interceptors.response.use(
     ElMessage.error(res.data.message || '请求失败')
     return Promise.reject(new Error(res.data.message))
   },
-  (err) => {
-    if (err.response?.status === 401) {
-      localStorage.clear()
-      window.location.href = '/login'
-    }
-    ElMessage.error(err.response?.data?.message || '网络错误')
-    return Promise.reject(err)
-  },
+  handleResponseError,
 )
+
+export function handleResponseError(err: any) {
+  if (err.response?.status === 401) {
+    clearAuthStorage()
+    window.location.href = '/login'
+  }
+  ElMessage.error(err.response?.data?.message || '网络错误')
+  return Promise.reject(err)
+}
 
 export default request
