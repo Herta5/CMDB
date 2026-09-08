@@ -20,6 +20,23 @@ type Handlers struct {
 	User        *handler.UserHandler
 }
 
+type ciInstanceRouteHandlers struct {
+	List         gin.HandlerFunc
+	Create       gin.HandlerFunc
+	Import       gin.HandlerFunc
+	Export       gin.HandlerFunc
+	Get          gin.HandlerFunc
+	Update       gin.HandlerFunc
+	Delete       gin.HandlerFunc
+	UpdateStatus gin.HandlerFunc
+}
+
+type snapshotRouteHandlers struct {
+	List gin.HandlerFunc
+	Diff gin.HandlerFunc
+	Get  gin.HandlerFunc
+}
+
 func Setup(r *gin.Engine, h *Handlers) {
 	r.Use(middleware.CORS())
 	r.Use(middleware.AuditLog())
@@ -49,16 +66,16 @@ func Setup(r *gin.Engine, h *Handlers) {
 
 		// --- CI Instances ---
 		ciInstances := api.Group("/ci-instances")
-		{
-			ciInstances.GET("", h.CIInstance.List)
-			ciInstances.POST("", middleware.RequireRole("asset_mgr", "cmdb_admin"), h.CIInstance.Create)
-			ciInstances.POST("/import", middleware.RequireRole("asset_mgr", "cmdb_admin"), h.Batch.ImportCSV)
-			ciInstances.GET("/export", h.Batch.ExportCSV)
-			ciInstances.GET("/:id", h.CIInstance.Get)
-			ciInstances.PUT("/:id", middleware.RequireRole("asset_mgr", "cmdb_admin"), h.CIInstance.Update)
-			ciInstances.DELETE("/:id", middleware.RequireRole("asset_mgr", "cmdb_admin"), h.CIInstance.Delete)
-			ciInstances.PATCH("/:id/status", middleware.RequireRole("asset_mgr", "cmdb_admin"), h.CIInstance.UpdateStatus)
-		}
+		registerCIInstanceRoutes(ciInstances, ciInstanceRouteHandlers{
+			List:         h.CIInstance.List,
+			Create:       h.CIInstance.Create,
+			Import:       h.Batch.ImportCSV,
+			Export:       h.Batch.ExportCSV,
+			Get:          h.CIInstance.Get,
+			Update:       h.CIInstance.Update,
+			Delete:       h.CIInstance.Delete,
+			UpdateStatus: h.CIInstance.UpdateStatus,
+		})
 
 		// --- Relations ---
 		relations := api.Group("/relations")
@@ -111,11 +128,11 @@ func Setup(r *gin.Engine, h *Handlers) {
 
 		// --- Snapshots ---
 		snapshots := api.Group("/snapshots")
-		{
-			snapshots.GET("", h.Snapshot.List)
-			snapshots.GET("/diff", h.Snapshot.Diff)
-			snapshots.GET("/:id", h.Snapshot.Get)
-		}
+		registerSnapshotRoutes(snapshots, snapshotRouteHandlers{
+			List: h.Snapshot.List,
+			Diff: h.Snapshot.Diff,
+			Get:  h.Snapshot.Get,
+		})
 
 		// --- Dashboard ---
 		dashboard := api.Group("/dashboard")
@@ -157,4 +174,21 @@ func Setup(r *gin.Engine, h *Handlers) {
 
 	// --- Auth (public) ---
 	r.POST("/api/v1/auth/login", h.User.Login)
+}
+
+func registerCIInstanceRoutes(ciInstances *gin.RouterGroup, h ciInstanceRouteHandlers) {
+	ciInstances.GET("", h.List)
+	ciInstances.POST("", middleware.RequireRole("asset_mgr", "cmdb_admin"), h.Create)
+	ciInstances.POST("/import", middleware.RequireRole("asset_mgr", "cmdb_admin"), h.Import)
+	ciInstances.GET("/export", h.Export)
+	ciInstances.GET("/:id", h.Get)
+	ciInstances.PUT("/:id", middleware.RequireRole("asset_mgr", "cmdb_admin"), h.Update)
+	ciInstances.DELETE("/:id", middleware.RequireRole("asset_mgr", "cmdb_admin"), h.Delete)
+	ciInstances.PATCH("/:id/status", middleware.RequireRole("asset_mgr", "cmdb_admin"), h.UpdateStatus)
+}
+
+func registerSnapshotRoutes(snapshots *gin.RouterGroup, h snapshotRouteHandlers) {
+	snapshots.GET("", h.List)
+	snapshots.GET("/diff", h.Diff)
+	snapshots.GET("/:id", h.Get)
 }

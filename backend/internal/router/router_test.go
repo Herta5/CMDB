@@ -2,55 +2,56 @@ package router
 
 import (
 	"net/http"
+	"net/http/httptest"
 	"testing"
 
-	"github-cmdb/internal/handler"
 	"github.com/gin-gonic/gin"
 )
 
-func TestStaticCIRoutesPrecedeInstanceIDRoute(t *testing.T) {
+func TestCIInstanceStaticRoutesDispatchToTheirHandlers(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	r := gin.New()
-	Setup(r, &Handlers{
-		CIType:      &handler.CITypeHandler{},
-		CIInstance:  &handler.CIInstanceHandler{},
-		Relation:    &handler.RelationHandler{},
-		Dashboard:   &handler.DashboardHandler{},
-		Discovery:   &handler.DiscoveryHandler{},
-		Snapshot:    &handler.SnapshotHandler{},
-		Change:      &handler.ChangeHandler{},
-		Batch:       &handler.BatchHandler{},
-		Integration: &handler.IntegrationHandler{},
-		Audit:       &handler.AuditHandler{},
-		User:        &handler.UserHandler{},
+	r.Use(func(c *gin.Context) {
+		c.Set("roles", []string{"cmdb_admin"})
+	})
+	registerCIInstanceRoutes(r.Group("/ci-instances"), ciInstanceRouteHandlers{
+		List:         routeMarker("list"),
+		Create:       routeMarker("create"),
+		Import:       routeMarker("import"),
+		Export:       routeMarker("export"),
+		Get:          routeMarker("id"),
+		Update:       routeMarker("update"),
+		Delete:       routeMarker("delete"),
+		UpdateStatus: routeMarker("status"),
 	})
 
-	routes := r.Routes()
-	assertRoutePrecedes(t, routes, http.MethodPost, "/api/v1/ci-instances/import", http.MethodGet, "/api/v1/ci-instances/:id")
-	assertRoutePrecedes(t, routes, http.MethodGet, "/api/v1/ci-instances/export", http.MethodGet, "/api/v1/ci-instances/:id")
-	assertRoutePrecedes(t, routes, http.MethodGet, "/api/v1/snapshots/diff", http.MethodGet, "/api/v1/snapshots/:id")
+	assertRouteMarker(t, r, http.MethodPost, "/ci-instances/import", "import")
+	assertRouteMarker(t, r, http.MethodGet, "/ci-instances/export", "export")
 }
 
-func assertRoutePrecedes(t *testing.T, routes gin.RoutesInfo, staticMethod, staticPath, parameterMethod, parameterPath string) {
+func TestSnapshotDiffRouteDispatchesToItsHandler(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+	registerSnapshotRoutes(r.Group("/snapshots"), snapshotRouteHandlers{
+		List: routeMarker("list"),
+		Diff: routeMarker("diff"),
+		Get:  routeMarker("id"),
+	})
+
+	assertRouteMarker(t, r, http.MethodGet, "/snapshots/diff", "diff")
+}
+
+func routeMarker(marker string) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		c.String(http.StatusOK, marker)
+	}
+}
+
+func assertRouteMarker(t *testing.T, r *gin.Engine, method, path, want string) {
 	t.Helper()
-	staticIndex := routeIndex(routes, staticMethod, staticPath)
-	parameterIndex := routeIndex(routes, parameterMethod, parameterPath)
-	if staticIndex == -1 {
-		t.Fatalf("static route %s %s is not registered", staticMethod, staticPath)
+	recorder := httptest.NewRecorder()
+	r.ServeHTTP(recorder, httptest.NewRequest(method, path, nil))
+	if recorder.Code != http.StatusOK || recorder.Body.String() != want {
+		t.Fatalf("%s %s resolved with status %d and body %q, want status %d and marker %q", method, path, recorder.Code, recorder.Body.String(), http.StatusOK, want)
 	}
-	if parameterIndex == -1 {
-		t.Fatalf("parameter route %s %s is not registered", parameterMethod, parameterPath)
-	}
-	if staticIndex > parameterIndex {
-		t.Fatalf("static route %s %s is registered after %s %s", staticMethod, staticPath, parameterMethod, parameterPath)
-	}
-}
-
-func routeIndex(routes gin.RoutesInfo, method, path string) int {
-	for i, route := range routes {
-		if route.Method == method && route.Path == path {
-			return i
-		}
-	}
-	return -1
 }
