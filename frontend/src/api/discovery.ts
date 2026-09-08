@@ -36,35 +36,39 @@ export interface CollectorType {
 }
 
 export function parseTargetConfig(value: string): Record<string, unknown> {
-  return JSON.parse(value)
+  const config: unknown = JSON.parse(value)
+  if (typeof config !== 'object' || config === null || Array.isArray(config)) {
+    throw new TypeError('目标配置必须是 JSON 对象')
+  }
+  return config as Record<string, unknown>
 }
 
 export const discoveryApi = {
   getCollectors(): Promise<ApiResponse<CollectorType[]>> {
-    return request.get<ApiResponse<CollectorType[]>>('/discovery/collectors')
+    return request.get<ApiResponse<CollectorType[]>, ApiResponse<CollectorType[]>>('/discovery/collectors')
   },
 
   listStrategies(params?: Record<string, unknown>): Promise<ApiResponse<PagePayload<DiscoveryStrategy>>> {
-    return request.get<ApiResponse<PagePayload<DiscoveryStrategy>>>('/discovery/strategies', { params })
+    return request.get<ApiResponse<PagePayload<DiscoveryStrategy>>, ApiResponse<PagePayload<DiscoveryStrategy>>>('/discovery/strategies', { params })
   },
 
   getStrategy(id: number): Promise<ApiResponse<DiscoveryStrategy>> {
-    return request.get<ApiResponse<DiscoveryStrategy>>(`/discovery/strategies/` + id)
+    return request.get<ApiResponse<DiscoveryStrategy>, ApiResponse<DiscoveryStrategy>>(`/discovery/strategies/` + id)
   },
 
   createStrategy(data: Partial<DiscoveryStrategy>): Promise<ApiResponse<DiscoveryStrategy>> {
-    return request.post<ApiResponse<DiscoveryStrategy>>('/discovery/strategies', data)
+    return request.post<ApiResponse<DiscoveryStrategy>, ApiResponse<DiscoveryStrategy>>('/discovery/strategies', data)
   },
 
   updateStrategy(id: number, data: Partial<DiscoveryStrategy>): Promise<ApiResponse<DiscoveryStrategy>> {
-    return request.put<ApiResponse<DiscoveryStrategy>>(`/discovery/strategies/` + id, data)
+    return request.put<ApiResponse<DiscoveryStrategy>, ApiResponse<DiscoveryStrategy>>(`/discovery/strategies/` + id, data)
   },
 
   deleteStrategy(id: number): Promise<ApiResponse<null>> {
-    return request.delete<ApiResponse<null>>(`/discovery/strategies/` + id)
+    return request.delete<ApiResponse<null>, ApiResponse<null>>(`/discovery/strategies/` + id)
   },
 
   listHistory(strategyId: number, params?: Record<string, unknown>): Promise<ApiResponse<PagePayload<DiscoveryHistory>>> {
-    return request.get<ApiResponse<PagePayload<DiscoveryHistory>>>(`/discovery/strategies/${strategyId}/history`, { params })
+    return request.get<ApiResponse<PagePayload<DiscoveryHistory>>, ApiResponse<PagePayload<DiscoveryHistory>>>(`/discovery/strategies/${strategyId}/history`, { params })
   },
 }

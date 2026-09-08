@@ -24,14 +24,14 @@ export interface SnapshotComparison {
 
 export const snapshotApi = {
   list(ciId: number, params?: Record<string, unknown>): Promise<ApiResponse<PagePayload<Snapshot>>> {
-    return request.get<ApiResponse<PagePayload<Snapshot>>>('/snapshots', { params: { ci_id: ciId, ...params } })
+    return request.get<ApiResponse<PagePayload<Snapshot>>, ApiResponse<PagePayload<Snapshot>>>('/snapshots', { params: { ci_id: ciId, ...params } })
   },
 
   get(id: number): Promise<ApiResponse<Snapshot>> {
-    return request.get<ApiResponse<Snapshot>>(`/snapshots/` + id)
+    return request.get<ApiResponse<Snapshot>, ApiResponse<Snapshot>>(`/snapshots/` + id)
   },
 
   diff(fromId: number, toId: number): Promise<ApiResponse<SnapshotComparison>> {
-    return request.get<ApiResponse<SnapshotComparison>>('/snapshots/diff', { params: { from: fromId, to: toId } })
+    return request.get<ApiResponse<SnapshotComparison>, ApiResponse<SnapshotComparison>>('/snapshots/diff', { params: { from: fromId, to: toId } })
   },
 }

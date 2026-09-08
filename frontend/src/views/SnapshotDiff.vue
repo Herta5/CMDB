@@ -51,6 +51,7 @@
 import { ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import { snapshotApi, type Snapshot, type SnapshotDiff } from '@/api/snapshot'
+import { extractPagePayload, extractPayload } from '@/utils/request'
 
 const ciId = ref<number | null>(null)
 const snapshots = ref<Snapshot[]>([])
@@ -69,7 +70,7 @@ async function fetchSnapshots() {
   if (!ciId.value) return
   try {
     const res = await snapshotApi.list(ciId.value, { page_size: 50 })
-    snapshots.value = res.data.items
+    snapshots.value = extractPagePayload(res).items
     selected.value = []
     diffResult.value = null
     diffDone.value = false
@@ -96,10 +97,11 @@ async function doDiff() {
     const fromId = selected.value[0].id
     const toId = selected.value[1].id
     const res = await snapshotApi.diff(fromId, toId)
-    diffResult.value = res.data.diff
+    const comparison = extractPayload(res)
+    diffResult.value = comparison.diff
     diffDone.value = true
-    if (res.data.diff?.changes) {
-      diffRows.value = res.data.diff.changes
+    if (comparison.diff?.changes) {
+      diffRows.value = comparison.diff.changes
     }
   } catch (e: any) {
     ElMessage.error(e?.response?.data?.message || 'Diff失败')

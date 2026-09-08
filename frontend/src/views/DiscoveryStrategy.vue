@@ -87,6 +87,7 @@ import { ref, reactive, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { discoveryApi, parseTargetConfig, type DiscoveryStrategy, type CollectorType } from '@/api/discovery'
+import { extractPagePayload, extractPayload } from '@/utils/request'
 
 const router = useRouter()
 const loading = ref(false)
@@ -130,8 +131,9 @@ async function fetchList() {
   loading.value = true
   try {
     const res = await discoveryApi.listStrategies({ page: page.value, page_size: size.value })
-    list.value = res.data.items
-    total.value = res.data.total
+    const payload = extractPagePayload(res)
+    list.value = payload.items
+    total.value = payload.total
   } finally {
     loading.value = false
   }
@@ -140,7 +142,7 @@ async function fetchList() {
 async function fetchCollectors() {
   try {
     const res = await discoveryApi.getCollectors()
-    collectors.value = res.data
+    collectors.value = extractPayload(res)
   } catch { /* ignore */ }
 }
 

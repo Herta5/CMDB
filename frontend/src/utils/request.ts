@@ -15,6 +15,14 @@ export interface PagePayload<T> {
   page_size: number
 }
 
+export function extractPayload<T>(response: ApiResponse<T>): T {
+  return response.data
+}
+
+export function extractPagePayload<T>(response: ApiResponse<PagePayload<T>>): PagePayload<T> {
+  return extractPayload(response)
+}
+
 const request = axios.create({
   baseURL: '/api/v1',
   timeout: 15000,

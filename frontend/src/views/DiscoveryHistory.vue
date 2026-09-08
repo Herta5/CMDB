@@ -40,6 +40,7 @@
 import { ref, onMounted } from 'vue'
 import { useRoute } from 'vue-router'
 import { discoveryApi, type DiscoveryHistory } from '@/api/discovery'
+import { extractPagePayload } from '@/utils/request'
 
 const route = useRoute()
 const strategyId = Number(route.query.strategy_id)
@@ -59,8 +60,9 @@ async function fetchList() {
   loading.value = true
   try {
     const res = await discoveryApi.listHistory(strategyId, { page: page.value, page_size: size.value })
-    list.value = res.data.items
-    total.value = res.data.total
+    const payload = extractPagePayload(res)
+    list.value = payload.items
+    total.value = payload.total
   } finally {
     loading.value = false
   }
