@@ -29,3 +29,6 @@ Thumbs.db
 # Misc
 .env
 .env.local
+
+# Local documentation
+docs/

@@ -97,7 +97,6 @@ github-cmdb/
 │   │   ├── stores/             # Pinia 状态
 │   │   └── utils/              # 工具(axios)
 │   └── vite.config.ts
-├── docs/CMDB-ARCHITECTURE.md   # 完整架构设计文档
 └── docker-compose.yml
 ```
 
@@ -182,8 +181,6 @@ github-cmdb/
 | POST | `/api/v1/integration/webhook/generic` | 通用 Webhook 接收端 (公开) |
 | GET  | `/api/v1/integration/webhooks` | Webhook 接收历史 |
 | GET  | `/api/v1/audit/logs` | 操作审计日志 (cmdb_admin) |
-
-详细 API 设计见 [CMDB-ARCHITECTURE.md](docs/CMDB-ARCHITECTURE.md)。
 
 ## 设计决策
 
