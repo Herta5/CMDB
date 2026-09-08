@@ -4,7 +4,7 @@
       <template #header>
         <div class="card-header">
           <span>采集策略管理</span>
-          <el-button type="primary" size="small" @click="openCreate">新增策略</el-button>
+          <el-button v-if="canAccessRoles(['cmdb_admin'])" type="primary" size="small" @click="openCreate">新增策略</el-button>
         </div>
       </template>
       <el-table :data="list" v-loading="loading" stripe>
@@ -38,8 +38,8 @@
         <el-table-column label="操作" width="220" fixed="right">
           <template #default="{ row }">
             <el-button link type="primary" size="small" @click="openHistory(row)">历史</el-button>
-            <el-button link type="primary" size="small" @click="openEdit(row)">编辑</el-button>
-            <el-button link type="danger" size="small" @click="handleDelete(row)">删除</el-button>
+            <el-button v-if="canAccessRoles(['cmdb_admin'])" link type="primary" size="small" @click="openEdit(row)">编辑</el-button>
+            <el-button v-if="canAccessRoles(['cmdb_admin'])" link type="danger" size="small" @click="handleDelete(row)">删除</el-button>
           </template>
         </el-table-column>
       </el-table>
@@ -88,6 +88,10 @@ import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { discoveryApi, parseTargetConfig, type DiscoveryStrategy, type CollectorType } from '@/api/discovery'
 import { extractPagePayload, extractPayload } from '@/utils/request'
+import { useAuthStore } from '@/stores/auth'
+
+const auth = useAuthStore()
+const canAccessRoles = auth.canAccessRoles
 
 const router = useRouter()
 const loading = ref(false)

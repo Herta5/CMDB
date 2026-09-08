@@ -4,13 +4,13 @@
       <el-button text @click="$router.push('/changes')"><el-icon><ArrowLeft /></el-icon> 返回</el-button>
       <h3 style="margin-left:16px">变更单详情</h3>
       <div style="margin-left:auto;display:flex;gap:8px">
-        <el-button v-if="ticket.status === 'draft'" type="warning" @click="doSubmit">提交审批</el-button>
-        <el-button v-if="ticket.status === 'pending_approval'" type="success" @click="doApprove">批准</el-button>
-        <el-button v-if="ticket.status === 'pending_approval'" type="danger" @click="doReject">驳回</el-button>
-        <el-button v-if="ticket.status === 'approved'" type="primary" @click="doExecute">执行</el-button>
-        <el-button v-if="ticket.status === 'executing'" type="success" @click="doComplete">标记完成</el-button>
-        <el-button v-if="ticket.status === 'executing'" type="danger" @click="doFail">标记失败</el-button>
-        <el-button v-if="ticket.status === 'completed' || ticket.status === 'executing'" type="warning" @click="doRollback">回滚</el-button>
+        <el-button v-if="ticket.status === 'draft' && canAccessRoles(['asset_mgr', 'cmdb_admin'])" type="warning" @click="doSubmit">提交审批</el-button>
+        <el-button v-if="ticket.status === 'pending_approval' && canAccessRoles(['cmdb_admin'])" type="success" @click="doApprove">批准</el-button>
+        <el-button v-if="ticket.status === 'pending_approval' && canAccessRoles(['cmdb_admin'])" type="danger" @click="doReject">驳回</el-button>
+        <el-button v-if="ticket.status === 'approved' && canAccessRoles(['asset_mgr', 'cmdb_admin'])" type="primary" @click="doExecute">执行</el-button>
+        <el-button v-if="ticket.status === 'executing' && canAccessRoles(['asset_mgr', 'cmdb_admin'])" type="success" @click="doComplete">标记完成</el-button>
+        <el-button v-if="ticket.status === 'executing' && canAccessRoles(['asset_mgr', 'cmdb_admin'])" type="danger" @click="doFail">标记失败</el-button>
+        <el-button v-if="(ticket.status === 'completed' || ticket.status === 'executing') && canAccessRoles(['asset_mgr', 'cmdb_admin'])" type="warning" @click="doRollback">回滚</el-button>
       </div>
     </div>
 
@@ -64,6 +64,10 @@ import { ref, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { getChange, submitChange, approveChange, rejectChange, executeChange, completeChange, rollbackChange, failChange } from '@/api/change'
 import { ElMessage, ElMessageBox } from 'element-plus'
+import { useAuthStore } from '@/stores/auth'
+
+const auth = useAuthStore()
+const canAccessRoles = auth.canAccessRoles
 
 const route = useRoute()
 const router = useRouter()

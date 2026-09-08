@@ -4,7 +4,7 @@
     <el-tabs v-model="activeTab">
       <el-tab-pane label="关系规则" name="rules">
         <div style="margin-bottom:12px;text-align:right">
-          <el-button type="primary" size="small" @click="openRuleCreate"><el-icon><Plus /></el-icon>新建规则</el-button>
+          <el-button v-if="canAccessRoles(['cmdb_admin'])" type="primary" size="small" @click="openRuleCreate"><el-icon><Plus /></el-icon>新建规则</el-button>
         </div>
         <el-table :data="rules" v-loading="rulesLoading" stripe>
           <el-table-column prop="display_name" label="关系名" width="150" />
@@ -15,20 +15,20 @@
           <el-table-column prop="is_hard_dependency" label="强依赖" width="90">
             <template #default="{row}"><el-tag :type="row.is_hard_dependency ? 'danger' : 'info'" size="small">{{ row.is_hard_dependency ? '是' : '否' }}</el-tag></template>
           </el-table-column>
-          <el-table-column label="操作" width="140">
+          <el-table-column v-if="canAccessRoles(['cmdb_admin'])" label="操作" width="140">
             <template #default="{row}"><el-button link type="primary" size="small" @click="openRuleEdit(row)">编辑</el-button><el-button link type="danger" size="small" @click="handleRuleDelete(row)">删除</el-button></template>
           </el-table-column>
         </el-table>
       </el-tab-pane>
       <el-tab-pane label="关系实例" name="instances">
         <div style="margin-bottom:12px;text-align:right">
-          <el-button type="primary" size="small" @click="openInstanceCreate"><el-icon><Plus /></el-icon>新建关系</el-button>
+          <el-button v-if="canAccessRoles(['asset_mgr', 'cmdb_admin'])" type="primary" size="small" @click="openInstanceCreate"><el-icon><Plus /></el-icon>新建关系</el-button>
         </div>
         <el-table :data="instances" v-loading="instLoading" stripe>
           <el-table-column prop="rule.display_name" label="关系类型" width="140" />
           <el-table-column prop="source_ci.name" label="源 CI" min-width="180" />
           <el-table-column prop="target_ci.name" label="目标 CI" min-width="180" />
-          <el-table-column label="操作" width="80">
+          <el-table-column v-if="canAccessRoles(['asset_mgr', 'cmdb_admin'])" label="操作" width="80">
             <template #default="{row}"><el-button link type="danger" size="small" @click="handleInstanceDelete(row)">删除</el-button></template>
           </el-table-column>
         </el-table>
@@ -62,6 +62,10 @@
 import { ref, reactive, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { getRelationRules, createRelationRule, updateRelationRule, deleteRelationRule, getRelationInstances, createRelationInstance, deleteRelationInstance } from '@/api/relation'
+import { useAuthStore } from '@/stores/auth'
+
+const auth = useAuthStore()
+const canAccessRoles = auth.canAccessRoles
 
 const activeTab = ref('rules')
 const rulesLoading = ref(false)

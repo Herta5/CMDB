@@ -2,7 +2,7 @@
   <div class="page">
     <div class="page-header">
       <h3>CI 类型管理</h3>
-      <el-button type="primary" @click="openCreate"><el-icon><Plus /></el-icon>新建类型</el-button>
+      <el-button v-if="canAccessRoles(['cmdb_admin'])" type="primary" @click="openCreate"><el-icon><Plus /></el-icon>新建类型</el-button>
     </div>
     <el-card shadow="never">
       <el-table :data="treeData" row-key="id" default-expand-all :indent="24" v-loading="loading">
@@ -15,7 +15,7 @@
         </el-table-column>
         <el-table-column prop="name" label="标识" width="160" />
         <el-table-column prop="description" label="描述" min-width="200" show-overflow-tooltip />
-        <el-table-column label="操作" width="240" fixed="right">
+        <el-table-column v-if="canAccessRoles(['cmdb_admin'])" label="操作" width="240" fixed="right">
           <template #default="{ row }">
             <el-button link type="primary" size="small" @click="openEdit(row)">编辑</el-button>
             <el-button link type="primary" size="small" @click="openAttributes(row)">属性</el-button>
@@ -50,6 +50,7 @@
         <el-table-column prop="is_required" label="必填" width="70"><template #default="{row}"><el-tag :type="row.is_required ? 'danger' : 'info'" size="small">{{ row.is_required ? '是' : '否' }}</el-tag></template></el-table-column>
         <el-table-column prop="is_unique" label="唯一" width="70"><template #default="{row}"><el-tag :type="row.is_unique ? 'warning' : 'info'" size="small">{{ row.is_unique ? '是' : '否' }}</el-tag></template></el-table-column>
       </el-table>
+      <template v-if="canAccessRoles(['cmdb_admin'])">
       <el-divider />
       <el-form :model="attrForm" inline>
         <el-form-item label="属性标识"><el-input v-model="attrForm.name" placeholder="如 ip_address" size="small" /></el-form-item>
@@ -63,6 +64,7 @@
         <el-form-item><el-checkbox v-model="attrForm.is_unique">唯一</el-checkbox></el-form-item>
         <el-form-item><el-button type="primary" size="small" @click="handleAddAttr">添加属性</el-button></el-form-item>
       </el-form>
+      </template>
     </el-dialog>
   </div>
 </template>
@@ -72,6 +74,10 @@ import { ref, reactive, onMounted, computed } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Plus } from '@element-plus/icons-vue'
 import { getCITypeTree, createCIType, updateCIType, deleteCIType, getAttributes, createAttribute } from '@/api/ci-type'
+import { useAuthStore } from '@/stores/auth'
+
+const auth = useAuthStore()
+const canAccessRoles = auth.canAccessRoles
 
 const loading = ref(false)
 const treeData = ref<any[]>([])

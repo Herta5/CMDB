@@ -81,6 +81,21 @@ describe('auth store', () => {
     expect(store.hasAnyRole('viewer', 'change_op')).toBe(true)
   })
 
+  it('uses one role check for administrator menus and routes', () => {
+    storage.setItem('cmdb_roles', JSON.stringify(['cmdb_admin']))
+    const admin = useAuthStore()
+
+    expect(admin.canAccessRoles(['cmdb_admin'])).toBe(true)
+    expect(admin.canAccessRoles(['asset_mgr'])).toBe(false)
+
+    storage.setItem('cmdb_roles', JSON.stringify(['asset_mgr']))
+    setActivePinia(createPinia())
+    const assetManager = useAuthStore()
+
+    expect(assetManager.canAccessRoles(['cmdb_admin'])).toBe(false)
+    expect(assetManager.canAccessRoles(['asset_mgr', 'cmdb_admin'])).toBe(true)
+  })
+
   it('logout removes CMDB authentication keys without clearing unrelated storage', () => {
     storage.setItem('cmdb_token', 'token-123')
     storage.setItem('cmdb_user_id', '42')

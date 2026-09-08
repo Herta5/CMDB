@@ -89,13 +89,13 @@ const routes = [
         path: 'users',
         name: 'UserManagement',
         component: () => import('@/views/UserManagement.vue'),
-        meta: { title: '用户管理', icon: 'User' },
+        meta: { title: '用户管理', icon: 'User', roles: ['cmdb_admin'] },
       },
       {
         path: 'audit',
         name: 'AuditLog',
         component: () => import('@/views/AuditLog.vue'),
-        meta: { title: '审计日志', icon: 'List' },
+        meta: { title: '审计日志', icon: 'List', roles: ['cmdb_admin'] },
       },
     ],
   },
@@ -111,6 +111,8 @@ router.beforeEach((to, _from, next) => {
   const auth = useAuthStore()
   if (to.path === '/login') { next(); return }
   if (!auth.token) { next('/login'); return }
+  const requiredRoles = to.meta.roles as string[] | undefined
+  if (requiredRoles && !auth.canAccessRoles(requiredRoles)) { next('/dashboard'); return }
   next()
 })
 

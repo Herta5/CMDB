@@ -32,6 +32,10 @@ export const useAuthStore = defineStore('auth', () => {
     return roles.value.includes('super_admin') || roles.value.some(role => requiredRoles.includes(role))
   }
 
+  function canAccessRoles(requiredRoles: string[]) {
+    return hasAnyRole(...requiredRoles)
+  }
+
   function logout() {
     token.value = ''
     userId.value = 0
@@ -41,5 +45,5 @@ export const useAuthStore = defineStore('auth', () => {
     clearAuthStorage()
   }
 
-  return { token, userId, username, displayName, roles, isLoggedIn, isAdmin, hasAnyRole, login, logout }
+  return { token, userId, username, displayName, roles, isLoggedIn, isAdmin, hasAnyRole, canAccessRoles, login, logout }
 })

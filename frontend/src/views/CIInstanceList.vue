@@ -4,10 +4,10 @@
       <h3>CI 实例</h3>
       <div style="display:flex;gap:8px">
         <el-button @click="handleExport">导出CSV</el-button>
-        <el-upload :show-file-list="false" :before-upload="handleImport" accept=".csv">
+        <el-upload v-if="canAccessRoles(['asset_mgr', 'cmdb_admin'])" :show-file-list="false" :before-upload="handleImport" accept=".csv">
           <el-button>导入CSV</el-button>
         </el-upload>
-        <el-button type="primary" @click="openCreate"><el-icon><Plus /></el-icon>新建实例</el-button>
+        <el-button v-if="canAccessRoles(['asset_mgr', 'cmdb_admin'])" type="primary" @click="openCreate"><el-icon><Plus /></el-icon>新建实例</el-button>
       </div>
     </div>
 
@@ -47,7 +47,7 @@
         </el-table-column>
         <el-table-column prop="owner" label="负责人" width="100" />
         <el-table-column prop="updated_at" label="更新时间" width="170" />
-        <el-table-column label="操作" width="200" fixed="right">
+        <el-table-column v-if="canAccessRoles(['asset_mgr', 'cmdb_admin'])" label="操作" width="200" fixed="right">
           <template #default="{row}">
             <el-button link type="primary" size="small" @click="openEdit(row)">编辑</el-button>
             <el-button link type="warning" size="small" @click="openStatusEdit(row)">状态</el-button>
@@ -101,6 +101,10 @@ import { ref, reactive, onMounted, computed } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { getCIInstances, createCIInstance, updateCIInstance, deleteCIInstance, updateStatus } from '@/api/ci-instance'
 import { getCITypeTree } from '@/api/ci-type'
+import { useAuthStore } from '@/stores/auth'
+
+const auth = useAuthStore()
+const canAccessRoles = auth.canAccessRoles
 
 const loading = ref(false)
 const instances = ref<any[]>([])

@@ -2,7 +2,7 @@
   <div class="page">
     <div class="page-header">
       <h3>变更管理</h3>
-      <el-button type="primary" @click="showCreate = true">新建变更单</el-button>
+      <el-button v-if="canAccessRoles(['asset_mgr', 'cmdb_admin'])" type="primary" @click="showCreate = true">新建变更单</el-button>
     </div>
 
     <el-card shadow="never" style="margin-bottom:12px">
@@ -62,10 +62,10 @@
         <el-table-column label="操作" width="200" fixed="right">
           <template #default="{ row }">
             <el-button size="small" text @click="viewDetail(row.id)">详情</el-button>
-            <el-button v-if="row.status === 'draft'" size="small" text type="warning" @click="doSubmit(row.id)">提交</el-button>
-            <el-button v-if="row.status === 'pending_approval'" size="small" text type="success" @click="doApprove(row)">批准</el-button>
-            <el-button v-if="row.status === 'pending_approval'" size="small" text type="danger" @click="doReject(row)">驳回</el-button>
-            <el-button v-if="row.status === 'approved'" size="small" text type="primary" @click="doExecute(row)">执行</el-button>
+            <el-button v-if="row.status === 'draft' && canAccessRoles(['asset_mgr', 'cmdb_admin'])" size="small" text type="warning" @click="doSubmit(row.id)">提交</el-button>
+            <el-button v-if="row.status === 'pending_approval' && canAccessRoles(['cmdb_admin'])" size="small" text type="success" @click="doApprove(row)">批准</el-button>
+            <el-button v-if="row.status === 'pending_approval' && canAccessRoles(['cmdb_admin'])" size="small" text type="danger" @click="doReject(row)">驳回</el-button>
+            <el-button v-if="row.status === 'approved' && canAccessRoles(['asset_mgr', 'cmdb_admin'])" size="small" text type="primary" @click="doExecute(row)">执行</el-button>
           </template>
         </el-table-column>
       </el-table>
@@ -140,6 +140,10 @@ import { ref, reactive, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { getChanges, createChange, submitChange, approveChange, rejectChange, executeChange } from '@/api/change'
 import { ElMessage, ElMessageBox } from 'element-plus'
+import { useAuthStore } from '@/stores/auth'
+
+const auth = useAuthStore()
+const canAccessRoles = auth.canAccessRoles
 
 const router = useRouter()
 const list = ref<any[]>([])

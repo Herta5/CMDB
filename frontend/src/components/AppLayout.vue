@@ -50,11 +50,11 @@
           <el-icon><Connection /></el-icon>
           <span>集成中心</span>
         </el-menu-item>
-        <el-menu-item index="/users">
+        <el-menu-item v-if="canAccessRoles(['cmdb_admin'])" index="/users">
           <el-icon><User /></el-icon>
           <span>用户管理</span>
         </el-menu-item>
-        <el-menu-item index="/audit">
+        <el-menu-item v-if="canAccessRoles(['cmdb_admin'])" index="/audit">
           <el-icon><List /></el-icon>
           <span>审计日志</span>
         </el-menu-item>
@@ -93,6 +93,10 @@ const activeMenu = computed(() => route.path)
 function handleLogout() {
   auth.logout()
   router.push('/login')
+}
+
+function canAccessRoles(roles: string[]) {
+  return auth.canAccessRoles(roles)
 }
 </script>
 
