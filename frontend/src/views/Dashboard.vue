@@ -2,10 +2,10 @@
   <div class="dashboard">
     <el-row :gutter="20" class="stat-row">
       <el-col :span="6">
-        <el-card shadow="never"><div class="stat"><div class="stat-label">CI 总数</div><div class="stat-value">{{ summary.total_ci || 0 }}</div></div></el-card>
+        <el-card shadow="never"><div class="stat"><div class="stat-label">资产总数</div><div class="stat-value">{{ summary.total_ci || 0 }}</div></div></el-card>
       </el-col>
       <el-col :span="6">
-        <el-card shadow="never"><div class="stat"><div class="stat-label">CI 类型</div><div class="stat-value">{{ summary.by_type?.length || 0 }}</div></div></el-card>
+        <el-card shadow="never"><div class="stat"><div class="stat-label">资产类型</div><div class="stat-value">{{ summary.by_type?.length || 0 }}</div></div></el-card>
       </el-col>
       <el-col :span="6">
         <el-card shadow="never"><div class="stat"><div class="stat-label">在线资产</div><div class="stat-value" style="color:#52c41a">{{ statusCount('active') }}</div></div></el-card>

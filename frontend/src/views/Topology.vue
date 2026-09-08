@@ -2,7 +2,7 @@
   <div class="page">
     <div class="page-header">
       <h3>拓扑图谱</h3>
-      <el-input-number v-model="ciId" :min="1" placeholder="CI ID" style="width:160px;margin-right:8px" />
+      <el-input-number v-model="ciId" :min="1" placeholder="资产 ID" style="width:160px;margin-right:8px" />
       <el-input-number v-model="depth" :min="1" :max="5" style="width:100px;margin-right:8px" />
       <el-button type="primary" @click="loadTopology">展开拓扑</el-button>
       <el-button @click="loadImpact">影响分析</el-button>
@@ -17,7 +17,7 @@
         <el-button size="small" text @click="loadTopology(selectedNode.ci_id)">以此节点展开</el-button>
       </template>
       <el-descriptions :column="4" size="small">
-        <el-descriptions-item label="CI ID">{{ selectedNode.ci_id }}</el-descriptions-item>
+        <el-descriptions-item label="资产 ID">{{ selectedNode.ci_id }}</el-descriptions-item>
         <el-descriptions-item label="类型">{{ selectedNode.type_name }}</el-descriptions-item>
         <el-descriptions-item label="状态">
           <el-tag :type="statusTag(selectedNode.status)" size="small">{{ selectedNode.status }}</el-tag>

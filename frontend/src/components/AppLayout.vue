@@ -20,11 +20,11 @@
         </el-menu-item>
         <el-menu-item index="/ci-types">
           <el-icon><Collection /></el-icon>
-          <span>CI 类型</span>
+          <span>资产类型</span>
         </el-menu-item>
         <el-menu-item index="/ci-instances">
           <el-icon><Monitor /></el-icon>
-          <span>CI 实例</span>
+          <span>资产列表</span>
         </el-menu-item>
         <el-menu-item index="/relations">
           <el-icon><Connection /></el-icon>

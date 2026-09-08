@@ -23,13 +23,13 @@ const routes = [
         path: 'ci-types',
         name: 'CITypes',
         component: () => import('@/views/CITypeList.vue'),
-        meta: { title: 'CI 类型', icon: 'Collection' },
+        meta: { title: '资产类型', icon: 'Collection' },
       },
       {
         path: 'ci-instances',
         name: 'CIInstances',
         component: () => import('@/views/CIInstanceList.vue'),
-        meta: { title: 'CI 实例', icon: 'Monitor' },
+        meta: { title: '资产列表', icon: 'Monitor' },
       },
       {
         path: 'ci-instances/:id',

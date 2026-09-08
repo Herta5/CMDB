@@ -25,7 +25,7 @@
         </el-descriptions-item>
         <el-descriptions-item label="标题" :span="2">{{ ticket.title }}</el-descriptions-item>
         <el-descriptions-item label="变更类型">{{ changeTypeLabel(ticket.change_type) }}</el-descriptions-item>
-        <el-descriptions-item label="目标CI">{{ ticket.ci_target?.name || ticket.ci_target_name }} (#{{ ticket.ci_target_id }})</el-descriptions-item>
+        <el-descriptions-item label="目标资产">{{ ticket.ci_target?.name || ticket.ci_target_name }} (#{{ ticket.ci_target_id }})</el-descriptions-item>
         <el-descriptions-item label="风险等级">
           <el-tag :type="ticket.risk_level === 'high' ? 'danger' : ticket.risk_level === 'medium' ? 'warning' : 'info'">{{ ticket.risk_level }}</el-tag>
         </el-descriptions-item>

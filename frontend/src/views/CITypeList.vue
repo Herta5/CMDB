@@ -1,7 +1,7 @@
 <template>
   <div class="page">
     <div class="page-header">
-      <h3>CI 类型管理</h3>
+      <h3>资产类型管理</h3>
       <el-button v-if="canAccessRoles(['cmdb_admin'])" type="primary" @click="openCreate"><el-icon><Plus /></el-icon>新建类型</el-button>
     </div>
     <el-card shadow="never">
@@ -82,7 +82,7 @@ const canAccessRoles = auth.canAccessRoles
 const loading = ref(false)
 const treeData = ref<any[]>([])
 const dialogVisible = ref(false)
-const dialogTitle = ref('新建 CI 类型')
+const dialogTitle = ref('新建资产类型')
 const isEdit = ref(false)
 const editId = ref<number>(0)
 const form = reactive({ name: '', display_name: '', icon: 'server', parent_id: null as number | null, is_abstract: false, description: '' })
@@ -104,8 +104,8 @@ async function fetchData() {
 function resetForm() {
   form.name = ''; form.display_name = ''; form.icon = 'server'; form.parent_id = null; form.is_abstract = false; form.description = ''
 }
-function openCreate() { resetForm(); isEdit.value = false; dialogTitle.value = '新建 CI 类型'; dialogVisible.value = true }
-function openEdit(row: any) { Object.assign(form, { name: row.name, display_name: row.display_name, icon: row.icon, parent_id: row.parent_id, is_abstract: row.is_abstract, description: row.description }); isEdit.value = true; editId.value = row.id; dialogTitle.value = '编辑 CI 类型'; dialogVisible.value = true }
+function openCreate() { resetForm(); isEdit.value = false; dialogTitle.value = '新建资产类型'; dialogVisible.value = true }
+function openEdit(row: any) { Object.assign(form, { name: row.name, display_name: row.display_name, icon: row.icon, parent_id: row.parent_id, is_abstract: row.is_abstract, description: row.description }); isEdit.value = true; editId.value = row.id; dialogTitle.value = '编辑资产类型'; dialogVisible.value = true }
 async function handleSave() {
   try {
     if (isEdit.value) { await updateCIType(editId.value, form) }
@@ -116,7 +116,7 @@ async function handleSave() {
   } catch { /* handled */ }
 }
 async function handleDelete(row: any) {
-  await ElMessageBox.confirm('确定删除该 CI 类型吗？', '提示', { type: 'warning' })
+  await ElMessageBox.confirm('确定删除该资产类型吗？', '提示', { type: 'warning' })
   await deleteCIType(row.id)
   ElMessage.success('删除成功')
   fetchData()

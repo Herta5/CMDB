@@ -3,9 +3,9 @@
     <el-page-header @back="$router.push('/ci-instances')" :content="instance?.name || '实例详情'" />
     <el-card shadow="never" style="margin-top:16px" v-if="instance">
       <el-descriptions title="基本信息" :column="2" border>
-        <el-descriptions-item label="CI编码">{{ instance.ci_code }}</el-descriptions-item>
+        <el-descriptions-item label="资产编码">{{ instance.ci_code }}</el-descriptions-item>
         <el-descriptions-item label="名称">{{ instance.name }}</el-descriptions-item>
-        <el-descriptions-item label="CI类型">{{ instance.ci_type?.display_name }}</el-descriptions-item>
+        <el-descriptions-item label="资产类型">{{ instance.ci_type?.display_name }}</el-descriptions-item>
         <el-descriptions-item label="状态">
           <el-tag :type="statusTag(instance.status)" size="small">{{ statusLabel(instance.status) }}</el-tag>
         </el-descriptions-item>
@@ -26,8 +26,8 @@
       <h4 style="margin-top:24px;margin-bottom:12px">关联关系</h4>
       <el-table :data="relations" v-loading="relLoading" size="small">
         <el-table-column label="关系类型" width="140"><template #default="{row}">{{ row.rule?.display_name }}</template></el-table-column>
-        <el-table-column label="源 CI" min-width="180"><template #default="{row}">{{ row.source_ci?.name }} <span style="color:#8c8c8c">({{ row.source_ci?.ci_type?.display_name }})</span></template></el-table-column>
-        <el-table-column label="目标 CI" min-width="180"><template #default="{row}">{{ row.target_ci?.name }} <span style="color:#8c8c8c">({{ row.target_ci?.ci_type?.display_name }})</span></template></el-table-column>
+        <el-table-column label="源资产" min-width="180"><template #default="{row}">{{ row.source_ci?.name }} <span style="color:#8c8c8c">({{ row.source_ci?.ci_type?.display_name }})</span></template></el-table-column>
+        <el-table-column label="目标资产" min-width="180"><template #default="{row}">{{ row.target_ci?.name }} <span style="color:#8c8c8c">({{ row.target_ci?.ci_type?.display_name }})</span></template></el-table-column>
       </el-table>
     </el-card>
   </div>

@@ -5,8 +5,8 @@
         <span>配置快照</span>
       </template>
       <el-form :inline="true">
-        <el-form-item label="CI ID">
-          <el-input-number v-model="ciId" :min="1" placeholder="输入CI实例ID" />
+        <el-form-item label="资产 ID">
+          <el-input-number v-model="ciId" :min="1" placeholder="输入资产 ID" />
         </el-form-item>
         <el-form-item>
           <el-button type="primary" @click="fetchSnapshots">查询快照</el-button>
@@ -42,7 +42,7 @@
         </el-table>
         <el-empty v-else-if="diffDone" description="无变更" />
       </div>
-      <el-empty v-if="!snapshots.length && ciId" description="该CI暂无快照记录" />
+      <el-empty v-if="!snapshots.length && ciId" description="该资产暂无快照记录" />
     </el-card>
   </div>
 </template>

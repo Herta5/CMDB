@@ -26,8 +26,8 @@
         </div>
         <el-table :data="instances" v-loading="instLoading" stripe>
           <el-table-column prop="rule.display_name" label="关系类型" width="140" />
-          <el-table-column prop="source_ci.name" label="源 CI" min-width="180" />
-          <el-table-column prop="target_ci.name" label="目标 CI" min-width="180" />
+          <el-table-column prop="source_ci.name" label="源资产" min-width="180" />
+          <el-table-column prop="target_ci.name" label="目标资产" min-width="180" />
           <el-table-column v-if="canAccessRoles(['asset_mgr', 'cmdb_admin'])" label="操作" width="80">
             <template #default="{row}"><el-button link type="danger" size="small" @click="handleInstanceDelete(row)">删除</el-button></template>
           </el-table-column>
@@ -40,8 +40,8 @@
         <el-form-item label="关系标识"><el-input v-model="ruleForm.name" placeholder="如 runs_on" /></el-form-item>
         <el-form-item label="显示名称"><el-input v-model="ruleForm.display_name" placeholder="如 运行在" /></el-form-item>
         <el-form-item label="反向名称"><el-input v-model="ruleForm.reverse_name" placeholder="如 运行着" /></el-form-item>
-        <el-form-item label="源类型"><el-input v-model.number="ruleForm.source_type_id" placeholder="源CI类型ID" /></el-form-item>
-        <el-form-item label="目标类型"><el-input v-model.number="ruleForm.target_type_id" placeholder="目标CI类型ID" /></el-form-item>
+        <el-form-item label="源类型"><el-input v-model.number="ruleForm.source_type_id" placeholder="源资产类型 ID" /></el-form-item>
+        <el-form-item label="目标类型"><el-input v-model.number="ruleForm.target_type_id" placeholder="目标资产类型 ID" /></el-form-item>
         <el-form-item label="能否强依赖"><el-switch v-model="ruleForm.is_hard_dependency" /></el-form-item>
       </el-form>
       <template #footer><el-button @click="ruleDialogVisible = false">取消</el-button><el-button type="primary" @click="handleRuleSave">保存</el-button></template>
@@ -50,8 +50,8 @@
     <el-dialog v-model="instDialogVisible" title="新建关系实例" width="400px" destroy-on-close>
       <el-form :model="instForm" label-width="100px">
         <el-form-item label="关系规则ID"><el-input v-model.number="instForm.rule_id" /></el-form-item>
-        <el-form-item label="源CI ID"><el-input v-model.number="instForm.source_ci_id" /></el-form-item>
-        <el-form-item label="目标CI ID"><el-input v-model.number="instForm.target_ci_id" /></el-form-item>
+        <el-form-item label="源资产 ID"><el-input v-model.number="instForm.source_ci_id" /></el-form-item>
+        <el-form-item label="目标资产 ID"><el-input v-model.number="instForm.target_ci_id" /></el-form-item>
       </el-form>
       <template #footer><el-button @click="instDialogVisible = false">取消</el-button><el-button type="primary" @click="handleInstSave">保存</el-button></template>
     </el-dialog>

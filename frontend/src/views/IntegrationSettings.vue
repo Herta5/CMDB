@@ -6,7 +6,7 @@
         <el-col :span="12">
           <el-descriptions title="Prometheus HTTP SD" :column="1" border>
             <el-descriptions-item label="API 路径">/api/v1/integration/prometheus/targets</el-descriptions-item>
-            <el-descriptions-item label="说明">返回 file_sd_configs 格式的 JSON，可按 CI 类型分组标签</el-descriptions-item>
+            <el-descriptions-item label="说明">返回 file_sd_configs 格式的 JSON，可按资产类型分组标签</el-descriptions-item>
           </el-descriptions>
           <el-button style="margin-top:12px" type="primary" size="small" @click="testEndpoint('prometheus')">测试</el-button>
           <div v-if="testResult.prometheus" class="test-result">
@@ -16,7 +16,7 @@
         <el-col :span="12">
           <el-descriptions title="Ansible Dynamic Inventory" :column="1" border>
             <el-descriptions-item label="API 路径">/api/v1/integration/ansible/inventory</el-descriptions-item>
-            <el-descriptions-item label="说明">返回 Ansible 动态清单 JSON，分组为 CI 类型</el-descriptions-item>
+            <el-descriptions-item label="说明">返回 Ansible 动态清单 JSON，按资产类型分组</el-descriptions-item>
           </el-descriptions>
           <el-button style="margin-top:12px" type="primary" size="small" @click="testEndpoint('ansible')">测试</el-button>
           <div v-if="testResult.ansible" class="test-result">

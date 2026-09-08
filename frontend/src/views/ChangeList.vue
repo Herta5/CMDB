@@ -39,7 +39,7 @@
       <el-table :data="list" v-loading="loading" stripe>
         <el-table-column prop="ticket_no" label="变更编号" width="160" />
         <el-table-column prop="title" label="标题" min-width="200" show-overflow-tooltip />
-        <el-table-column prop="ci_target_name" label="目标CI" width="150" />
+        <el-table-column prop="ci_target_name" label="目标资产" width="150" />
         <el-table-column prop="change_type" label="类型" width="90">
           <template #default="{ row }">
             <el-tag size="small">{{ changeTypeLabel(row.change_type) }}</el-tag>
@@ -87,7 +87,7 @@
         <el-form-item label="标题" required>
           <el-input v-model="form.title" />
         </el-form-item>
-        <el-form-item label="目标CI ID" required>
+        <el-form-item label="目标资产 ID" required>
           <el-input-number v-model="form.ci_target_id" :min="1" />
         </el-form-item>
         <el-form-item label="变更类型">

@@ -1,7 +1,7 @@
 <template>
   <div class="page">
     <div class="page-header">
-      <h3>CI 实例</h3>
+      <h3>资产列表</h3>
       <div style="display:flex;gap:8px">
         <el-button @click="handleExport">导出CSV</el-button>
         <el-upload v-if="canAccessRoles(['asset_mgr', 'cmdb_admin'])" :show-file-list="false" :before-upload="handleImport" accept=".csv">
@@ -32,7 +32,7 @@
 
     <el-card shadow="never">
       <el-table :data="instances" v-loading="loading" stripe>
-        <el-table-column prop="ci_code" label="CI编码" width="160" />
+        <el-table-column prop="ci_code" label="资产编码" width="160" />
         <el-table-column prop="name" label="名称" min-width="180">
           <template #default="{row}"><el-button link type="primary" @click="$router.push(`/ci-instances/${row.id}`)">{{ row.name }}</el-button></template>
         </el-table-column>
@@ -62,7 +62,7 @@
 
     <el-dialog v-model="dialogVisible" :title="dialogTitle" width="600px" destroy-on-close>
       <el-form :model="form" label-width="100px">
-        <el-form-item label="CI类型">
+        <el-form-item label="资产类型">
           <el-select v-model="form.ci_type_id" placeholder="选择类型" style="width:100%">
             <el-option v-for="t in concreteTypes" :key="t.id" :label="t.display_name" :value="t.id" />
           </el-select>
@@ -151,14 +151,14 @@ function statusLabel(s: string) {
 }
 
 const dialogVisible = ref(false)
-const dialogTitle = ref('新建 CI 实例')
+const dialogTitle = ref('新建资产')
 const isEdit = ref(false)
 const editId = ref(0)
 const form = reactive({ ci_type_id: null as number | null, name: '', status: 'active', ip_address: '', sn: '', asset_tag: '', owner: '' })
 
 function resetForm() { form.ci_type_id = null; form.name = ''; form.status = 'active'; form.ip_address = ''; form.sn = ''; form.asset_tag = ''; form.owner = '' }
-function openCreate() { resetForm(); isEdit.value = false; dialogTitle.value = '新建 CI 实例'; dialogVisible.value = true }
-function openEdit(row: any) { Object.assign(form, { ci_type_id: row.ci_type_id, name: row.name, status: row.status, ip_address: row.ip_address || '', sn: row.sn || '', asset_tag: row.asset_tag || '', owner: row.owner || '' }); isEdit.value = true; editId.value = row.id; dialogTitle.value = '编辑 CI 实例'; dialogVisible.value = true }
+function openCreate() { resetForm(); isEdit.value = false; dialogTitle.value = '新建资产'; dialogVisible.value = true }
+function openEdit(row: any) { Object.assign(form, { ci_type_id: row.ci_type_id, name: row.name, status: row.status, ip_address: row.ip_address || '', sn: row.sn || '', asset_tag: row.asset_tag || '', owner: row.owner || '' }); isEdit.value = true; editId.value = row.id; dialogTitle.value = '编辑资产'; dialogVisible.value = true }
 
 async function handleSave() {
   const payload: any = {
@@ -181,7 +181,7 @@ async function handleSave() {
   } catch { /* */ }
 }
 async function handleDelete(row: any) {
-  await ElMessageBox.confirm('确定删除该 CI 实例吗？', '提示', { type: 'warning' })
+  await ElMessageBox.confirm('确定删除该资产吗？', '提示', { type: 'warning' })
   await deleteCIInstance(row.id)
   ElMessage.success('删除成功')
   fetchData()
