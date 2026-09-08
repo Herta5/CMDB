@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 import { extractPagePayload, extractPayload, type ApiResponse, type PagePayload } from './request'
 import { parseTargetConfig } from '@/api/discovery'
@@ -48,5 +49,25 @@ describe('parseTargetConfig', () => {
 
   it.each(['null', '[]', '"host-01"', '42'])('rejects non-object strategy target configuration %s', (value) => {
     expect(() => parseTargetConfig(value)).toThrow('目标配置必须是 JSON 对象')
+  })
+})
+
+describe('affected page response consumption', () => {
+  const readView = (name: string) => readFileSync(new URL(`../views/${name}.vue`, import.meta.url), 'utf8')
+
+  it('keeps the three affected pages on response extraction helpers', () => {
+    const sources = [
+      readView('DiscoveryStrategy'),
+      readView('DiscoveryHistory'),
+      readView('SnapshotDiff'),
+    ]
+
+    expect(sources[0]).toContain('extractPagePayload(res)')
+    expect(sources[0]).toContain('extractPayload(res)')
+    expect(sources[1]).toContain('extractPagePayload(res)')
+    expect(sources[2]).toContain('extractPagePayload(res)')
+    expect(sources[2]).toContain('extractPayload(res)')
+
+    for (const source of sources) expect(source).not.toMatch(/\bres\.(items|total|diff)\b/)
   })
 })
