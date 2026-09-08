@@ -42,11 +42,17 @@ func (h *UserHandler) Login(c *gin.Context) {
 		return
 	}
 
-	c.JSON(200, gin.H{"code": 0, "message": "ok", "data": gin.H{
-		"token":    token,
-		"username": u.Username,
-		"roles":    u.Roles,
-	}})
+	c.JSON(200, gin.H{"code": 0, "message": "ok", "data": loginResponse(u, token)})
+}
+
+func loginResponse(user *model.User, token string) gin.H {
+	return gin.H{
+		"token":        token,
+		"user_id":      user.ID,
+		"username":     user.Username,
+		"display_name": user.DisplayName,
+		"roles":        user.Roles,
+	}
 }
 
 // List returns a paginated user list.
