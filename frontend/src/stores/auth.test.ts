@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { createPinia, setActivePinia } from 'pinia'
 
-const loginApi = vi.fn()
+const { loginApi } = vi.hoisted(() => ({ loginApi: vi.fn() }))
 
 vi.mock('@/api/auth', () => ({ login: loginApi }))
 
