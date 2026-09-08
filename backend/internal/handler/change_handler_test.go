@@ -9,6 +9,60 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
+type recordingOperatorTransitionService struct {
+	action   string
+	id       uint64
+	operator string
+}
+
+func (s *recordingOperatorTransitionService) Approve(id uint64, operator string) error {
+	s.action, s.id, s.operator = "approve", id, operator
+	return nil
+}
+
+func (s *recordingOperatorTransitionService) Reject(id uint64, operator string) error {
+	s.action, s.id, s.operator = "reject", id, operator
+	return nil
+}
+
+func (s *recordingOperatorTransitionService) Execute(id uint64, operator string) error {
+	s.action, s.id, s.operator = "execute", id, operator
+	return nil
+}
+
+func TestOperatorTransitionsUseAuthenticatedUsernameInsteadOfRequestOperator(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	transitions := []struct {
+		name    string
+		body    string
+		handler func(*ChangeHandler, *gin.Context)
+	}{
+		{name: "approve", body: `{"approved_by":"request-user"}`, handler: func(h *ChangeHandler, c *gin.Context) { h.Approve(c) }},
+		{name: "reject", body: `{"rejected_by":"request-user"}`, handler: func(h *ChangeHandler, c *gin.Context) { h.Reject(c) }},
+		{name: "execute", body: `{"executed_by":"request-user"}`, handler: func(h *ChangeHandler, c *gin.Context) { h.Execute(c) }},
+	}
+
+	for _, transition := range transitions {
+		t.Run(transition.name, func(t *testing.T) {
+			recorder := httptest.NewRecorder()
+			context, _ := gin.CreateTestContext(recorder)
+			context.Params = gin.Params{{Key: "id", Value: "1"}}
+			context.Request = httptest.NewRequest(http.MethodPost, "/api/changes/1/"+transition.name, bytes.NewBufferString(transition.body))
+			context.Set("username", "authenticated-user")
+			service := &recordingOperatorTransitionService{}
+
+			transition.handler(&ChangeHandler{operatorTransitions: service}, context)
+
+			if recorder.Code != http.StatusOK {
+				t.Fatalf("status = %d, want %d; response body: %s", recorder.Code, http.StatusOK, recorder.Body.String())
+			}
+			if service.action != transition.name || service.id != 1 || service.operator != "authenticated-user" {
+				t.Fatalf("service call = (%q, %d, %q), want (%q, %d, %q)", service.action, service.id, service.operator, transition.name, 1, "authenticated-user")
+			}
+		})
+	}
+}
+
 func TestRequireChangeOperatorUsesAuthenticatedUsernameInsteadOfRequestOperator(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	requestBodies := []string{

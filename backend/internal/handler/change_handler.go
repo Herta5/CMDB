@@ -13,11 +13,18 @@ import (
 )
 
 type ChangeHandler struct {
-	svc *service.ChangeSvc
+	svc                 *service.ChangeSvc
+	operatorTransitions operatorTransitionService
+}
+
+type operatorTransitionService interface {
+	Approve(id uint64, operator string) error
+	Reject(id uint64, operator string) error
+	Execute(id uint64, operator string) error
 }
 
 func NewChangeHandler(svc *service.ChangeSvc) *ChangeHandler {
-	return &ChangeHandler{svc: svc}
+	return &ChangeHandler{svc: svc, operatorTransitions: svc}
 }
 
 func (h *ChangeHandler) List(c *gin.Context) {
@@ -73,7 +80,7 @@ func (h *ChangeHandler) Approve(c *gin.Context) {
 	if err != nil { response.BadRequest(c, "invalid id"); return }
 	operator, ok := requireChangeOperator(c)
 	if !ok { return }
-	if err := h.svc.Approve(id, operator); err != nil { response.BadRequest(c, err.Error()); return }
+	if err := h.operatorTransitions.Approve(id, operator); err != nil { response.BadRequest(c, err.Error()); return }
 	response.Success(c, nil)
 }
 
@@ -82,7 +89,7 @@ func (h *ChangeHandler) Reject(c *gin.Context) {
 	if err != nil { response.BadRequest(c, "invalid id"); return }
 	operator, ok := requireChangeOperator(c)
 	if !ok { return }
-	if err := h.svc.Reject(id, operator); err != nil { response.BadRequest(c, err.Error()); return }
+	if err := h.operatorTransitions.Reject(id, operator); err != nil { response.BadRequest(c, err.Error()); return }
 	response.Success(c, nil)
 }
 
@@ -91,7 +98,7 @@ func (h *ChangeHandler) Execute(c *gin.Context) {
 	if err != nil { response.BadRequest(c, "invalid id"); return }
 	operator, ok := requireChangeOperator(c)
 	if !ok { return }
-	if err := h.svc.Execute(id, operator); err != nil { response.BadRequest(c, err.Error()); return }
+	if err := h.operatorTransitions.Execute(id, operator); err != nil { response.BadRequest(c, err.Error()); return }
 	response.Success(c, nil)
 }
 
