@@ -59,8 +59,8 @@ async function fetchList() {
   loading.value = true
   try {
     const res = await discoveryApi.listHistory(strategyId, { page: page.value, page_size: size.value })
-    list.value = res.items
-    total.value = res.total
+    list.value = res.data.items
+    total.value = res.data.total
   } finally {
     loading.value = false
   }

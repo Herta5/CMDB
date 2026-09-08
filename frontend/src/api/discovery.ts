@@ -1,10 +1,10 @@
-import request from '@/utils/request'
+import request, { type ApiResponse, type PagePayload } from '@/utils/request'
 
 export interface DiscoveryStrategy {
   id: number
   name: string
   source_type: string
-  target_config: any
+  target_config: Record<string, unknown>
   schedule_expr: string | null
   enabled: boolean
   timeout_sec: number
@@ -35,32 +35,36 @@ export interface CollectorType {
   description: string
 }
 
+export function parseTargetConfig(value: string): Record<string, unknown> {
+  return JSON.parse(value)
+}
+
 export const discoveryApi = {
-  getCollectors(): Promise<CollectorType[]> {
-    return request.get('/discovery/collectors')
+  getCollectors(): Promise<ApiResponse<CollectorType[]>> {
+    return request.get<ApiResponse<CollectorType[]>>('/discovery/collectors')
   },
 
-  listStrategies(params?: any) {
-    return request.get('/discovery/strategies', { params })
+  listStrategies(params?: Record<string, unknown>): Promise<ApiResponse<PagePayload<DiscoveryStrategy>>> {
+    return request.get<ApiResponse<PagePayload<DiscoveryStrategy>>>('/discovery/strategies', { params })
   },
 
-  getStrategy(id: number) {
-    return request.get(`/discovery/strategies/` + id)
+  getStrategy(id: number): Promise<ApiResponse<DiscoveryStrategy>> {
+    return request.get<ApiResponse<DiscoveryStrategy>>(`/discovery/strategies/` + id)
   },
 
-  createStrategy(data: Partial<DiscoveryStrategy>) {
-    return request.post('/discovery/strategies', data)
+  createStrategy(data: Partial<DiscoveryStrategy>): Promise<ApiResponse<DiscoveryStrategy>> {
+    return request.post<ApiResponse<DiscoveryStrategy>>('/discovery/strategies', data)
   },
 
-  updateStrategy(id: number, data: Partial<DiscoveryStrategy>) {
-    return request.put(`/discovery/strategies/` + id, data)
+  updateStrategy(id: number, data: Partial<DiscoveryStrategy>): Promise<ApiResponse<DiscoveryStrategy>> {
+    return request.put<ApiResponse<DiscoveryStrategy>>(`/discovery/strategies/` + id, data)
   },
 
-  deleteStrategy(id: number) {
-    return request.delete(`/discovery/strategies/` + id)
+  deleteStrategy(id: number): Promise<ApiResponse<null>> {
+    return request.delete<ApiResponse<null>>(`/discovery/strategies/` + id)
   },
 
-  listHistory(strategyId: number, params?: any) {
-    return request.get(`/discovery/strategies/` + strategyId + '/history', { params })
+  listHistory(strategyId: number, params?: Record<string, unknown>): Promise<ApiResponse<PagePayload<DiscoveryHistory>>> {
+    return request.get<ApiResponse<PagePayload<DiscoveryHistory>>>(`/discovery/strategies/${strategyId}/history`, { params })
   },
 }

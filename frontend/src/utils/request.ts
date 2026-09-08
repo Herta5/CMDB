@@ -2,6 +2,19 @@ import axios from 'axios'
 import { ElMessage } from 'element-plus'
 import { clearAuthStorage } from './auth-storage'
 
+export interface ApiResponse<T> {
+  code: number
+  message: string
+  data: T
+}
+
+export interface PagePayload<T> {
+  items: T[]
+  total: number
+  page: number
+  page_size: number
+}
+
 const request = axios.create({
   baseURL: '/api/v1',
   timeout: 15000,

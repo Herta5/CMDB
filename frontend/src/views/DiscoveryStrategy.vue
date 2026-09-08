@@ -86,7 +86,7 @@
 import { ref, reactive, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { discoveryApi, type DiscoveryStrategy, type CollectorType } from '@/api/discovery'
+import { discoveryApi, parseTargetConfig, type DiscoveryStrategy, type CollectorType } from '@/api/discovery'
 
 const router = useRouter()
 const loading = ref(false)
@@ -130,8 +130,8 @@ async function fetchList() {
   loading.value = true
   try {
     const res = await discoveryApi.listStrategies({ page: page.value, page_size: size.value })
-    list.value = res.items
-    total.value = res.total
+    list.value = res.data.items
+    total.value = res.data.total
   } finally {
     loading.value = false
   }
@@ -139,7 +139,8 @@ async function fetchList() {
 
 async function fetchCollectors() {
   try {
-    collectors.value = await discoveryApi.getCollectors()
+    const res = await discoveryApi.getCollectors()
+    collectors.value = res.data
   } catch { /* ignore */ }
 }
 
@@ -161,20 +162,20 @@ function openEdit(row: DiscoveryStrategy) {
 
 async function handleSubmit() {
   await formRef.value?.validate()
+  let targetConfig: Record<string, unknown>
   try {
-    if (typeof form.target_config === 'string') {
-      form.target_config = JSON.parse(form.target_config)
-    }
+    targetConfig = parseTargetConfig(targetConfigStr.value)
   } catch {
     ElMessage.error('目标配置不是合法的 JSON')
     return
   }
+  const data = { ...form, target_config: targetConfig }
   try {
     if (isEdit.value && form.id) {
-      await discoveryApi.updateStrategy(form.id, form)
+      await discoveryApi.updateStrategy(form.id, data)
       ElMessage.success('更新成功')
     } else {
-      await discoveryApi.createStrategy(form)
+      await discoveryApi.createStrategy(data)
       ElMessage.success('创建成功')
     }
     dialogVisible.value = false

@@ -50,12 +50,12 @@
 <script setup lang="ts">
 import { ref } from 'vue'
 import { ElMessage } from 'element-plus'
-import { snapshotApi, type Snapshot } from '@/api/snapshot'
+import { snapshotApi, type Snapshot, type SnapshotDiff } from '@/api/snapshot'
 
 const ciId = ref<number | null>(null)
 const snapshots = ref<Snapshot[]>([])
 const selected = ref<Snapshot[]>([])
-const diffResult = ref<any>(null)
+const diffResult = ref<SnapshotDiff | null>(null)
 const diffLoading = ref(false)
 const diffDone = ref(false)
 const diffRows = ref<any[]>([])
@@ -69,7 +69,7 @@ async function fetchSnapshots() {
   if (!ciId.value) return
   try {
     const res = await snapshotApi.list(ciId.value, { page_size: 50 })
-    snapshots.value = res.items
+    snapshots.value = res.data.items
     selected.value = []
     diffResult.value = null
     diffDone.value = false
@@ -96,10 +96,10 @@ async function doDiff() {
     const fromId = selected.value[0].id
     const toId = selected.value[1].id
     const res = await snapshotApi.diff(fromId, toId)
-    diffResult.value = res.diff
+    diffResult.value = res.data.diff
     diffDone.value = true
-    if (res.diff?.changes) {
-      diffRows.value = res.diff.changes
+    if (res.data.diff?.changes) {
+      diffRows.value = res.data.diff.changes
     }
   } catch (e: any) {
     ElMessage.error(e?.response?.data?.message || 'Diff失败')
