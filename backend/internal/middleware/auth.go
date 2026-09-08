@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
 	"github.com/gin-gonic/gin"
 	"github.com/golang-jwt/jwt/v5"
 )
@@ -22,11 +23,12 @@ var jwtSecret []byte
 func SetJWTSecret(secret string) { jwtSecret = []byte(secret) }
 
 func GenerateToken(userID uint64, username string, roles []string, expireHour int) (string, error) {
+	now := time.Now()
 	claims := Claims{
 		UserID: userID, Username: username, Roles: roles,
 		RegisteredClaims: jwt.RegisteredClaims{
-			ExpiresAt: jwt.NewNumericDate(time.Now().Add(time.Duration(expireHour) * time.Hour)),
-			IssuedAt:  jwt.NewNumericDate(time.Now()),
+			ExpiresAt: jwt.NewNumericDate(now.Add(time.Duration(expireHour) * time.Hour)),
+			IssuedAt:  jwt.NewNumericDate(now),
 		},
 	}
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
