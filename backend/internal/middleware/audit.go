@@ -1,4 +1,4 @@
-﻿package middleware
+package middleware
 
 import (
 	"bytes"
@@ -27,7 +27,7 @@ func SetAuditRepo(repo *repository.AuditRepo) {
 // logging.
 func ShouldCaptureAuditBody(path string) bool {
 	path = strings.TrimSuffix(path, "/")
-	if path == "/api/v1/auth/login" || path == "/api/v1/profile/password" {
+	if path == "/api/v1/auth/login" || path == "/api/v1/profile/password" || path == "/api/v1/users" {
 		return false
 	}
 

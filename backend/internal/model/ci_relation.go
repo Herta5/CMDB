@@ -4,11 +4,11 @@ import "time"
 
 type CIRelationRule struct {
 	ID               uint64    `json:"id" gorm:"primaryKey;autoIncrement"`
-	Name             string    `json:"name" gorm:"uniqueIndex;size:128;not null"`
+	Name             string    `json:"name" gorm:"uniqueIndex:uk_relation_rule_types,priority:1;size:128;not null"`
 	DisplayName      string    `json:"display_name" gorm:"size:256;not null"`
 	ReverseName      string    `json:"reverse_name" gorm:"size:128;not null"`
-	SourceTypeID     uint64    `json:"source_type_id" gorm:"index;not null"`
-	TargetTypeID     uint64    `json:"target_type_id" gorm:"index;not null"`
+	SourceTypeID     uint64    `json:"source_type_id" gorm:"uniqueIndex:uk_relation_rule_types,priority:2;index;not null"`
+	TargetTypeID     uint64    `json:"target_type_id" gorm:"uniqueIndex:uk_relation_rule_types,priority:3;index;not null"`
 	Cardinality      string    `json:"cardinality" gorm:"type:enum('1:1','1:N','N:1','N:M');default:'N:1'"`
 	IsHardDependency bool      `json:"is_hard_dependency" gorm:"default:false"`
 	Description      *string   `json:"description" gorm:"type:text"`

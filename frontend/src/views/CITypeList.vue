@@ -15,11 +15,11 @@
         </el-table-column>
         <el-table-column prop="name" label="标识" width="160" />
         <el-table-column prop="description" label="描述" min-width="200" show-overflow-tooltip />
-        <el-table-column v-if="canAccessRoles(['cmdb_admin'])" label="操作" width="240" fixed="right">
+        <el-table-column label="操作" width="240" fixed="right">
           <template #default="{ row }">
-            <el-button link type="primary" size="small" @click="openEdit(row)">编辑</el-button>
+            <el-button v-if="canAccessRoles(['cmdb_admin'])" link type="primary" size="small" @click="openEdit(row)">编辑</el-button>
             <el-button link type="primary" size="small" @click="openAttributes(row)">属性</el-button>
-            <el-button link type="danger" size="small" @click="handleDelete(row)">删除</el-button>
+            <el-button v-if="canAccessRoles(['cmdb_admin'])" link type="danger" size="small" @click="handleDelete(row)">删除</el-button>
           </template>
         </el-table-column>
       </el-table>

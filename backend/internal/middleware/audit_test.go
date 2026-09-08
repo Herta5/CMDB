@@ -47,6 +47,20 @@ func TestCaptureAuditBodySkipsSensitiveRequestWithoutReadingIt(t *testing.T) {
 	}
 }
 
+func TestCaptureAuditBodySkipsUserCreationAndPreservesPasswordForHandler(t *testing.T) {
+	const payload = `{"username":"alice","password":"new-user-secret","roles":["viewer"]}`
+	for _, path := range []string{"/api/v1/users", "/api/v1/users/"} {
+		request := httptest.NewRequest(http.MethodPost, path, strings.NewReader(payload))
+		if got := captureAuditBody(request); got != nil {
+			t.Errorf("creation request body was captured: %q", *got)
+		}
+		got, err := io.ReadAll(request.Body)
+		if err != nil || string(got) != payload {
+			t.Fatalf("downstream body = %q, %v", got, err)
+		}
+	}
+}
+
 func TestCaptureAuditBodyLimitsNormalRequestTo4096Bytes(t *testing.T) {
 	request := httptest.NewRequest(http.MethodPost, "/api/v1/assets", bytes.NewBufferString(strings.Repeat("x", 4097)))
 
@@ -103,7 +117,7 @@ func TestReadAuditIdentityRejectsNonIntegralJWTUserID(t *testing.T) {
 	context, _ := gin.CreateTestContext(httptest.NewRecorder())
 	context.Request = httptest.NewRequest(http.MethodGet, "/api/v1/public", nil)
 	context.Request.Header.Set("Authorization", "Bearer "+auditTokenWithClaims(t, jwt.MapClaims{
-		"user_id": 7.5,
+		"user_id":  7.5,
 		"username": "token-user",
 	}))
 

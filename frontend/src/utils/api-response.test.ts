@@ -1,4 +1,5 @@
 import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { extractPagePayload, extractPayload, type ApiResponse, type PagePayload } from './request'
 import { parseTargetConfig } from '@/api/discovery'
@@ -53,7 +54,7 @@ describe('parseTargetConfig', () => {
 })
 
 describe('affected page response consumption', () => {
-  const readView = (name: string) => readFileSync(new URL(`../views/${name}.vue`, import.meta.url), 'utf8')
+  const readView = (name: string) => readFileSync(resolve(process.cwd(), 'src', 'views', `${name}.vue`), 'utf8')
 
   it('keeps the three affected pages on response extraction helpers', () => {
     const sources = [

@@ -4,11 +4,21 @@ import { login as loginApi } from '@/api/auth'
 import { clearAuthStorage } from '@/utils/auth-storage'
 
 export const useAuthStore = defineStore('auth', () => {
+  let savedRoles: unknown
+  try { savedRoles = JSON.parse(localStorage.getItem('cmdb_roles') || 'null') } catch { savedRoles = null }
+  const savedUserId = Number(localStorage.getItem('cmdb_user_id'))
+  const completeIdentity = !!localStorage.getItem('cmdb_token') &&
+    Number.isSafeInteger(savedUserId) && savedUserId > 0 &&
+    !!localStorage.getItem('cmdb_username') &&
+    localStorage.getItem('cmdb_display_name') !== null &&
+    Array.isArray(savedRoles) && savedRoles.every(role => typeof role === 'string' && role.length > 0)
+  if (!completeIdentity) clearAuthStorage()
+
   const token = ref(localStorage.getItem('cmdb_token') || '')
   const userId = ref(Number(localStorage.getItem('cmdb_user_id') || '0'))
   const username = ref(localStorage.getItem('cmdb_username') || '')
   const displayName = ref(localStorage.getItem('cmdb_display_name') || '')
-  const roles = ref<string[]>(JSON.parse(localStorage.getItem('cmdb_roles') || '[]'))
+  const roles = ref<string[]>(completeIdentity ? savedRoles as string[] : [])
 
   const isLoggedIn = computed(() => !!token.value)
   const isAdmin = computed(() => roles.value.includes('cmdb_admin') || roles.value.includes('super_admin'))

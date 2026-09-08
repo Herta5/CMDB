@@ -221,6 +221,8 @@ INSERT INTO ci_attribute (ci_type_id, name, display_name, value_type, is_require
 (73, 'parent_dept',    '上级部门',     'string', 0, 0, 0, 3);
 
 -- 3. Relation Rules
+-- Requires UNIQUE (name, source_type_id, target_type_id), matching the model.
+-- Existing schemas are upgraded by server startup or 002_relation_rule_unique.sql.
 -- ============================================================================
 INSERT INTO ci_relation_rule (id, name, display_name, reverse_name, source_type_id, target_type_id, cardinality, is_hard_dependency) VALUES
 (1,  'runs_on',           '运行在',          '运行着',       12, 11, 'N:1', 1),

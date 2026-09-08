@@ -3,6 +3,8 @@ package config
 import (
 	"fmt"
 	"os"
+	"strconv"
+	"time"
 )
 
 type Config struct {
@@ -35,6 +37,10 @@ type JWTConfig struct {
 }
 
 func Load() *Config {
+	expireHour, err := strconv.Atoi(getEnv("JWT_EXPIRE_HOUR", "24"))
+	if err != nil || expireHour <= 0 || expireHour > int((1<<63-1)/time.Hour) {
+		expireHour = 24
+	}
 	return &Config{
 		Server: ServerConfig{
 			Port: getEnv("SERVER_PORT", "8080"),
@@ -49,7 +55,7 @@ func Load() *Config {
 		},
 		JWT: JWTConfig{
 			Secret:     getEnv("JWT_SECRET", "cmdb-secret-change-in-production"),
-			ExpireHour: 24,
+			ExpireHour: expireHour,
 		},
 	}
 }

@@ -27,6 +27,9 @@ func main() {
 		log.Fatalf("failed to connect database: %v", err)
 	}
 
+	if err := model.MigrateRelationRuleUnique(db); err != nil {
+		log.Fatalf("failed to migrate relation rule uniqueness: %v", err)
+	}
 	if err := db.AutoMigrate(
 		&model.CIType{},
 		&model.CIAttribute{},
@@ -77,7 +80,7 @@ func main() {
 	batchHandler := handler.NewBatchHandler(ciInstanceSvc)
 	integrationHandler := handler.NewIntegrationHandler(ciInstanceRepo, ciTypeRepo, auditRepo, changeSvc)
 	auditHandler := handler.NewAuditHandler(auditRepo)
-	userHandler := handler.NewUserHandler(userSvc)
+	userHandler := handler.NewUserHandler(userSvc, cfg.JWT)
 
 	// --- Discovery Executor & Scheduler ---
 	exec := collector.NewDiscoveryExecutor(ciInstanceRepo, ciTypeRepo, snapRepo, relationRepo, discoveryRepo)

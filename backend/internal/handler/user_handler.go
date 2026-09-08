@@ -3,6 +3,7 @@ package handler
 import (
 	"strconv"
 
+	"github-cmdb/internal/config"
 	"github-cmdb/internal/middleware"
 	"github-cmdb/internal/model"
 	"github-cmdb/internal/repository"
@@ -12,11 +13,12 @@ import (
 )
 
 type UserHandler struct {
-	svc *service.UserSvc
+	svc       *service.UserSvc
+	jwtConfig config.JWTConfig
 }
 
-func NewUserHandler(svc *service.UserSvc) *UserHandler {
-	return &UserHandler{svc: svc}
+func NewUserHandler(svc *service.UserSvc, jwtConfig config.JWTConfig) *UserHandler {
+	return &UserHandler{svc: svc, jwtConfig: jwtConfig}
 }
 
 // Login authenticates a user and returns a JWT token.
@@ -36,7 +38,7 @@ func (h *UserHandler) Login(c *gin.Context) {
 		return
 	}
 
-	token, err := middleware.GenerateToken(u.ID, u.Username, u.Roles, 24)
+	token, err := middleware.GenerateToken(u.ID, u.Username, u.Roles, h.jwtConfig.ExpireHour)
 	if err != nil {
 		response.InternalError(c, "failed to generate token")
 		return
@@ -78,10 +80,16 @@ func (h *UserHandler) List(c *gin.Context) {
 // Get returns a single user.
 func (h *UserHandler) Get(c *gin.Context) {
 	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
-	if err != nil { response.BadRequest(c, "invalid id"); return }
+	if err != nil {
+		response.BadRequest(c, "invalid id")
+		return
+	}
 
 	u, err := h.svc.Get(id)
-	if err != nil { response.NotFound(c, "user not found"); return }
+	if err != nil {
+		response.NotFound(c, "user not found")
+		return
+	}
 	response.Success(c, u)
 }
 
@@ -124,7 +132,10 @@ func (h *UserHandler) Create(c *gin.Context) {
 // Update updates an existing user.
 func (h *UserHandler) Update(c *gin.Context) {
 	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
-	if err != nil { response.BadRequest(c, "invalid id"); return }
+	if err != nil {
+		response.BadRequest(c, "invalid id")
+		return
+	}
 
 	var req struct {
 		DisplayName string   `json:"display_name"`
@@ -140,14 +151,29 @@ func (h *UserHandler) Update(c *gin.Context) {
 	}
 
 	u, err := h.svc.Get(id)
-	if err != nil { response.NotFound(c, "user not found"); return }
+	if err != nil {
+		response.NotFound(c, "user not found")
+		return
+	}
 
-	if req.DisplayName != "" { u.DisplayName = req.DisplayName }
-	if req.Email != "" { u.Email = req.Email }
-	if req.Phone != "" { u.Phone = req.Phone }
-	if req.Roles != nil { u.Roles = req.Roles }
-	if req.Departments != nil { u.Departments = req.Departments }
-	if req.Status != "" { u.Status = req.Status }
+	if req.DisplayName != "" {
+		u.DisplayName = req.DisplayName
+	}
+	if req.Email != "" {
+		u.Email = req.Email
+	}
+	if req.Phone != "" {
+		u.Phone = req.Phone
+	}
+	if req.Roles != nil {
+		u.Roles = req.Roles
+	}
+	if req.Departments != nil {
+		u.Departments = req.Departments
+	}
+	if req.Status != "" {
+		u.Status = req.Status
+	}
 
 	if err := h.svc.Update(u); err != nil {
 		response.BadRequest(c, err.Error())
@@ -159,7 +185,10 @@ func (h *UserHandler) Update(c *gin.Context) {
 // Delete deletes a user.
 func (h *UserHandler) Delete(c *gin.Context) {
 	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
-	if err != nil { response.BadRequest(c, "invalid id"); return }
+	if err != nil {
+		response.BadRequest(c, "invalid id")
+		return
+	}
 
 	if err := h.svc.Delete(id); err != nil {
 		response.BadRequest(c, err.Error())
@@ -171,7 +200,10 @@ func (h *UserHandler) Delete(c *gin.Context) {
 // ResetPassword resets a user's password (admin only).
 func (h *UserHandler) ResetPassword(c *gin.Context) {
 	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
-	if err != nil { response.BadRequest(c, "invalid id"); return }
+	if err != nil {
+		response.BadRequest(c, "invalid id")
+		return
+	}
 
 	var req struct {
 		NewPassword string `json:"new_password" binding:"required"`

@@ -20,6 +20,14 @@ class MemoryStorage implements Storage {
 
 const storage = new MemoryStorage()
 
+function persistIdentity(roles = ['viewer']) {
+  storage.setItem('cmdb_token', 'token-123')
+  storage.setItem('cmdb_user_id', '42')
+  storage.setItem('cmdb_username', 'alice')
+  storage.setItem('cmdb_display_name', 'Alice Chen')
+  storage.setItem('cmdb_roles', JSON.stringify(roles))
+}
+
 beforeEach(() => {
   storage.clear()
   vi.stubGlobal('localStorage', storage)
@@ -28,6 +36,36 @@ beforeEach(() => {
 })
 
 describe('auth store', () => {
+  it.each(['cmdb_user_id', 'cmdb_display_name', 'cmdb_roles'])('requires login again when persisted %s is missing', (missing) => {
+    persistIdentity(['super_admin'])
+    storage.removeItem(missing)
+    storage.setItem('ui_theme', 'dark')
+    const store = useAuthStore()
+
+    expect(store.isLoggedIn).toBe(false)
+    expect(store.roles).toEqual([])
+    expect(storage.getItem('cmdb_token')).toBeNull()
+    expect(storage.getItem('cmdb_roles')).toBeNull()
+    expect(storage.getItem('ui_theme')).toBe('dark')
+  })
+
+  it.each(['not-json', '{}', '[1]', 'null'])('clears malformed persisted roles %s without throwing', (roles) => {
+    persistIdentity()
+    storage.setItem('cmdb_roles', roles)
+    expect(useAuthStore().isLoggedIn).toBe(false)
+    expect(storage.getItem('cmdb_token')).toBeNull()
+  })
+
+  it('rejects the old token and hardcoded administrator role format', () => {
+    storage.setItem('cmdb_token', 'legacy-token')
+    storage.setItem('cmdb_username', 'alice')
+    storage.setItem('cmdb_roles', '["super_admin"]')
+    const store = useAuthStore()
+    expect(store.isLoggedIn).toBe(false)
+    expect(store.isAdmin).toBe(false)
+    expect(storage.length).toBe(0)
+  })
+
   it('persists the authentic login identity and roles from the response', async () => {
     loginApi.mockResolvedValue({
       data: {
@@ -74,7 +112,7 @@ describe('auth store', () => {
   })
 
   it('lets super_admin satisfy every requested role', () => {
-    storage.setItem('cmdb_roles', JSON.stringify(['super_admin']))
+    persistIdentity(['super_admin'])
     const store = useAuthStore()
 
     expect(store.hasAnyRole('asset_mgr')).toBe(true)
@@ -82,7 +120,7 @@ describe('auth store', () => {
   })
 
   it('uses one role check for administrator menus and routes', () => {
-    storage.setItem('cmdb_roles', JSON.stringify(['cmdb_admin']))
+    persistIdentity(['cmdb_admin'])
     const admin = useAuthStore()
 
     expect(admin.canAccessRoles(['cmdb_admin'])).toBe(true)
