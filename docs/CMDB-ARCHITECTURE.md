@@ -13,9 +13,9 @@
 |                        CMDB 系统                                  |
 |  +-------------+  +-------------+  +---------------------------+ |
 |  |  资产管理    |  |  配置管理    |  |  自动发现                  | |
-|  |  CI 全生命   |  |  参数模板    |  |  Agent 采集               | |
-|  |  资产导入    |  |  版本控制    |  |  SSH/WMI Agentless        | |
-|  |  资产盘点    |  |  配置比对    |  |  K8s/Cloud API 同步       | |
+|  |  CI 全生命   |  |  参数模板    |  |  Agent 采集（占位）        | |
+|  |  资产导入    |  |  版本控制    |  |  SSH Agentless（已实现）   | |
+|  |  资产盘点    |  |  配置比对    |  |  K8s/Cloud API（占位）     | |
 |  +-----+-------+  +------+------+  +-------------+-------------+ |
 |        |                 |                       |               |
 |  +-----+-------+  +------+------+  +-------------+-------------+ |
@@ -40,7 +40,7 @@
 |------|---------|---------|
 | **资产管理** | CI 全生命周期管理：注册、变更、退役、盘点 | 批量导入/导出、资产标签、自定义属性、折旧计算 |
 | **配置管理** | 配置项参数的结构化管理与版本控制 | 配置模板、配置比对 Diff、合规检查、配置快照 |
-| **自动发现** | 多协议自动探测基础设施资源 | Agent/Agentless 双模、定时巡检、增量同步 |
+| **自动发现** | SSH（Agentless）主机探测与发现策略管理 | SSH 采集、定时策略、采集历史；Agent/K8s/Cloud 采集器仍为占位或待实现 |
 | **关系拓扑** | CI 间关系的建模、查询与可视化 | 拓扑图谱、影响分析、依赖追溯、关系校验 |
 | **变更管理** | 控制配置变更的申请、审批、执行与回滚 | 变更单、审批流、灰度窗口、回滚记录 |
 | **审计日志** | 全量操作审计与变更轨迹追踪 | 操作日志、数据快照、合规报告、异常告警 |
@@ -648,6 +648,8 @@ GET /api/v1/relations/impact?ci_id=2042
 +------------------------------------------------------------------+
 ```
 
+当前已实现 SSH（Agentless）采集及其策略调度、历史记录和数据落库流程。Agent 与 K8s API 采集器会明确返回“尚未实现”；Cloud 与 SNMP 目前仅有策略类型定义，未注册采集器。以下表格说明各采集方式的设计目标，不代表均已可用。
+
 ### 7.2 采集方式对比
 
 | 方式 | 适用场景 | 优点 | 缺点 |
@@ -667,7 +669,7 @@ CREATE TABLE discovery_strategy (
     name            VARCHAR(256)  NOT NULL COMMENT '策略名称',
     source_type     ENUM('agent','ssh','k8s_api','cloud_api','snmp') NOT NULL,
     target_config   JSON          NOT NULL COMMENT '目标配置(IP段/K8s集群/云账号)',
-    schedule_expr   VARCHAR(128)  COMMENT 'Cron表达式,如 0 */6 * * *',
+    schedule_expr   VARCHAR(128)  COMMENT '时间间隔，如 6h 或 30m',
     enabled         TINYINT(1)    DEFAULT 1,
     timeout_sec     INT           DEFAULT 300,
     retry_count     INT           DEFAULT 3,
@@ -702,12 +704,9 @@ type RelationHint struct {
     TargetExternalID string
 }
 
-// 注册示例
+// 当前可执行的注册项
 func init() {
-    registry.Register("k8s-api", &K8sCollector{})
-    registry.Register("aliyun-ecs", &AliyunECSCollector{})
-    registry.Register("vmware-vcenter", &VMwareCollector{})
-    registry.Register("ssh-server", &SSHServerCollector{})
+    registry.Register("ssh", &SSHCollector{})
 }
 ```
 
@@ -834,16 +833,17 @@ Phase 5 (当前)
 | 用户权限 | 超级管理员 + 资产管理员 + 只读用户三个角色 |
 | 前端 | Vue 3 管理界面：资产列表、详情、分类树、关系列表 |
 
-### 9.3 Phase 2 — 自动发现（已完成）
+### 9.3 Phase 2 — 自动发现（部分完成）
 
 **目标：** 让系统自动感知基础设施变化，减少人工录入。
 
 | 模块 | 范围 |
 |------|------|
-| Agent | 轻量 Go Agent：采集主机基础信息、Docker 容器、进程 |
-| K8s Collector | 对接 K8s API，同步 Node/Pod/Service/Deployment/ConfigMap 等 |
-| SSH Collector | 免 agent 采集 Linux/Windows 主机信息 |
-| 采集调度 | Cron 调度、采集历史记录、失败重试 |
+| SSH Collector | 已实现：免 agent 采集 Linux 主机信息 |
+| Agent | 占位：尚未实现采集或上报流程 |
+| K8s Collector | 占位：尚未接入 K8s API |
+| Cloud Collector | 待实现：尚未注册采集器 |
+| 采集调度 | 已实现：每分钟检查启用策略并按 `1h`、`30m` 等间隔执行；记录采集历史 |
 | Diff 引擎 | 采集数据与已有 CI 比对，自动更新 + 写快照 |
 | 配置快照 | 快照列表 + 两次快照 Diff 对比 |
 
@@ -899,7 +899,7 @@ Phase 5 (当前)
 | **UI 组件库** | Element Plus / Ant Design Vue | 企业级后台组件 |
 | **图表** | ECharts / D3.js | Dashboard 图表 + 拓扑图谱 |
 | **密码哈希** | golang.org/x/crypto/bcrypt | 防彩虹表攻击 |
-| **构建部署** | Docker + Docker Compose / K8s | 容器化部署 |
+| **构建部署** | Docker Compose | 当前编排 MySQL 和后端；前端容器与 K8s 部署尚未提供 |
 
 ### 10.2 项目目录结构（建议）
 

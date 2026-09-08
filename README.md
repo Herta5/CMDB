@@ -25,6 +25,8 @@ docker-compose logs -f backend
 
 访问 http://localhost:8080，首次启动自动创建默认账号 `admin / admin123`。
 
+当前 Compose 仅编排 MySQL 和后端服务（端口 8080）；前端仍按下方本地开发方式运行，未提供前端生产容器或 Kubernetes 部署配置。
+
 ### 3. 方式二：本地开发
 
 **后端:**
@@ -149,6 +151,8 @@ github-cmdb/
 | POST | `/api/v1/changes/:id/rollback` | 回滚变更 |
 
 ### 自动发现
+目前可执行的采集器为 SSH（Agentless）主机发现；Agent 和 Kubernetes API 采集器仅保留接口占位，Cloud 采集器尚未注册。
+
 | 方法 | 路径 | 说明 |
 |------|------|------|
 | GET  | `/api/v1/discovery/collectors` | 采集器类型列表 |
@@ -194,7 +198,7 @@ github-cmdb/
 ## MVP 路线图
 
 - **Phase 1 (已完成)**: 资产 CRUD、CI模型、RBAC、基础搜索
-- **Phase 2 (已完成)**: 自动发现(Agent/SSH/K8s/Cloud)、配置快照Diff、采集历史
+- **Phase 2 (部分完成)**: SSH（Agentless）自动发现、发现策略/采集历史、配置快照 Diff；Agent、K8s 和 Cloud 采集器仍待实现
 - **Phase 3 (已完成)**: 拓扑图谱可视化、变更管理(审批流)、Dashboard、批量导入导出
 - **Phase 4 (已完成)**: 系统集成(Prometheus/Ansible/Webhook)、审计日志、事件总线
 - **Phase 5 (进行中)**: 用户管理(DB-backed登录、用户CRUD、角色分配、密码策略)
