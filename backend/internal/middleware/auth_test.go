@@ -48,7 +48,6 @@ func TestHasAnyRole(t *testing.T) {
 
 func TestGenerateTokenPreservesConfiguredExpiry(t *testing.T) {
 	SetJWTSecret("test-secret")
-	issuedAfter := time.Now()
 
 	tokenString, err := GenerateToken(42, "alice", []string{"asset_admin"}, 3)
 	if err != nil {
@@ -68,17 +67,17 @@ func TestGenerateTokenPreservesConfiguredExpiry(t *testing.T) {
 	if claims.ExpiresAt == nil {
 		t.Fatal("token expiry is nil")
 	}
+	if claims.IssuedAt == nil {
+		t.Fatal("token issue time is nil")
+	}
 	if claims.UserID != 42 || claims.Username != "alice" {
 		t.Fatalf("token identity = (%d, %q), want (42, alice)", claims.UserID, claims.Username)
 	}
 	if len(claims.Roles) != 1 || claims.Roles[0] != "asset_admin" {
 		t.Fatalf("token roles = %v, want [asset_admin]", claims.Roles)
 	}
-	if got, lowerBound := claims.ExpiresAt.Time, issuedAfter.Add(3*time.Hour-time.Second); got.Before(lowerBound) {
-		t.Fatalf("token expiry = %v, want approximately three hours after issuance", got)
-	}
-	if got, upperBound := claims.ExpiresAt.Time, time.Now().Add(3*time.Hour+time.Second); got.After(upperBound) {
-		t.Fatalf("token expiry = %v, want approximately three hours after issuance", got)
+	if got := claims.ExpiresAt.Time.Sub(claims.IssuedAt.Time); got != 3*time.Hour {
+		t.Fatalf("token lifetime = %v, want %v", got, 3*time.Hour)
 	}
 }
 
