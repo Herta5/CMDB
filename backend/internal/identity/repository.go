@@ -12,6 +12,29 @@ type UserRepository interface {
 	Create(ctx context.Context, user *User) error
 	FindByID(ctx context.Context, id uint64) (*User, error)
 	FindByUsername(ctx context.Context, username string) (*User, error)
+	List(ctx context.Context) ([]User, error)
+	UpdateStatus(ctx context.Context, id uint64, status string) error
+}
+
+// List 按创建顺序返回用户，调用方必须在 HTTP 边界完成系统管理员授权。
+func (r *gormUserRepository) List(ctx context.Context) ([]User, error) {
+	var users []User
+	if err := r.db.WithContext(ctx).Order("id ASC").Find(&users).Error; err != nil {
+		return nil, err
+	}
+	return users, nil
+}
+
+// UpdateStatus 只修改用户启停状态，不允许借此变更角色或认证资料。
+func (r *gormUserRepository) UpdateStatus(ctx context.Context, id uint64, status string) error {
+	result := r.db.WithContext(ctx).Model(&User{}).Where("id = ?", id).Update("status", status)
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected == 0 {
+		return gorm.ErrRecordNotFound
+	}
+	return nil
 }
 
 // gormUserRepository 是 UserRepository 的 GORM 实现，只操作新版 users 表。

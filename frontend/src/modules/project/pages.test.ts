@@ -3,8 +3,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { createRenderer, nextTick, type Component } from 'vue'
 import { createPinia, setActivePinia } from 'pinia'
 import { createMemoryHistory, createRouter } from 'vue-router'
-const { get } = vi.hoisted(() => ({ get: vi.fn() }))
-vi.mock('@/utils/request', () => ({ default: { get } }))
+const { get, post, put, remove } = vi.hoisted(() => ({ get: vi.fn(), post: vi.fn(), put: vi.fn(), remove: vi.fn() }))
+vi.mock('@/utils/request', () => ({ default: { get, post, put, delete: remove } }))
 import { useAuthStore } from '@/modules/auth/store'
 import { useProjectStore } from './store'
 import ProjectListPage from './ProjectListPage.vue'
@@ -46,6 +46,9 @@ beforeEach(() => {
   setActivePinia(pinia)
   useAuthStore().acceptSession('测试会话', { id: 1, username: 'operator', displayName: '运维用户', globalRole: 'user' })
   get.mockReset().mockResolvedValue([fixture])
+  post.mockReset()
+  put.mockReset()
+  remove.mockReset()
 })
 
 /** 等待页面异步接口与 Vue 更新队列，不引入固定延时。 */
@@ -54,6 +57,10 @@ async function mount(component: Component, path = '/projects') {
   const router = createRouter({ history: createMemoryHistory(), routes: [
     { path: '/projects', component: ProjectListPage },
     { path: '/projects/:projectId', component: ProjectDetailPage },
+    // 控制台导航需要这些真实目标，页面测试不渲染平台内容但不能留下路由警告。
+    { path: '/aliyun', component: { render: () => null } },
+    { path: '/aws', component: { render: () => null } },
+    { path: '/kubernetes', component: { render: () => null } },
     { path: '/login', component: { render: () => null } },
   ] })
   await router.push(path)
@@ -180,6 +187,61 @@ describe('项目控制台页面', () => {
     expect(useProjectStore().projects).toEqual([])
     expect(useAuthStore().currentUser).toBeNull()
     expect(router.currentRoute.value.path).toBe('/login')
+    app.unmount()
+  })
+  it('系统管理员在空状态创建项目并直接进入可用列表', async () => {
+    useAuthStore().acceptSession('管理员会话', { id: 1, username: 'admin', globalRole: 'system_admin' })
+    get.mockResolvedValue([])
+    post.mockResolvedValue({ ...fixture, id: 5, code: 'cloud-platform' })
+    const { root, app } = await mount(ProjectListPage)
+    const create = all(root).find(n => n.type === 'button' && text(n).includes('创建项目'))!
+    expect(create).toBeTruthy()
+    await create.props.onClick()
+    await flush()
+    expect(text(root)).toContain('新建业务项目')
+    const input = (name: string) => all(root).find(n => n.props.name === name)!
+    input('code').props.onInput({ target: { value: 'cloud-platform' } })
+    input('name').props.onInput({ target: { value: '云平台' } })
+    input('description').props.onInput({ target: { value: '公有云资源归属' } })
+    await all(root).find(n => n.type === 'form' && text(n).includes('保存项目'))!.props.onSubmit({ preventDefault() {} })
+    await flush()
+    expect(post).toHaveBeenCalledWith('/projects', { code: 'cloud-platform', name: '云平台', description: '公有云资源归属', owner_user_id: null })
+    expect(text(root)).toContain('平台项目')
+    expect(text(root)).not.toContain('新建业务项目')
+    app.unmount()
+  })
+  it('普通用户没有项目创建、编辑或删除入口', async () => {
+    get.mockImplementation((url: string) => Promise.resolve(url === '/projects/2' ? fixture : [fixture]))
+    const list = await mount(ProjectListPage)
+    expect(text(list.root)).not.toContain('创建项目')
+    list.app.unmount()
+    const detail = await mount(ProjectDetailPage, '/projects/2')
+    expect(text(detail.root)).not.toContain('编辑项目')
+    expect(text(detail.root)).not.toContain('删除项目')
+    detail.app.unmount()
+  })
+  it('系统管理员更新项目资料后可确认删除并返回列表', async () => {
+    useAuthStore().acceptSession('管理员会话', { id: 1, username: 'admin', globalRole: 'system_admin' })
+    get.mockResolvedValue(fixture)
+    put.mockResolvedValue({ ...fixture, name: '平台核心', status: 'disabled' })
+    remove.mockResolvedValue(undefined)
+    const { root, app, router } = await mount(ProjectDetailPage, '/projects/2')
+    await all(root).find(n => n.type === 'button' && text(n).includes('编辑项目'))!.props.onClick()
+    await flush()
+    const name = all(root).find(n => n.props.name === 'name')!
+    name.props.onInput({ target: { value: '平台核心' } })
+    const status = all(root).find(n => n.props.name === 'status')!
+    status.props.onChange({ target: { value: 'disabled' } })
+    await all(root).find(n => n.type === 'form' && text(n).includes('保存项目'))!.props.onSubmit({ preventDefault() {} })
+    await flush()
+    expect(text(root)).toContain('平台核心')
+    await all(root).find(n => n.type === 'button' && text(n).includes('删除项目'))!.props.onClick()
+    await flush()
+    expect(text(root)).toContain('确认删除业务项目')
+    await all(root).find(n => n.type === 'button' && text(n).includes('确认删除'))!.props.onClick()
+    await flush()
+    expect(remove).toHaveBeenCalledWith('/projects/2')
+    expect(router.currentRoute.value.path).toBe('/projects')
     app.unmount()
   })
 })

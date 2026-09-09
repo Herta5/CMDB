@@ -1,8 +1,8 @@
 // 项目上下文测试保留真实 API 字段映射，只替换外部 HTTP 传输。
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { createPinia, setActivePinia } from 'pinia'
-const { get } = vi.hoisted(() => ({ get: vi.fn() }))
-vi.mock('@/utils/request', () => ({ default: { get } }))
+const { get, post, put, remove } = vi.hoisted(() => ({ get: vi.fn(), post: vi.fn(), put: vi.fn(), remove: vi.fn() }))
+vi.mock('@/utils/request', () => ({ default: { get, post, put, delete: remove } }))
 import { useAuthStore } from '@/modules/auth/store'
 import { useProjectStore } from './store'
 
@@ -19,6 +19,9 @@ beforeEach(() => {
   setActivePinia(createPinia())
   useAuthStore().acceptSession('测试会话', { id: 1, username: 'admin', globalRole: 'system_admin' })
   get.mockReset()
+  post.mockReset()
+  put.mockReset()
+  remove.mockReset()
 })
 
 describe('项目上下文', () => {
@@ -106,5 +109,59 @@ describe('项目上下文', () => {
     resolve(dto(2))
     await previous
     expect(store.detail?.id).toBe(3)
+  })
+  it('创建项目后加入列表、选中新项目并转换接口字段', async () => {
+    post.mockResolvedValue(dto(5))
+    const store = useProjectStore()
+    const project = await store.createProject({ code: 'platform-5', name: '平台项目', description: '基础平台', ownerUserId: 8 })
+    expect(post).toHaveBeenCalledWith('/projects', { code: 'platform-5', name: '平台项目', description: '基础平台', owner_user_id: 8 })
+    expect(project.id).toBe(5)
+    expect(store.projects).toEqual([project])
+    expect(store.currentProjectId).toBe(5)
+    expect(store.mutationState).toBe('success')
+  })
+  it('更新项目时同步列表和详情中的资料', async () => {
+    get.mockResolvedValueOnce(dto())
+    put.mockResolvedValue({ ...dto(), name: '平台核心', status: 'disabled' })
+    const store = useProjectStore()
+    await store.loadProject(2)
+    const project = await store.updateProject(2, { name: '平台核心', description: '基础平台', status: 'disabled', ownerUserId: null })
+    expect(put).toHaveBeenCalledWith('/projects/2', { name: '平台核心', description: '基础平台', status: 'disabled', owner_user_id: null })
+    expect(store.detail).toEqual(project)
+    expect(store.projects[0]).toBeUndefined()
+  })
+  it('删除当前项目后清理列表、详情和项目选择', async () => {
+    get.mockImplementation((url: string) => Promise.resolve(url === '/projects' ? [dto()] : dto()))
+    remove.mockResolvedValue(undefined)
+    const store = useProjectStore()
+    await store.loadProjects()
+    await store.loadProject(2)
+    await store.deleteProject(2)
+    expect(remove).toHaveBeenCalledWith('/projects/2')
+    expect(store.projects).toEqual([])
+    expect(store.currentProjectId).toBeNull()
+    expect(store.detail).toBeNull()
+    expect(store.listState).toBe('empty')
+  })
+  it('项目写入失败时保留现有数据并暴露稳定错误码', async () => {
+    post.mockRejectedValue({ response: { data: { code: 'PROJECT_DUPLICATE_CODE' } } })
+    const store = useProjectStore()
+    await expect(store.createProject({ code: 'platform', name: '平台项目', description: '', ownerUserId: null })).rejects.toBeTruthy()
+    expect(store.projects).toEqual([])
+    expect(store.mutationState).toBe('error')
+    expect(store.mutationError).toBe('PROJECT_DUPLICATE_CODE')
+  })
+  it('加载成员和候选用户后支持添加、改角色与移除', async () => {
+    get.mockImplementation((url: string) => Promise.resolve(url.endsWith('/members') ? [{ id: 1, user_id: 2, role: 'viewer', username: 'viewer', display_name: '查看者' }] : [{ id: 3, username: 'operator', display_name: '运维人员' }]))
+    post.mockResolvedValue({ id: 2, user_id: 3, role: 'member' })
+    put.mockResolvedValue({ id: 2, user_id: 3, role: 'project_admin' })
+    remove.mockResolvedValue(undefined)
+    const store = useProjectStore()
+    await store.loadMembers(2)
+    expect(store.members[0].username).toBe('viewer')
+    await store.addMember(2, 3, 'member')
+    await store.updateMemberRole(2, 3, 'project_admin')
+    await store.removeMember(2, 3)
+    expect(store.members.map(value => value.userId)).toEqual([2])
   })
 })

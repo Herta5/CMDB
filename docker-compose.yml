@@ -13,6 +13,7 @@ services:
       # 数据库使用独立持久卷，停止应用容器不会丢失业务数据。
       - cmdb-mysql-data:/var/lib/mysql
       - ./backend/migrations/001_schema.sql:/docker-entrypoint-initdb.d/001_schema.sql:ro
+      - ./backend/migrations/002_cloud_resources.sql:/docker-entrypoint-initdb.d/002_cloud_resources.sql:ro
     command:
       - --character-set-server=utf8mb4
       - --collation-server=utf8mb4_0900_ai_ci
@@ -40,7 +41,7 @@ services:
       JWT_SECRET: ${JWT_SECRET:?请设置 JWT_SECRET}
       CMDB_ENCRYPTION_KEY: ${CMDB_ENCRYPTION_KEY:?请设置 CMDB_ENCRYPTION_KEY}
     ports:
-      - "${CMDB_PORT:-8080}:80"
+      - "${CMDB_PORT:-80}:80"
     depends_on:
       mysql:
         condition: service_healthy

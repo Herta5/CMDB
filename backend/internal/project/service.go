@@ -163,6 +163,14 @@ func (s *Service) ListMembers(ctx context.Context, projectID uint64) ([]MemberRo
 	return s.repository.ListMembers(ctx, projectID)
 }
 
+// ListMemberCandidates 返回项目成员管理可选择的启用用户，调用方必须先验证项目管理权限。
+func (s *Service) ListMemberCandidates(ctx context.Context) ([]identity.User, error) {
+	if s.repository == nil {
+		return nil, ErrProjectRepositoryUnavailable
+	}
+	return s.repository.ListMemberCandidates(ctx)
+}
+
 // AddMember 为已有用户建立项目内唯一角色，角色集合受统一校验以避免写入未定义权限。
 func (s *Service) AddMember(ctx context.Context, projectID, userID uint64, role string) (*MemberRole, error) {
 	if s.repository == nil {

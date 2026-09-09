@@ -2,12 +2,19 @@
 package main
 
 import (
+	"context"
 	"log"
 	"os"
+	"os/signal"
+	"syscall"
 
+	aliyuncollector "cmdb/internal/aliyun"
+	awscollector "cmdb/internal/aws"
+	kubernetescollector "cmdb/internal/kubernetes"
 	"cmdb/internal/platform/config"
 	"cmdb/internal/platform/database"
 	"cmdb/internal/platform/httpserver"
+	cloudresource "cmdb/internal/resource"
 	"cmdb/internal/web"
 	"github.com/gin-gonic/gin"
 )
@@ -26,10 +33,23 @@ func main() {
 	if err != nil {
 		log.Fatalf("连接数据库失败：%v", err)
 	}
+	collectors := map[string]cloudresource.Collector{
+		cloudresource.ProviderAliyun:     aliyuncollector.NewCollector(),
+		cloudresource.ProviderAWS:        awscollector.NewCollector(),
+		cloudresource.ProviderKubernetes: kubernetescollector.NewCollector(),
+	}
+	resourceService := cloudresource.NewService(cloudresource.NewRepository(db), cloudresource.NewCredentialCipher(configuration.EncryptionKey))
+	// 调度器和 HTTP 必须共享同一服务实例，才能统一执行同源互斥与生命周期规则。
+	schedulerContext, stopScheduler := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stopScheduler()
+	resourceService.StartScheduler(schedulerContext, collectors)
 
 	server, err := buildServer(httpserver.Dependencies{
-		Database:  db,
-		JWTSecret: configuration.JWTSecret,
+		Database:        db,
+		JWTSecret:       configuration.JWTSecret,
+		EncryptionKey:   configuration.EncryptionKey,
+		Collectors:      collectors,
+		ResourceService: resourceService,
 	}, os.Getenv("STATIC_DIR"))
 	if err != nil {
 		log.Fatalf("装配 HTTP 服务失败：%v", err)

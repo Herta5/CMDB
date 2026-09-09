@@ -6,15 +6,19 @@ import (
 
 	"cmdb/internal/identity"
 	"cmdb/internal/project"
+	cloudresource "cmdb/internal/resource"
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
 )
 
 // Dependencies 声明 HTTP 服务依赖，后续领域路由通过该边界接入共享基础设施。
 type Dependencies struct {
-	Database       *gorm.DB
-	UserRepository identity.UserRepository
-	JWTSecret      string
+	Database        *gorm.DB
+	UserRepository  identity.UserRepository
+	JWTSecret       string
+	EncryptionKey   string
+	Collectors      map[string]cloudresource.Collector
+	ResourceService *cloudresource.Service
 }
 
 // New 创建启用恢复中间件的 Gin 引擎并装配公共身份路由。
@@ -39,10 +43,19 @@ func New(dependencies Dependencies) *gin.Engine {
 	authenticator := NewAuthenticator(identityService, dependencies.JWTSecret)
 	handler := identity.NewHTTPHandler(identityService)
 	projectHandler := project.NewHTTPHandler(project.NewService(projectRepository))
+	resourceService := dependencies.ResourceService
+	if resourceService == nil {
+		resourceService = cloudresource.NewService(cloudresource.NewRepository(dependencies.Database), cloudresource.NewCredentialCipher(dependencies.EncryptionKey))
+	}
+	resourceHandler := cloudresource.NewHTTPHandler(resourceService, dependencies.Collectors)
 	engine.POST("/api/v1/auth/login", handler.Login)
 	engine.GET("/api/v1/me", authenticator.RequireUser(), func(c *gin.Context) {
 		handler.Me(c, CurrentUser(c))
 	})
+	users := engine.Group("/api/v1/users", authenticator.RequireUser())
+	users.GET("", func(c *gin.Context) { handler.ListUsers(c, CurrentUser(c)) })
+	users.POST("", func(c *gin.Context) { handler.CreateUser(c, CurrentUser(c)) })
+	users.PUT("/:id/status", func(c *gin.Context) { handler.UpdateUserStatus(c, CurrentUser(c)) })
 	projects := engine.Group("/api/v1/projects")
 	projects.Use(authenticator.RequireUser())
 	projects.GET("", func(c *gin.Context) {
@@ -64,5 +77,14 @@ func New(dependencies Dependencies) *gin.Engine {
 	members.POST("", project.RequireRole(projectRepository, project.MemberRoleProjectAdmin), projectHandler.AddMember)
 	members.PUT("/:user_id", project.RequireRole(projectRepository, project.MemberRoleProjectAdmin), projectHandler.UpdateMemberRole)
 	members.DELETE("/:user_id", project.RequireRole(projectRepository, project.MemberRoleProjectAdmin), projectHandler.RemoveMember)
+	projects.GET("/:id/member-candidates", project.RequireRole(projectRepository, project.MemberRoleProjectAdmin), projectHandler.ListMemberCandidates)
+	sources := projects.Group("/:id/sources", project.RequireRole(projectRepository, projectReadRoles...))
+	sources.GET("", resourceHandler.ListSources)
+	sources.POST("", project.RequireRole(projectRepository, project.MemberRoleProjectAdmin), resourceHandler.CreateSource)
+	sources.PUT("/:sourceId", project.RequireRole(projectRepository, project.MemberRoleProjectAdmin), resourceHandler.UpdateSource)
+	sources.DELETE("/:sourceId", project.RequireRole(projectRepository, project.MemberRoleProjectAdmin), resourceHandler.DeleteSource)
+	sources.POST("/:sourceId/sync", project.RequireRole(projectRepository, project.MemberRoleProjectAdmin), resourceHandler.SyncSource)
+	projects.GET("/:id/resources", project.RequireRole(projectRepository, projectReadRoles...), resourceHandler.ListResources)
+	projects.GET("/:id/sync-jobs", project.RequireRole(projectRepository, projectReadRoles...), resourceHandler.ListJobs)
 	return engine
 }

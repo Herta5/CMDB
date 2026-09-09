@@ -315,3 +315,17 @@ func (r inMemoryUserRepository) FindByUsername(_ context.Context, username strin
 	}
 	return nil, gorm.ErrRecordNotFound
 }
+
+// List 不属于认证接口测试范围，返回夹具副本以满足完整仓储契约。
+func (r inMemoryUserRepository) List(context.Context) ([]identity.User, error) {
+	users := make([]identity.User, 0, len(r.users))
+	for _, user := range r.users {
+		users = append(users, *user)
+	}
+	return users, nil
+}
+
+// UpdateStatus 不属于认证接口测试范围，返回明确的未实现错误。
+func (inMemoryUserRepository) UpdateStatus(context.Context, uint64, string) error {
+	return gorm.ErrInvalidDB
+}

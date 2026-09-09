@@ -1,7 +1,7 @@
 /* 统一控制台排版、交互反馈与桌面和平板布局，不覆盖登录页的领域样式。 */
 .cmdb-console { display: flex; min-height: 100vh; color: var(--cmdb-text); background: var(--cmdb-bg); font-size: 14px; line-height: 1.6; }
 .cmdb-console a { color: var(--cmdb-accent); text-decoration: none; }
-.cmdb-console button, .cmdb-console select { font: inherit; }
+.cmdb-console button, .cmdb-console select, .cmdb-console input, .cmdb-console textarea { font: inherit; }
 .cmdb-console button, .cmdb-console select, .cmdb-console summary { cursor: pointer; }
 .cmdb-console :focus-visible { outline: 2px solid var(--cmdb-accent); outline-offset: 3px; }
 .cmdb-console button:disabled, .cmdb-console select:disabled { cursor: not-allowed; }
@@ -42,6 +42,11 @@
 .console-button { display: inline-flex; justify-content: center; align-items: center; padding: 7px 15px; min-height: 36px; border: 1px solid var(--cmdb-border); border-radius: 6px; background: var(--cmdb-surface); color: var(--cmdb-text) !important; white-space: nowrap; }
 .console-button:hover:enabled, a.console-button:hover { border-color: #aebdd5; background: #f9fbff; }
 .console-button:disabled { opacity: .55; }
+.console-button.is-primary { color: white !important; background: var(--cmdb-accent); border-color: var(--cmdb-accent); }
+.console-button.is-primary:hover:enabled { background: #315ca9; border-color: #315ca9; }
+.console-button.is-danger { color: #b44444 !important; border-color: #e3c4c4; }
+.console-button.is-danger-solid { color: white !important; background: #b94b4b; border-color: #b94b4b; }
+.heading-actions { display: flex; align-items: center; justify-content: flex-end; gap: 10px; flex-wrap: wrap; }
 .project-summary { display: grid; grid-template-columns: 1fr 1fr 1.5fr; margin-bottom: 22px; border: 1px solid var(--cmdb-border); background: var(--cmdb-surface); border-radius: var(--cmdb-radius); }
 .project-summary > div { padding: 20px 24px; min-width: 0; }
 .project-summary > div + div { border-left: 1px solid var(--cmdb-border); }
@@ -62,6 +67,7 @@
 .project-code { display: block; margin-top: 3px; color: var(--cmdb-muted); font-family: ui-monospace, monospace; font-size: 11px; }
 .project-description { max-width: 420px; overflow-wrap: anywhere; color: var(--cmdb-muted); }
 .table-action { white-space: nowrap; }
+.button-link { padding: 0; border: 0; background: transparent; color: var(--cmdb-accent); }
 .status-badge { display: inline-flex; align-items: center; gap: 7px; padding: 2px 8px; color: var(--cmdb-success); background: #eef6f2; border-radius: 4px; font-size: 11px; white-space: nowrap; }
 .status-dot { display: inline-block; width: 5px; height: 5px; border-radius: 50%; background: var(--cmdb-success); flex-shrink: 0; }
 .status-badge.is-disabled { color: var(--cmdb-muted); background: #f0f2f5; }.is-disabled .status-dot { background: #8792a4; }
@@ -73,9 +79,41 @@
 .project-facts { display: grid; grid-template-columns: 1fr 1fr; gap: 28px 48px; margin: 0; padding: 28px; }
 .project-facts dt { color: var(--cmdb-muted); font-size: 12px; margin-bottom: 7px; }.project-facts dd { margin: 0; overflow-wrap: anywhere; }.fact-wide { grid-column: 1 / -1; }
 .monospace { font-family: ui-monospace, monospace; }.page-footnote { font-size: 12px; color: var(--cmdb-muted); margin: 18px 2px; }
+.dialog-backdrop { position: fixed; inset: 0; z-index: 50; display: grid; place-items: center; padding: 24px; background: #17203352; }
+.console-dialog { width: min(620px, 100%); max-height: calc(100vh - 48px); overflow-y: auto; border: 1px solid var(--cmdb-border); border-radius: 10px; background: var(--cmdb-surface); box-shadow: 0 24px 70px #1720332e; }
+.console-dialog.is-compact { width: min(460px, 100%); }
+.dialog-heading { display: flex; justify-content: space-between; align-items: flex-start; gap: 24px; padding: 22px 24px; border-bottom: 1px solid var(--cmdb-border); }
+.dialog-heading h2 { margin: 0; font-size: 19px; }
+.dialog-heading .page-eyebrow { margin-bottom: 5px; }
+.dialog-close { border: 0; background: transparent; color: var(--cmdb-muted); font-size: 25px; line-height: 1; }
+.project-form { display: grid; grid-template-columns: 1fr 1fr; gap: 18px 20px; padding: 24px; }
+.project-form label { display: flex; flex-direction: column; gap: 7px; color: var(--cmdb-text); font-size: 12px; }
+.project-form input, .project-form textarea, .project-form select { width: 100%; box-sizing: border-box; border: 1px solid var(--cmdb-border); border-radius: 6px; padding: 9px 11px; background: white; color: var(--cmdb-text); }
+.project-form textarea { resize: vertical; min-height: 82px; }
+.project-form input:disabled { background: #f5f6f8; color: var(--cmdb-muted); }
+.project-form small { color: var(--cmdb-muted); }
+.form-wide { grid-column: 1 / -1; }
+.form-error { grid-column: 1 / -1; margin: 0; color: #a93838; font-size: 12px; }
+.dialog-actions { display: flex; justify-content: flex-end; gap: 10px; padding-top: 4px; }
+.delete-confirmation { padding: 22px 24px 8px; color: var(--cmdb-muted); }
+.delete-confirmation + .dialog-actions { padding: 12px 24px 24px; }
+.member-panel { margin-top: 22px; }
+.member-toolbar { display: flex; gap: 10px; padding: 16px 22px; border-bottom: 1px solid var(--cmdb-border); }
+.member-toolbar select, .member-panel td select { border: 1px solid var(--cmdb-border); border-radius: 6px; padding: 7px 10px; background: white; }
+.member-toolbar select:first-child { min-width: 240px; }
+.member-feedback { padding: 12px 22px 0; }
 .console-footer { padding: 12px 32px 20px; color: #788499; font-size: 11px; }
 .sr-only, .skip-link:not(:focus) { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }.skip-link:focus { position: fixed; top: 8px; left: 8px; z-index: 30; background: white; padding: 12px; }
 /* 平板保留导航文字和键盘入口，宽表格只在自身容器内滚动。 */
 @media (max-width: 1024px) { :root { --cmdb-sidebar-width: 184px; }.console-content { padding: 24px 20px; }.console-topbar { padding: 14px 20px; gap: 16px; }.project-switcher { gap: 8px; }.project-switcher select { width: 190px; }.project-summary > div { padding: 18px; }.console-brand { padding: 20px 16px; }.nav-soon { font-size: 9px; }.nav-item { padding: 10px 8px; gap: 7px; } }
-@media (max-width: 780px) { .project-switcher label { display: none; }.project-switcher select { width: 175px; }.console-topbar { gap: 12px; }.page-heading { align-items: flex-start; gap: 12px; }.page-heading h1 { font-size: 23px; }.project-summary { grid-template-columns: 1fr 1fr; }.project-summary > div:last-child { grid-column: 1 / -1; border-left: 0; border-top: 1px solid var(--cmdb-border); }.project-facts { grid-template-columns: 1fr; gap: 22px; }.console-content { padding: 22px 16px; } }
+@media (max-width: 780px) { .project-switcher label { display: none; }.project-switcher select { width: 175px; }.console-topbar { gap: 12px; }.page-heading { align-items: flex-start; gap: 12px; }.page-heading h1 { font-size: 23px; }.project-summary { grid-template-columns: 1fr 1fr; }.project-summary > div:last-child { grid-column: 1 / -1; border-left: 0; border-top: 1px solid var(--cmdb-border); }.project-facts, .project-form { grid-template-columns: 1fr; gap: 22px; }.form-wide { grid-column: 1; }.console-content { padding: 22px 16px; }.heading-actions { justify-content: flex-start; } }
 @media (prefers-reduced-motion: reduce) { .loading-spinner { animation: none; } }
+
+/* 云平台页面使用紧凑卡片与高密度表格，品牌色仅作为模块识别点。 */
+.cloud-metrics { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); margin-bottom: 20px; border: 1px solid var(--cmdb-border); border-radius: var(--cmdb-radius); background: var(--cmdb-surface); }
+.cloud-metrics > div { padding: 18px 22px; }.cloud-metrics > div + div { border-left: 1px solid var(--cmdb-border); }.cloud-metrics span { display: block; color: var(--cmdb-muted); font-size: 12px; }.cloud-metrics strong { display: block; margin-top: 4px; font-size: 24px; }
+.cloud-section { margin-bottom: 20px; }.page-state.compact { min-height: 130px; padding: 32px 20px; }.source-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 12px; padding: 16px; background: #fafbfc; }
+.source-card { position: relative; min-width: 0; padding: 17px; border: 1px solid var(--cmdb-border); border-radius: 8px; background: white; }.source-card > div { display: flex; align-items: center; gap: 9px; }.source-card p, .source-card small { display: block; color: var(--cmdb-muted); margin: 8px 0; font-size: 12px; }.source-card .console-button { position: absolute; right: 14px; bottom: 14px; }
+.resource-toolbar > div { display: flex; gap: 8px; }.resource-toolbar select { min-width: 130px; padding: 7px 10px; border: 1px solid var(--cmdb-border); border-radius: 6px; background: white; }.cloud-table { min-width: 940px; }.cloud-table td:first-child strong, .cloud-table td:first-child small { display: block; }.cloud-table td:first-child small { color: var(--cmdb-muted); font-family: ui-monospace, monospace; }
+.endpoint { margin: 3px 0; font-family: ui-monospace, monospace; font-size: 11px; overflow-wrap: anywhere; }.endpoint > span { display: inline-block; width: 58px; color: var(--cmdb-muted); font-family: inherit; }.endpoint small { display: block; padding-left: 58px; color: var(--cmdb-muted); }.status-badge.is-lost { color: #a45f2b; background: #fff3e8; }.cloud-alert { padding: 10px 14px; border: 1px solid #e8c7aa; border-radius: 6px; color: #8c4d22; background: #fff8f1; }.checkbox-field { flex-direction: row !important; align-items: center; }.checkbox-field input { width: auto !important; }
+@media (max-width: 780px) { .cloud-metrics { grid-template-columns: 1fr; }.cloud-metrics > div + div { border-left: 0; border-top: 1px solid var(--cmdb-border); }.resource-toolbar { align-items: flex-start; }.resource-toolbar > div { flex-wrap: wrap; } }

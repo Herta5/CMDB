@@ -5,6 +5,7 @@ import (
 	"context"
 	"time"
 
+	"cmdb/internal/identity"
 	"gorm.io/gorm"
 )
 
@@ -19,6 +20,7 @@ type Repository interface {
 	ListForUser(ctx context.Context, userID uint64) ([]Project, error)
 	FindMemberRole(ctx context.Context, projectID, userID uint64) (*MemberRole, error)
 	ListMembers(ctx context.Context, projectID uint64) ([]MemberRole, error)
+	ListMemberCandidates(ctx context.Context) ([]identity.User, error)
 	CreateMember(ctx context.Context, member *MemberRole) error
 	UpdateMemberRole(ctx context.Context, projectID, userID uint64, role string) error
 	DeleteMember(ctx context.Context, projectID, userID uint64) error
@@ -116,10 +118,19 @@ func (r *gormRepository) FindMemberRole(ctx context.Context, projectID, userID u
 // ListMembers 返回项目内全部成员关系，仅应由已完成项目权限校验的处理器调用。
 func (r *gormRepository) ListMembers(ctx context.Context, projectID uint64) ([]MemberRole, error) {
 	var members []MemberRole
-	if err := r.db.WithContext(ctx).Where("project_id = ?", projectID).Order("user_id ASC").Find(&members).Error; err != nil {
+	if err := r.db.WithContext(ctx).Preload("User").Where("project_id = ?", projectID).Order("user_id ASC").Find(&members).Error; err != nil {
 		return nil, err
 	}
 	return members, nil
+}
+
+// ListMemberCandidates 返回可加入项目的启用用户，接口层只输出必要的公开身份字段。
+func (r *gormRepository) ListMemberCandidates(ctx context.Context) ([]identity.User, error) {
+	var users []identity.User
+	if err := r.db.WithContext(ctx).Where("status = ?", "active").Order("username ASC").Find(&users).Error; err != nil {
+		return nil, err
+	}
+	return users, nil
 }
 
 // CreateMember 写入项目成员关系，联合唯一索引负责并发情况下的一人一角色约束。

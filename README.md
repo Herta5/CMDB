@@ -2,7 +2,7 @@
 
 CMDB 是面向公有云和 Kubernetes 的云资源配置管理平台，业务项目是最高级的数据归属和权限隔离边界。
 
-当前提供用户名密码登录、当前身份查询、业务项目管理、项目成员与角色授权，以及带项目切换的控制台项目列表和详情页。项目创建、修改、删除及成员管理通过 API 操作，页面提供查询与项目切换。阿里云、AWS 和 Kubernetes 采集及资源管理尚未交付；三者将在同一个 CMDB 服务内按独立模块接入共享资源核心。
+当前提供用户名密码登录、用户与业务项目管理、项目成员授权，以及阿里云、AWS、Kubernetes 三个独立资源模块。平台模块共享接入源、凭证加密、同步任务、资源地址、失联恢复、三天清理和审计能力；默认每 60 分钟自动同步，并支持项目管理员手工触发。
 
 ## 技术栈
 
@@ -10,7 +10,7 @@ CMDB 是面向公有云和 Kubernetes 的云资源配置管理平台，业务项
 
 ## 从空库部署
 
-需要 Docker Engine、Docker Compose、Bash 和 OpenSSL。部署使用独立的 `cmdb-mysql-data` 数据卷，并通过 `backend/migrations/001_schema.sql` 建表，不创建默认账号或业务项目。
+需要 Docker Engine、Docker Compose、Bash 和 OpenSSL。部署使用独立的 `cmdb-mysql-data` 数据卷，并按顺序执行 `backend/migrations/001_schema.sql` 和 `backend/migrations/002_cloud_resources.sql`，不创建默认账号、业务项目或云接入源。
 
 先在当前终端设置部署环境，数据库密码由操作者提供，两个应用密钥独立随机生成。以下命令不会回显输入或生成值：
 
@@ -37,9 +37,9 @@ printf '%s' "$CMDB_INITIAL_PASSWORD" | docker compose exec -T app ./cmdb-init-ad
 unset CMDB_INITIAL_PASSWORD
 ```
 
-初始化命令只保存 bcrypt 哈希；只要 `users` 表已有任何用户就会拒绝再次执行，不修改或覆盖已有身份。此命令不提供用户管理或密码重置功能。当前尚无用户创建页面或 API，额外用户需由受控运维流程向 `users` 表配置有效 bcrypt 哈希及身份资料，随后管理员可通过成员 API 授权。
+初始化命令只保存 bcrypt 哈希；只要 `users` 表已有任何用户就会拒绝再次执行，不修改或覆盖已有身份。系统管理员登录后可在用户管理页面创建和启停普通用户，再在项目详情中分配项目角色；密码只以 bcrypt 哈希保存且不会通过接口回显。
 
-打开 [CMDB 控制台](http://localhost:8080)，用刚创建的身份登录。空库首次登录显示空项目状态；系统管理员通过项目 API 创建项目后即可在页面查看。端口可通过 `CMDB_PORT` 覆盖。健康检查地址为 `/health`，仅报告 HTTP 进程存活，不代表数据库或下游服务就绪。
+打开 [CMDB 控制台](http://localhost)，用刚创建的身份登录。空库首次登录显示空项目状态；系统管理员通过项目 API 创建项目后即可在页面查看。默认使用 HTTP 端口 `80`，可通过 `CMDB_PORT` 覆盖。健康检查地址为 `/health`，仅报告 HTTP 进程存活，不代表数据库或下游服务就绪。
 
 数据库初始化 SQL 只在数据卷首次启动时执行；已有空卷或外部数据库需由运维显式执行同一迁移文件。服务不会自动迁移或覆盖现有表。停止服务使用 `docker compose down`，不要附加 `-v`，以保留数据。
 
@@ -51,6 +51,9 @@ unset CMDB_INITIAL_PASSWORD
 | --- | --- | --- |
 | POST | `/api/v1/auth/login` | 用户名密码登录 |
 | GET | `/api/v1/me` | 当前登录身份 |
+| GET | `/api/v1/users` | 系统管理员查看用户列表 |
+| POST | `/api/v1/users` | 系统管理员创建普通用户 |
+| PUT | `/api/v1/users/:id/status` | 系统管理员启用或停用用户 |
 | GET | `/api/v1/projects` | 系统管理员查看全部；普通用户仅查看所属项目 |
 | POST | `/api/v1/projects` | 系统管理员创建项目，必填 `code`、`name` |
 | GET | `/api/v1/projects/:id` | 系统管理员或该项目成员查看详情 |
@@ -60,10 +63,16 @@ unset CMDB_INITIAL_PASSWORD
 | POST | `/api/v1/projects/:id/members` | 系统管理员或项目管理员添加成员，提供 `user_id`、`role` |
 | PUT | `/api/v1/projects/:id/members/:user_id` | 系统管理员或项目管理员修改 `role` |
 | DELETE | `/api/v1/projects/:id/members/:user_id` | 系统管理员或项目管理员移除成员 |
+| GET | `/api/v1/projects/:id/member-candidates` | 系统管理员或项目管理员查询可添加用户的最小公开资料 |
+| GET / POST | `/api/v1/projects/:id/sources` | 项目成员查询；系统或项目管理员创建接入源 |
+| PUT / DELETE | `/api/v1/projects/:id/sources/:sourceId` | 系统或项目管理员更新、启停或删除接入源 |
+| POST | `/api/v1/projects/:id/sources/:sourceId/sync` | 系统或项目管理员手工同步，同源并发返回 409 |
+| GET | `/api/v1/projects/:id/resources` | 项目成员按平台、类型、生命周期分页查询资源 |
+| GET | `/api/v1/projects/:id/sync-jobs` | 项目成员查询脱敏同步历史与类型级统计 |
 
 全局角色为 `system_admin`、`user`；项目角色为 `project_admin`、`member`、`viewer`。系统管理员是显式全局权限例外；普通用户必须具有对应项目成员关系，前端切换项目不授予权限。未授权项目与不存在项目返回相同错误以隐藏目标存在性，移除成员后原会话的项目权限立即失效。
 
-审计表已建立，但完整审计写入、云凭证加密、接入源、同步任务及资源生命周期属于后续阶段，当前不宣称这些能力可用。`CMDB_ENCRYPTION_KEY` 已作为必需部署配置预留。
+接入凭证由 `CMDB_ENCRYPTION_KEY` 派生的 AES-256-GCM 密钥加密，接口、同步任务和审计均不返回凭证明文或完整密文。资源首次从成功采集结果中缺失时标记“已失联”，重新出现时恢复原记录，连续失联满 72 小时后物理删除；认证失败和类型级采集失败不会触发错误失联。
 
 ## 本地开发与验证
 
@@ -96,4 +105,4 @@ corepack pnpm exec vue-tsc --noEmit
 corepack pnpm build
 ```
 
-后端入口为 `backend/cmd/server`，一次性初始化入口为 `backend/cmd/init-admin`，基础设施、身份和项目域分别位于 `backend/internal/platform`、`identity`、`project`。前端位于 `frontend/src/modules/auth`、`modules/project` 和 `layouts`。
+后端入口为 `backend/cmd/server`，一次性初始化入口为 `backend/cmd/init-admin`；共享资源核心位于 `backend/internal/resource`，平台采集器分别位于 `backend/internal/aliyun`、`aws`、`kubernetes`。前端共享资源模块位于 `frontend/src/modules/resource`。

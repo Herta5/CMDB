@@ -35,7 +35,8 @@ watch(() => [route.params.projectId, projects.listState, projects.detailState], 
 /** 切换后进入对应项目详情，使页面地址和资源归属上下文保持一致。 */
 async function switchProject(event: Event) {
   const id = Number((event.target as HTMLSelectElement).value)
-  if (projects.selectProject(id)) await router.push(`/projects/${id}`)
+  // 平台页面切换项目时保持当前模块，项目资料页面才进入新项目详情。
+  if (projects.selectProject(id) && !['/aliyun', '/aws', '/kubernetes'].includes(route.path)) await router.push(`/projects/${id}`)
 }
 
 /** 退出统一清理认证状态，项目状态通过会话监听同步失效。 */
@@ -58,11 +59,11 @@ async function logout() {
         <router-link to="/projects" class="nav-item" :class="{ 'is-active': route.path === '/' || route.path.startsWith('/projects') }">
           <span class="nav-symbol" aria-hidden="true">▦</span>业务项目
         </router-link>
+        <router-link v-if="auth.currentUser?.globalRole === 'system_admin'" to="/users" class="nav-item" :class="{ 'is-active': route.path === '/users' }"><span class="nav-symbol" aria-hidden="true">♙</span>用户管理</router-link>
         <p class="nav-group-label">云平台</p>
-        <!-- 平台保留清晰的一级模块位置，交付采集与资源能力前不提供不可用的页面路由。 -->
-        <button class="nav-item platform-nav" disabled><span class="platform-dot aliyun" aria-hidden="true" />阿里云<span class="nav-soon">待开放</span></button>
-        <button class="nav-item platform-nav" disabled><span class="platform-dot aws" aria-hidden="true" />AWS<span class="nav-soon">待开放</span></button>
-        <button class="nav-item platform-nav" disabled><span class="platform-dot kubernetes" aria-hidden="true" />Kubernetes<span class="nav-soon">待开放</span></button>
+        <router-link to="/aliyun" class="nav-item platform-nav" :class="{ 'is-active': route.path === '/aliyun' }"><span class="platform-dot aliyun" aria-hidden="true" />阿里云</router-link>
+        <router-link to="/aws" class="nav-item platform-nav" :class="{ 'is-active': route.path === '/aws' }"><span class="platform-dot aws" aria-hidden="true" />AWS</router-link>
+        <router-link to="/kubernetes" class="nav-item platform-nav" :class="{ 'is-active': route.path === '/kubernetes' }"><span class="platform-dot kubernetes" aria-hidden="true" />Kubernetes</router-link>
       </nav>
       <div class="sidebar-footer"><span class="status-dot" />项目隔离 · 统一管理</div>
     </aside>
@@ -84,7 +85,7 @@ async function logout() {
           </div>
         </details>
       </header>
-      <!-- 资源核心尚未交付，全局搜索入口保持隐藏。 -->
+      <!-- 各平台页面共享顶部项目上下文，资源接口始终以该项目作为最高边界。 -->
       <main id="console-content" class="console-content" tabindex="-1"><router-view /></main>
       <footer class="console-footer">CMDB · 公有云与 Kubernetes 资源配置管理</footer>
     </div>

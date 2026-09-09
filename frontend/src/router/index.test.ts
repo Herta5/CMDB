@@ -38,6 +38,13 @@ describe('认证路由守卫', () => {
     expect(router.resolve('/projects/2').matched[0].name).toBe('Console')
   })
 
+  it('三个云平台作为控制台内独立一级模块', () => {
+    expect(router.resolve('/aliyun').name).toBe('AliyunResources')
+    expect(router.resolve('/aws').name).toBe('AWSResources')
+    expect(router.resolve('/kubernetes').name).toBe('KubernetesResources')
+    expect(router.resolve('/aws').matched[0].name).toBe('Console')
+  })
+
   it('未登录访问项目详情时保留完整项目目标供登录后恢复', async () => {
     await router.push('/projects/2')
     expect(router.currentRoute.value.path).toBe('/login')

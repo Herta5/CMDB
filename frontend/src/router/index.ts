@@ -14,6 +14,10 @@ const routes: RouteRecordRaw[] = [
       { path: '', name: 'AuthenticatedHome', component: () => import('@/modules/project/ProjectListPage.vue'), meta: { title: '业务项目' } },
       { path: 'projects', name: 'ProjectList', component: () => import('@/modules/project/ProjectListPage.vue'), meta: { title: '业务项目' } },
       { path: 'projects/:projectId', name: 'ProjectDetail', component: () => import('@/modules/project/ProjectDetailPage.vue'), meta: { title: '项目详情' } },
+      { path: 'users', name: 'UserManagement', component: () => import('@/modules/user/UserManagementPage.vue'), meta: { title: '用户管理' } },
+      { path: 'aliyun', name: 'AliyunResources', component: () => import('@/modules/resource/CloudPlatformPage.vue'), props: { provider: 'aliyun' }, meta: { title: '阿里云资源' } },
+      { path: 'aws', name: 'AWSResources', component: () => import('@/modules/resource/CloudPlatformPage.vue'), props: { provider: 'aws' }, meta: { title: 'AWS 资源' } },
+      { path: 'kubernetes', name: 'KubernetesResources', component: () => import('@/modules/resource/CloudPlatformPage.vue'), props: { provider: 'kubernetes' }, meta: { title: 'Kubernetes 资源' } },
     ],
   },
   {

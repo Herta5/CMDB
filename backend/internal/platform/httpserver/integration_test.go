@@ -3,17 +3,20 @@ package httpserver_test
 
 import (
 	"bytes"
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
+	"strings"
 	"testing"
 
 	"cmdb/internal/identity"
 	"cmdb/internal/platform/httpserver"
 	"cmdb/internal/project"
+	cloudresource "cmdb/internal/resource"
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
@@ -77,6 +80,101 @@ func TestHealthEndpoint(t *testing.T) {
 	if response.Body.String() != `{"status":"ok"}` {
 		t.Fatal("健康响应不得包含内部配置或凭证")
 	}
+}
+
+// TestSystemAdministratorManagesUsers 验证用户管理仅暴露公开资料，并立即执行停用状态。
+func TestSystemAdministratorManagesUsers(t *testing.T) {
+	server, password := integrationServer(t)
+	admin := loginUser(t, server, "operator", password)
+	member := loginUser(t, server, "member-a", password)
+	created := integrationRequest(t, server, admin, http.MethodPost, "/api/v1/users", map[string]any{
+		"username": "cloud-user", "password": "secure-user-password", "display_name": "云资源用户", "email": "cloud@example.invalid",
+	}, http.StatusCreated)
+	if strings.Contains(created.Body.String(), "password") {
+		t.Fatal("创建用户响应不得包含密码或密码哈希")
+	}
+	var user identity.User
+	decodeIntegration(t, created, &user)
+	if user.ID == 0 || user.Username != "cloud-user" || user.GlobalRole != identity.GlobalRoleUser || user.Status != "active" {
+		t.Fatal("创建用户必须返回默认启用的普通用户公开资料")
+	}
+	integrationRequest(t, server, member, http.MethodGet, "/api/v1/users", nil, http.StatusForbidden)
+	listed := integrationRequest(t, server, admin, http.MethodGet, "/api/v1/users", nil, http.StatusOK)
+	if strings.Contains(listed.Body.String(), "password_hash") {
+		t.Fatal("用户列表不得包含密码哈希")
+	}
+	integrationRequest(t, server, admin, http.MethodPut, "/api/v1/users/"+strconv.FormatUint(user.ID, 10)+"/status", map[string]any{"status": "disabled"}, http.StatusOK)
+	integrationRequest(t, server, "", http.MethodPost, "/api/v1/auth/login", map[string]any{"username": "cloud-user", "password": "secure-user-password"}, http.StatusUnauthorized)
+}
+
+// TestProjectAdministratorReadsCandidatesAndManagesMemberRoles 验证项目管理员只能在所属项目内查询候选身份并管理角色。
+func TestProjectAdministratorReadsCandidatesAndManagesMemberRoles(t *testing.T) {
+	server, password := integrationServer(t)
+	admin := loginUser(t, server, "operator", password)
+	member := loginUser(t, server, "member-a", password)
+	var created project.Project
+	decodeIntegration(t, integrationRequest(t, server, admin, http.MethodPost, "/api/v1/projects", map[string]any{"code": "members", "name": "成员项目"}, http.StatusCreated), &created)
+	path := "/api/v1/projects/" + strconv.FormatUint(created.ID, 10)
+	integrationRequest(t, server, admin, http.MethodPost, path+"/members", map[string]any{"user_id": 2, "role": "project_admin"}, http.StatusCreated)
+	candidates := integrationRequest(t, server, member, http.MethodGet, path+"/member-candidates", nil, http.StatusOK)
+	if strings.Contains(candidates.Body.String(), "email") || strings.Contains(candidates.Body.String(), "password") {
+		t.Fatal("成员候选接口不得暴露邮箱或认证字段")
+	}
+	var values []struct {
+		ID       uint64 `json:"id"`
+		Username string `json:"username"`
+	}
+	decodeIntegration(t, candidates, &values)
+	if len(values) != 2 || values[0].ID == 0 || values[0].Username == "" {
+		t.Fatal("项目管理员必须能读取可添加用户的最小公开身份")
+	}
+	members := integrationRequest(t, server, member, http.MethodGet, path+"/members", nil, http.StatusOK)
+	if !strings.Contains(members.Body.String(), "member-a") || strings.Contains(members.Body.String(), "password") {
+		t.Fatal("成员列表必须包含公开用户名且不得包含认证字段")
+	}
+}
+
+// TestProjectSourceAPINeverReturnsCredentials 验证接入源接口权限和凭证响应边界。
+func TestProjectSourceAPINeverReturnsCredentials(t *testing.T) {
+	server, password := integrationServer(t)
+	admin := loginUser(t, server, "operator", password)
+	member := loginUser(t, server, "member-a", password)
+	var created project.Project
+	decodeIntegration(t, integrationRequest(t, server, admin, http.MethodPost, "/api/v1/projects", map[string]any{"code": "sources", "name": "接入项目"}, http.StatusCreated), &created)
+	path := "/api/v1/projects/" + strconv.FormatUint(created.ID, 10)
+	integrationRequest(t, server, admin, http.MethodPost, path+"/members", map[string]any{"user_id": 2, "role": "viewer"}, http.StatusCreated)
+	response := integrationRequest(t, server, admin, http.MethodPost, path+"/sources", map[string]any{"provider": "aws", "name": "AWS 生产账号", "region": "cn-north-1", "credential": map[string]any{"access_key_id": "example-id", "secret_access_key": "example-secret"}}, http.StatusCreated)
+	if strings.Contains(response.Body.String(), "example") || strings.Contains(response.Body.String(), "encrypted") {
+		t.Fatal("接入源响应不得暴露凭证明文或密文字段")
+	}
+	listed := integrationRequest(t, server, member, http.MethodGet, path+"/sources?provider=aws", nil, http.StatusOK)
+	if strings.Contains(listed.Body.String(), "example") || !strings.Contains(listed.Body.String(), "AWS 生产账号") {
+		t.Fatal("成员列表响应必须可用且不含凭证")
+	}
+	integrationRequest(t, server, member, http.MethodPost, path+"/sources", map[string]any{"provider": "aws", "name": "禁止创建", "credential": map[string]any{"token": "value"}}, http.StatusNotFound)
+	var source cloudresource.Source
+	decodeIntegration(t, response, &source)
+	integrationRequest(t, server, admin, http.MethodPost, path+"/sources/"+strconv.FormatUint(source.ID, 10)+"/sync", nil, http.StatusOK)
+	updated := integrationRequest(t, server, admin, http.MethodPut, path+"/sources/"+strconv.FormatUint(source.ID, 10), map[string]any{"name": "AWS 更新账号", "region": "ap-east-1", "config": map[string]any{"environment": "production"}, "enabled": true, "sync_interval_minutes": 120}, http.StatusOK)
+	if strings.Contains(updated.Body.String(), "example") || !strings.Contains(updated.Body.String(), "AWS 更新账号") {
+		t.Fatal("更新接入源必须保留凭证且响应不得暴露凭证")
+	}
+	jobs := integrationRequest(t, server, member, http.MethodGet, path+"/sync-jobs?source_id="+strconv.FormatUint(source.ID, 10), nil, http.StatusOK)
+	if !strings.Contains(jobs.Body.String(), `"trigger":"manual"`) {
+		t.Fatal("项目成员必须能查询当前项目的同步任务")
+	}
+	resources := integrationRequest(t, server, member, http.MethodGet, path+"/resources?provider=aws&resource_type=ec2", nil, http.StatusOK)
+	if !strings.Contains(resources.Body.String(), "i-integration") || !strings.Contains(resources.Body.String(), "10.0.0.8") {
+		t.Fatal("同步资源查询必须包含模拟采集器输出及端点")
+	}
+	integrationRequest(t, server, admin, http.MethodDelete, path+"/sources/"+strconv.FormatUint(source.ID, 10), nil, http.StatusNoContent)
+	integrationRequest(t, server, member, http.MethodGet, path+"/sources", nil, http.StatusOK)
+}
+
+type integrationCollector struct{}
+
+func (integrationCollector) Collect(context.Context, cloudresource.Source, []byte) ([]cloudresource.CollectionResult, error) {
+	return []cloudresource.CollectionResult{{ResourceType: "ec2", Snapshots: []cloudresource.Snapshot{{ResourceType: "ec2", ExternalID: "i-integration", Name: "集成计算节点", CloudStatus: "running", Endpoints: []cloudresource.EndpointSnapshot{{Kind: "private", Address: "10.0.0.8"}}}}}}, nil
 }
 
 // TestIssuedAdminSessionUsesCurrentAccount 验证旧管理员 JWT 不能绕过数据库中的实时停用、删除或降权。
@@ -163,7 +261,7 @@ func integrationServerWithDatabase(t *testing.T) (http.Handler, string, *gorm.DB
 	}
 	sqlDB.SetMaxOpenConns(1)
 	t.Cleanup(func() { _ = sqlDB.Close() })
-	if err := db.AutoMigrate(&identity.User{}, &project.Project{}, &project.MemberRole{}); err != nil {
+	if err := db.AutoMigrate(&identity.User{}, &project.Project{}, &project.MemberRole{}, &cloudresource.Source{}, &cloudresource.Resource{}, &cloudresource.Endpoint{}, &cloudresource.SyncJob{}, &cloudresource.AuditLog{}); err != nil {
 		t.Fatalf("创建验收表失败：%v", err)
 	}
 	secret := make([]byte, 32)
@@ -186,7 +284,7 @@ func integrationServerWithDatabase(t *testing.T) (http.Handler, string, *gorm.DB
 	if _, err := rand.Read(secret); err != nil {
 		t.Fatal("生成签名密钥失败")
 	}
-	return httpserver.New(httpserver.Dependencies{Database: db, JWTSecret: hex.EncodeToString(secret)}), password, db
+	return httpserver.New(httpserver.Dependencies{Database: db, JWTSecret: hex.EncodeToString(secret), EncryptionKey: "integration-encryption-key", Collectors: map[string]cloudresource.Collector{"aws": integrationCollector{}}}), password, db
 }
 
 // loginUser 必须通过公开登录流程获取 JWT，不能以自行签发令牌跳过密码认证。

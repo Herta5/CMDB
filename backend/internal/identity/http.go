@@ -4,6 +4,7 @@ package identity
 import (
 	"errors"
 	"net/http"
+	"strconv"
 
 	"github.com/gin-gonic/gin"
 )
@@ -11,6 +12,86 @@ import (
 // HTTPHandler 将身份服务适配为 HTTP 处理器，不承担 JWT 解析职责。
 type HTTPHandler struct {
 	service *Service
+}
+
+// ListUsers 仅允许系统管理员读取全局用户公开资料。
+func (h *HTTPHandler) ListUsers(c *gin.Context, claims UserClaims) {
+	if claims.GlobalRole != GlobalRoleSystemAdmin {
+		writeError(c, http.StatusForbidden, "USER_FORBIDDEN", "无权执行该操作")
+		return
+	}
+	users, err := h.service.ListUsers(c.Request.Context())
+	if err != nil {
+		writeError(c, http.StatusInternalServerError, "USER_SERVICE_UNAVAILABLE", "用户服务暂不可用")
+		return
+	}
+	response := make([]publicUser, 0, len(users))
+	for index := range users {
+		response = append(response, toPublicUser(&users[index]))
+	}
+	c.JSON(http.StatusOK, response)
+}
+
+// CreateUser 仅允许系统管理员创建普通用户，响应不包含密码及密码哈希。
+func (h *HTTPHandler) CreateUser(c *gin.Context, claims UserClaims) {
+	if claims.GlobalRole != GlobalRoleSystemAdmin {
+		writeError(c, http.StatusForbidden, "USER_FORBIDDEN", "无权执行该操作")
+		return
+	}
+	var request struct {
+		Username    string `json:"username"`
+		Password    string `json:"password"`
+		DisplayName string `json:"display_name"`
+		Email       string `json:"email"`
+	}
+	if c.ShouldBindJSON(&request) != nil {
+		writeError(c, http.StatusBadRequest, "USER_INVALID_REQUEST", "请求格式错误")
+		return
+	}
+	user, err := h.service.CreateUser(c.Request.Context(), request.Username, request.Password, request.DisplayName, request.Email)
+	if errors.Is(err, ErrInvalidUserInput) {
+		writeError(c, http.StatusBadRequest, "USER_INVALID_INPUT", "用户参数无效")
+		return
+	}
+	if errors.Is(err, ErrDuplicateUsername) {
+		writeError(c, http.StatusConflict, "USER_DUPLICATE_USERNAME", "用户名已存在")
+		return
+	}
+	if err != nil {
+		writeError(c, http.StatusInternalServerError, "USER_SERVICE_UNAVAILABLE", "用户服务暂不可用")
+		return
+	}
+	c.JSON(http.StatusCreated, toPublicUser(user))
+}
+
+// UpdateUserStatus 允许系统管理员启停用户，禁止普通用户修改全局身份状态。
+func (h *HTTPHandler) UpdateUserStatus(c *gin.Context, claims UserClaims) {
+	if claims.GlobalRole != GlobalRoleSystemAdmin {
+		writeError(c, http.StatusForbidden, "USER_FORBIDDEN", "无权执行该操作")
+		return
+	}
+	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
+	var request struct {
+		Status string `json:"status"`
+	}
+	if err != nil || id == 0 || c.ShouldBindJSON(&request) != nil {
+		writeError(c, http.StatusBadRequest, "USER_INVALID_REQUEST", "请求格式错误")
+		return
+	}
+	user, err := h.service.UpdateUserStatus(c.Request.Context(), id, request.Status)
+	if errors.Is(err, ErrInvalidUserInput) {
+		writeError(c, http.StatusBadRequest, "USER_INVALID_INPUT", "用户参数无效")
+		return
+	}
+	if errors.Is(err, ErrUserNotFound) {
+		writeError(c, http.StatusNotFound, "USER_NOT_FOUND", "用户不存在")
+		return
+	}
+	if err != nil {
+		writeError(c, http.StatusInternalServerError, "USER_SERVICE_UNAVAILABLE", "用户服务暂不可用")
+		return
+	}
+	c.JSON(http.StatusOK, toPublicUser(user))
 }
 
 // NewHTTPHandler 创建身份接口处理器。

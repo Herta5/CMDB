@@ -4,6 +4,7 @@ package identity
 import (
 	"context"
 	"errors"
+	"strings"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
@@ -17,6 +18,12 @@ var (
 	ErrAuthenticatedUserNotFound = errors.New("认证用户不存在")
 	// ErrIdentityRepositoryUnavailable 表示服务装配错误，不得向外暴露具体存储原因。
 	ErrIdentityRepositoryUnavailable = errors.New("身份仓储不可用")
+	// ErrInvalidUserInput 表示用户资料、密码长度或状态不符合身份域约束。
+	ErrInvalidUserInput = errors.New("用户参数无效")
+	// ErrDuplicateUsername 表示用户名已被其他身份占用。
+	ErrDuplicateUsername = errors.New("用户名已存在")
+	// ErrUserNotFound 表示管理接口指定的用户不存在。
+	ErrUserNotFound = errors.New("用户不存在")
 )
 
 // defaultTokenLifetime 限制会话可被盗用的时间窗口，同时保证每个 JWT 都带有到期时间。
@@ -97,6 +104,57 @@ func (s *Service) CurrentUser(ctx context.Context, claims UserClaims) (*User, er
 		return nil, ErrAuthenticatedUserNotFound
 	}
 	return user, nil
+}
+
+// CreateUser 创建默认启用的普通用户，明文密码只在此调用链中用于生成不可逆哈希。
+func (s *Service) CreateUser(ctx context.Context, username, password, displayName, email string) (*User, error) {
+	if s.repository == nil {
+		return nil, ErrIdentityRepositoryUnavailable
+	}
+	username = strings.TrimSpace(username)
+	displayName = strings.TrimSpace(displayName)
+	if username == "" || displayName == "" || len(password) < 12 || len(password) > 72 {
+		return nil, ErrInvalidUserInput
+	}
+	if _, err := s.repository.FindByUsername(ctx, username); err == nil {
+		return nil, ErrDuplicateUsername
+	} else if !errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, err
+	}
+	hash, err := HashPassword(password)
+	if err != nil {
+		return nil, err
+	}
+	user := &User{Username: username, PasswordHash: hash, DisplayName: displayName, Email: strings.TrimSpace(email), GlobalRole: GlobalRoleUser, Status: "active"}
+	if err := s.repository.Create(ctx, user); err != nil {
+		return nil, err
+	}
+	return user, nil
+}
+
+// ListUsers 返回用户公开资料的数据来源，HTTP 层负责过滤密码哈希字段。
+func (s *Service) ListUsers(ctx context.Context) ([]User, error) {
+	if s.repository == nil {
+		return nil, ErrIdentityRepositoryUnavailable
+	}
+	return s.repository.List(ctx)
+}
+
+// UpdateUserStatus 启停用户；停用后认证中间件会在下一次请求立即使其会话失效。
+func (s *Service) UpdateUserStatus(ctx context.Context, id uint64, status string) (*User, error) {
+	if s.repository == nil {
+		return nil, ErrIdentityRepositoryUnavailable
+	}
+	if id == 0 || (status != "active" && status != "disabled") {
+		return nil, ErrInvalidUserInput
+	}
+	if err := s.repository.UpdateStatus(ctx, id, status); err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, ErrUserNotFound
+		}
+		return nil, err
+	}
+	return s.repository.FindByID(ctx, id)
 }
 
 // sign 使用 HS256 签发仅含最小身份声明的 JWT，令牌内容不可替代数据库中的用户资料。
