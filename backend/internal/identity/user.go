@@ -27,7 +27,7 @@ type User struct {
 	UpdatedAt    time.Time  `gorm:"column:updated_at;not null" json:"updated_at"`
 }
 
-// TableName 将身份域用户明确映射到新版 users 表，避免误用旧版 cmdb_user。
+// TableName 将身份域用户明确映射到 CMDB 的 users 表。
 func (User) TableName() string {
 	return "users"
 }

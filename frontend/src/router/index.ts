@@ -1,4 +1,4 @@
-// 本文件定义新版 CMDB 的认证边界和项目控制台路由，不提供旧版领域入口。
+// 本文件定义 CMDB 的认证边界和项目控制台路由。
 import { createRouter, createWebHistory, type RouteRecordRaw } from 'vue-router'
 
 import { useAuthStore } from '@/modules/auth/store'

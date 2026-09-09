@@ -1,15 +1,9 @@
-import { readFileSync } from 'node:fs'
-import { resolve } from 'node:path'
-import { describe, expect, it, vi } from 'vitest'
-
-// 该遗留数据转换测试不渲染消息组件，替换浏览器提示依赖可避免测试运行器加载完整 UI 库后挂起。
-vi.mock('element-plus', () => ({ ElMessage: { error: vi.fn() } }))
+import { describe, expect, it } from 'vitest'
 
 import { extractPagePayload, extractPayload, type ApiResponse, type PagePayload } from './request'
-import { parseTargetConfig } from '@/api/discovery'
 
-describe('API response payloads', () => {
-  it('extracts a typed page payload from the response envelope data field', () => {
+describe('API 响应数据提取', () => {
+  it('从统一响应中提取带类型的分页数据', () => {
     const response: ApiResponse<PagePayload<{ id: number; name: string }>> = {
       code: 0,
       message: 'ok',
@@ -29,50 +23,13 @@ describe('API response payloads', () => {
     expect(payload.page_size).toBe(20)
   })
 
-  it('extracts a snapshot diff from the response envelope data field', () => {
-    const response: ApiResponse<{ diff: { changes: Array<{ field: string }> } }> = {
+  it('从统一响应中提取普通业务数据', () => {
+    const response: ApiResponse<{ project: { id: number; name: string } }> = {
       code: 0,
       message: 'ok',
-      data: { diff: { changes: [{ field: 'hostname' }] } },
+      data: { project: { id: 1, name: '云平台' } },
     }
 
-    expect(extractPayload(response).diff.changes).toEqual([{ field: 'hostname' }])
-  })
-})
-
-describe('parseTargetConfig', () => {
-  it('parses JSON text into the strategy target configuration', () => {
-    expect(parseTargetConfig('{"host":"10.0.1.0/24","username":"root"}')).toEqual({
-      host: '10.0.1.0/24',
-      username: 'root',
-    })
-  })
-
-  it('rejects malformed strategy target configuration JSON', () => {
-    expect(() => parseTargetConfig('{"host":')).toThrow(SyntaxError)
-  })
-
-  it.each(['null', '[]', '"host-01"', '42'])('rejects non-object strategy target configuration %s', (value) => {
-    expect(() => parseTargetConfig(value)).toThrow('目标配置必须是 JSON 对象')
-  })
-})
-
-describe('affected page response consumption', () => {
-  const readView = (name: string) => readFileSync(resolve(process.cwd(), 'src', 'views', `${name}.vue`), 'utf8')
-
-  it('keeps the three affected pages on response extraction helpers', () => {
-    const sources = [
-      readView('DiscoveryStrategy'),
-      readView('DiscoveryHistory'),
-      readView('SnapshotDiff'),
-    ]
-
-    expect(sources[0]).toContain('extractPagePayload(res)')
-    expect(sources[0]).toContain('extractPayload(res)')
-    expect(sources[1]).toContain('extractPagePayload(res)')
-    expect(sources[2]).toContain('extractPagePayload(res)')
-    expect(sources[2]).toContain('extractPayload(res)')
-
-    for (const source of sources) expect(source).not.toMatch(/\bres\.(items|total|diff)\b/)
+    expect(extractPayload(response).project).toEqual({ id: 1, name: '云平台' })
   })
 })

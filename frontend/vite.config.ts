@@ -8,8 +8,9 @@ import { resolve } from 'path'
 export default defineConfig({
   plugins: [
     vue(),
-    AutoImport({ resolvers: [ElementPlusResolver()] }),
-    Components({ resolvers: [ElementPlusResolver()] }),
+    // 自动导入只参与构建解析，不生成容易残留过期组件信息的声明文件。
+    AutoImport({ resolvers: [ElementPlusResolver()], dts: false }),
+    Components({ resolvers: [ElementPlusResolver()], dts: false }),
   ],
   resolve: {
     alias: { '@': resolve(__dirname, 'src') },

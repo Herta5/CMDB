@@ -34,7 +34,7 @@ type Project struct {
 	UpdatedAt   time.Time      `gorm:"column:updated_at;not null" json:"updated_at"`
 }
 
-// TableName 将业务项目映射到新版 projects 表，不能复用旧版资产领域的数据表。
+// TableName 将业务项目明确映射到 CMDB 的 projects 表。
 func (Project) TableName() string {
 	return "projects"
 }
