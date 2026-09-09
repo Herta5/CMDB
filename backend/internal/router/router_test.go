@@ -8,6 +8,17 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
+func TestSystemHealthRoute(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+	registerSystemRoutes(r)
+	recorder := httptest.NewRecorder()
+	r.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/health", nil))
+	if recorder.Code != http.StatusOK || recorder.Body.String() != `{"status":"ok"}` {
+		t.Fatalf("health = %d %q", recorder.Code, recorder.Body.String())
+	}
+}
+
 func TestCIInstanceStaticRoutesDispatchToTheirHandlers(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	r := gin.New()

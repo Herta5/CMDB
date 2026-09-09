@@ -1,6 +1,8 @@
 package router
 
 import (
+	"net/http"
+
 	"github-cmdb/internal/handler"
 	"github-cmdb/internal/middleware"
 	"github.com/gin-gonic/gin"
@@ -40,6 +42,7 @@ type snapshotRouteHandlers struct {
 func Setup(r *gin.Engine, h *Handlers) {
 	r.Use(middleware.CORS())
 	r.Use(middleware.AuditLog())
+	registerSystemRoutes(r)
 
 	// --- Public integration endpoints (no auth) ---
 	r.GET("/api/v1/integration/prometheus/targets", h.Integration.PrometheusTargets)
@@ -174,6 +177,12 @@ func Setup(r *gin.Engine, h *Handlers) {
 
 	// --- Auth (public) ---
 	r.POST("/api/v1/auth/login", h.User.Login)
+}
+
+func registerSystemRoutes(r *gin.Engine) {
+	r.GET("/health", func(c *gin.Context) {
+		c.JSON(http.StatusOK, gin.H{"status": "ok"})
+	})
 }
 
 func registerCIInstanceRoutes(ciInstances *gin.RouterGroup, h ciInstanceRouteHandlers) {

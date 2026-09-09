@@ -14,6 +14,7 @@ import (
 	"github-cmdb/internal/repository"
 	"github-cmdb/internal/router"
 	"github-cmdb/internal/service"
+	"github-cmdb/internal/web"
 	"github.com/gin-gonic/gin"
 	"gorm.io/driver/mysql"
 	"gorm.io/gorm"
@@ -113,6 +114,9 @@ func main() {
 		Audit:       auditHandler,
 		User:        userHandler,
 	})
+	if err := web.Mount(r, os.Getenv("STATIC_DIR")); err != nil {
+		log.Fatalf("failed to configure frontend: %v", err)
+	}
 
 	// --- Graceful shutdown ---
 	go func() {
