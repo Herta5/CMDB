@@ -8,7 +8,7 @@
 
 | 组件 | 版本 |
 |------|------|
-| Go | 1.23+ |
+| Go | 1.25.1+ |
 | Node.js | 18+ |
 | MySQL | 8.4 |
 | Docker (可选) | 24+ |
@@ -16,16 +16,16 @@
 ### 2. 方式一：Docker Compose（推荐）
 
 ```bash
-# 启动 MySQL + 后端
-docker-compose up -d
+# 构建并启动 MySQL + 后端 + 前端
+docker compose up -d --build
 
 # 查看日志
-docker-compose logs -f backend
+docker compose logs -f
 ```
 
-访问 http://localhost:8080，首次启动自动创建默认账号 `admin / admin123`。
+访问 `http://服务器IP`（本机访问 `http://localhost`），首次启动自动创建默认账号 `admin / admin123`。
 
-当前 Compose 仅编排 MySQL 和后端服务（端口 8080）；前端仍按下方本地开发方式运行，未提供前端生产容器或 Kubernetes 部署配置。
+Docker Compose 会启动 MySQL、后端和前端生产容器。Nginx 通过 80 端口提供统一入口并将 `/api` 转发到后端；MySQL 3306 和后端 8080 仅在容器内部网络开放。当前未提供 Kubernetes 部署配置。
 
 ### 3. 方式二：本地开发
 
@@ -54,8 +54,8 @@ go build -o cmdb-server.exe ./cmd/server
 
 ```bash
 cd frontend
-npm install
-npm run dev
+corepack pnpm install --frozen-lockfile
+corepack pnpm dev
 ```
 
 前端开发服务器运行在 http://localhost:3000，自动代理 API 到后端 8080 端口。
