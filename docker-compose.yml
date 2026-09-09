@@ -1,8 +1,6 @@
-version: '3.8'
-
 services:
   mysql:
-    image: mysql:8.4
+    image: registry.aliyuncs.com/acheron/mysql:8.4
     container_name: cmdb-mysql
     restart: unless-stopped
     environment:
@@ -10,15 +8,12 @@ services:
       MYSQL_DATABASE: cmdb
       MYSQL_CHARSET: utf8mb4
       MYSQL_COLLATION: utf8mb4_unicode_ci
-    ports:
-      - "3306:3306"
     volumes:
       - mysql-data:/var/lib/mysql
       - ./backend/migrations/001_seed.sql:/docker-entrypoint-initdb.d/001_seed.sql
     command:
       - --character-set-server=utf8mb4
       - --collation-server=utf8mb4_unicode_ci
-      - --default-authentication-plugin=mysql_native_password
     healthcheck:
       test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
       interval: 10s
@@ -33,18 +28,27 @@ services:
     restart: unless-stopped
     environment:
       SERVER_PORT: "8080"
-      GIN_MODE: debug
+      GIN_MODE: release
       DB_HOST: mysql
       DB_PORT: "3306"
       DB_USER: root
       DB_PASSWORD: cmdb-root-2024
       DB_NAME: cmdb
       JWT_SECRET: cmdb-jwt-secret-change-in-production
-    ports:
-      - "8080:8080"
     depends_on:
       mysql:
         condition: service_healthy
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: cmdb-frontend
+    restart: unless-stopped
+    ports:
+      - "80:80"
+    depends_on:
+      - backend
 
 volumes:
   mysql-data:
