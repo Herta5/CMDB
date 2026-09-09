@@ -3,6 +3,7 @@ package httpserver
 
 import (
 	"github-cmdb/internal/identity"
+	"github-cmdb/internal/project"
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
 )
@@ -21,14 +22,33 @@ func New(dependencies Dependencies) *gin.Engine {
 	engine.Use(gin.Recovery())
 
 	repository := dependencies.UserRepository
+	var projectRepository project.Repository
 	if repository == nil && dependencies.Database != nil {
 		repository = identity.NewUserRepository(dependencies.Database)
 	}
+	if dependencies.Database != nil {
+		projectRepository = project.NewRepository(dependencies.Database)
+	}
 	SetJWTSecret(dependencies.JWTSecret)
 	handler := identity.NewHTTPHandler(identity.NewService(repository, dependencies.JWTSecret))
+	projectHandler := project.NewHTTPHandler(project.NewService(projectRepository))
 	engine.POST("/api/v1/auth/login", handler.Login)
 	engine.GET("/api/v1/me", RequireUser(), func(c *gin.Context) {
 		handler.Me(c, CurrentUser(c))
+	})
+	projects := engine.Group("/api/v1/projects")
+	projects.Use(RequireUser())
+	projects.GET("", func(c *gin.Context) {
+		projectHandler.List(c, CurrentUser(c))
+	})
+	projects.POST("", func(c *gin.Context) {
+		projectHandler.Create(c, CurrentUser(c))
+	})
+	projects.PUT("/:id", func(c *gin.Context) {
+		projectHandler.Update(c, CurrentUser(c))
+	})
+	projects.DELETE("/:id", func(c *gin.Context) {
+		projectHandler.Delete(c, CurrentUser(c))
 	})
 	return engine
 }

@@ -17,17 +17,17 @@ CREATE TABLE IF NOT EXISTS users (
 
 CREATE TABLE IF NOT EXISTS projects (
     id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT COMMENT '业务项目唯一标识',
-    project_key VARCHAR(64) NOT NULL COMMENT '业务项目稳定标识，全局唯一',
+    code VARCHAR(64) NOT NULL COMMENT '业务项目稳定编码，全局唯一且创建后不可修改',
     name VARCHAR(128) NOT NULL COMMENT '业务项目名称',
     description VARCHAR(500) NOT NULL DEFAULT '' COMMENT '业务项目说明',
-    status ENUM('active', 'archived') NOT NULL DEFAULT 'active' COMMENT '业务项目生命周期状态',
-    created_by BIGINT UNSIGNED NULL COMMENT '创建该业务项目的用户标识',
+    status ENUM('enabled', 'disabled') NOT NULL DEFAULT 'enabled' COMMENT '业务项目启用状态',
+    owner_user_id BIGINT UNSIGNED NULL COMMENT '业务项目负责人，可在尚未分配负责人时为空',
     created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) COMMENT '创建时间',
     updated_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3) COMMENT '最后更新时间',
     PRIMARY KEY (id),
-    UNIQUE KEY uk_projects_project_key (project_key),
-    KEY idx_projects_created_by (created_by),
-    CONSTRAINT fk_projects_created_by FOREIGN KEY (created_by) REFERENCES users (id) ON DELETE SET NULL
+    UNIQUE KEY uk_projects_code (code),
+    KEY idx_projects_owner_user_id (owner_user_id),
+    CONSTRAINT fk_projects_owner_user_id FOREIGN KEY (owner_user_id) REFERENCES users (id) ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='CMDB 业务项目表，是数据归属和权限隔离边界';
 
 CREATE TABLE IF NOT EXISTS project_members (
