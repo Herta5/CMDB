@@ -94,6 +94,60 @@ func TestReadOnlyRolesCannotManageMembers(t *testing.T) {
 	}
 }
 
+// TestMemberCannotEscalateOwnRole 防止普通成员借助成员更新接口把自己提升为项目管理员。
+func TestMemberCannotEscalateOwnRole(t *testing.T) {
+	server, db := newProjectHTTPServerWithDatabase(t)
+	managedProject := createProjectThroughHTTP(t, server, `{"code":"platform","name":"平台项目"}`)
+	member := createProjectMember(t, db, managedProject.ID, 7, project.MemberRoleMember)
+
+	response := requestProjectMember(t, server, http.MethodPut, managedProject.ID, "/7", `{"role":"project_admin"}`, member.ID, identity.GlobalRoleUser)
+	if response.Code != http.StatusNotFound || response.Body.String() != `{"code":"PROJECT_NOT_FOUND","message":"项目不存在"}` {
+		t.Fatalf("普通成员不得提升自己的项目角色：status=%d body=%s", response.Code, response.Body.String())
+	}
+	var persisted project.MemberRole
+	if err := db.Where("project_id = ? AND user_id = ?", managedProject.ID, member.ID).First(&persisted).Error; err != nil {
+		t.Fatalf("读取成员关系失败：%v", err)
+	}
+	if persisted.Role != project.MemberRoleMember {
+		t.Fatalf("越权更新不得改变成员角色：role=%s", persisted.Role)
+	}
+}
+
+// TestProjectAdminCannotWriteAnotherProjectMembers 防止项目管理员跨项目新增成员并泄露目标项目存在性。
+func TestProjectAdminCannotWriteAnotherProjectMembers(t *testing.T) {
+	server, db := newProjectHTTPServerWithDatabase(t)
+	projectA := createProjectThroughHTTP(t, server, `{"code":"platform","name":"平台项目"}`)
+	projectB := createProjectThroughHTTP(t, server, `{"code":"data","name":"数据项目"}`)
+	admin := createProjectMember(t, db, projectA.ID, 7, project.MemberRoleProjectAdmin)
+	createProjectUser(t, db, 8)
+
+	response := requestProjectMember(t, server, http.MethodPost, projectB.ID, "", `{"user_id":8,"role":"member"}`, admin.ID, identity.GlobalRoleUser)
+	if response.Code != http.StatusNotFound || response.Body.String() != `{"code":"PROJECT_NOT_FOUND","message":"项目不存在"}` {
+		t.Fatalf("跨项目成员写入必须隐藏目标存在性：status=%d body=%s", response.Code, response.Body.String())
+	}
+	var created int64
+	if err := db.Model(&project.MemberRole{}).Where("project_id = ? AND user_id = ?", projectB.ID, 8).Count(&created).Error; err != nil || created != 0 {
+		t.Fatalf("跨项目成员写入不得创建关系：count=%d err=%v", created, err)
+	}
+}
+
+// TestProjectAdminRejectsInvalidMemberRole 防止项目管理员写入权限中间件无法识别的成员角色。
+func TestProjectAdminRejectsInvalidMemberRole(t *testing.T) {
+	server, db := newProjectHTTPServerWithDatabase(t)
+	managedProject := createProjectThroughHTTP(t, server, `{"code":"platform","name":"平台项目"}`)
+	admin := createProjectMember(t, db, managedProject.ID, 7, project.MemberRoleProjectAdmin)
+	createProjectUser(t, db, 8)
+
+	response := requestProjectMember(t, server, http.MethodPost, managedProject.ID, "", `{"user_id":8,"role":"owner"}`, admin.ID, identity.GlobalRoleUser)
+	if response.Code != http.StatusBadRequest || response.Body.String() != `{"code":"PROJECT_MEMBER_INVALID_INPUT","message":"项目成员参数无效"}` {
+		t.Fatalf("非法成员角色必须被稳定拒绝：status=%d body=%s", response.Code, response.Body.String())
+	}
+	var created int64
+	if err := db.Model(&project.MemberRole{}).Where("project_id = ? AND user_id = ?", managedProject.ID, 8).Count(&created).Error; err != nil || created != 0 {
+		t.Fatalf("非法成员角色不得创建关系：count=%d err=%v", created, err)
+	}
+}
+
 // TestSystemAdminBypassesMembership 验证系统管理员不需要预先建立成员关系即可处理项目级操作。
 func TestSystemAdminBypassesMembership(t *testing.T) {
 	server := newProjectHTTPServer(t)

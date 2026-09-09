@@ -200,7 +200,18 @@ func (s *Service) UpdateMemberRole(ctx context.Context, projectID, userID uint64
 		}
 		return nil, err
 	}
-	return &MemberRole{ProjectID: projectID, UserID: userID, Role: role}, nil
+	// 更新后重新读取，响应必须保留数据库生成的成员标识和创建时间，不能伪造零值成员对象。
+	member, err := s.repository.FindMemberRole(ctx, projectID, userID)
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, ErrMemberNotFound
+		}
+		return nil, err
+	}
+	if member == nil {
+		return nil, ErrMemberNotFound
+	}
+	return member, nil
 }
 
 // RemoveMember 移除项目成员关系；调用方必须先确认当前用户具备项目管理员或系统管理员权限。

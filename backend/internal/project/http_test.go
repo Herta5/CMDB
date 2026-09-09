@@ -34,8 +34,8 @@ func TestProjectHTTPRejectsNonAdministratorCreation(t *testing.T) {
 	}
 }
 
-// TestProjectHTTPRejectsNonAdministratorDeletion 防止普通用户删除其他成员仍需访问的项目隔离边界。
-func TestProjectHTTPRejectsNonAdministratorDeletion(t *testing.T) {
+// TestProjectHTTPHidesProjectFromNonAdministratorDeletion 防止普通用户通过删除接口枚举项目存在性。
+func TestProjectHTTPHidesProjectFromNonAdministratorDeletion(t *testing.T) {
 	server, db := newProjectHTTPServerWithDatabase(t)
 	created := createProjectThroughHTTP(t, server, `{"code":"cloud","name":"云平台"}`)
 	request := httptest.NewRequest(http.MethodDelete, "/api/v1/projects/"+strconv.FormatUint(created.ID, 10), nil)
@@ -43,12 +43,41 @@ func TestProjectHTTPRejectsNonAdministratorDeletion(t *testing.T) {
 	response := httptest.NewRecorder()
 
 	server.ServeHTTP(response, request)
-	if response.Code != http.StatusForbidden || response.Body.String() != `{"code":"PROJECT_FORBIDDEN","message":"无权执行该操作"}` {
-		t.Fatalf("普通用户删除项目必须被稳定拒绝：status=%d body=%s", response.Code, response.Body.String())
+	if response.Code != http.StatusNotFound || response.Body.String() != `{"code":"PROJECT_NOT_FOUND","message":"项目不存在"}` {
+		t.Fatalf("普通用户删除项目必须隐藏目标存在性：status=%d body=%s", response.Code, response.Body.String())
 	}
 	var remaining int64
 	if err := db.Model(&project.Project{}).Where("id = ?", created.ID).Count(&remaining).Error; err != nil || remaining != 1 {
 		t.Fatalf("未授权删除不得改变项目记录：count=%d err=%v", remaining, err)
+	}
+}
+
+// TestProjectHTTPHidesExistingAndMissingProjectWrites 防止普通用户从项目更新或删除响应区分项目是否存在。
+func TestProjectHTTPHidesExistingAndMissingProjectWrites(t *testing.T) {
+	server, db := newProjectHTTPServerWithDatabase(t)
+	created := createProjectThroughHTTP(t, server, `{"code":"cloud","name":"云平台"}`)
+	for _, method := range []string{http.MethodPut, http.MethodDelete} {
+		t.Run(method, func(t *testing.T) {
+			for _, targetID := range []uint64{created.ID, 999} {
+				request := httptest.NewRequest(method, "/api/v1/projects/"+strconv.FormatUint(targetID, 10), bytes.NewBufferString(`{"name":"越权修改","status":"disabled"}`))
+				if method == http.MethodPut {
+					request.Header.Set("Content-Type", "application/json")
+				}
+				request.Header.Set("Authorization", "Bearer "+projectTestToken(t, 7, identity.GlobalRoleUser))
+				response := httptest.NewRecorder()
+				server.ServeHTTP(response, request)
+				if response.Code != http.StatusNotFound || response.Body.String() != `{"code":"PROJECT_NOT_FOUND","message":"项目不存在"}` {
+					t.Fatalf("普通用户%s必须隐藏目标存在性：target=%d status=%d body=%s", method, targetID, response.Code, response.Body.String())
+				}
+			}
+		})
+	}
+	var persisted project.Project
+	if err := db.First(&persisted, created.ID).Error; err != nil {
+		t.Fatalf("读取项目记录失败：%v", err)
+	}
+	if persisted.Name != "云平台" || persisted.Status != project.ProjectStatusEnabled {
+		t.Fatalf("普通用户项目写请求不得改变项目：project=%+v", persisted)
 	}
 }
 

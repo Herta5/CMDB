@@ -95,6 +95,37 @@ func TestListForUserRestrictsRegularUserToMembership(t *testing.T) {
 	}
 }
 
+// TestUpdateMemberRoleReturnsPersistedMember 防止角色更新响应丢失成员主键和创建时间，误导调用方把已有关系当成新记录。
+func TestUpdateMemberRoleReturnsPersistedMember(t *testing.T) {
+	service, db := newProjectServiceWithDatabase(t)
+	createdProject, err := service.Create(context.Background(), CreateInput{Name: "云平台", Code: "cloud"})
+	if err != nil {
+		t.Fatalf("准备项目失败：%v", err)
+	}
+	if err := db.Create(&identity.User{ID: 7, Username: "member-update", PasswordHash: "test-hash", DisplayName: "待更新成员", GlobalRole: identity.GlobalRoleUser, Status: "active"}).Error; err != nil {
+		t.Fatalf("准备成员用户失败：%v", err)
+	}
+	createdMember, err := service.AddMember(context.Background(), createdProject.ID, 7, MemberRoleViewer)
+	if err != nil {
+		t.Fatalf("准备成员关系失败：%v", err)
+	}
+
+	updatedMember, err := service.UpdateMemberRole(context.Background(), createdProject.ID, 7, MemberRoleMember)
+	if err != nil {
+		t.Fatalf("更新成员角色失败：%v", err)
+	}
+	if updatedMember.ID != createdMember.ID || !updatedMember.CreatedAt.Equal(createdMember.CreatedAt) || updatedMember.Role != MemberRoleMember {
+		t.Fatalf("角色更新必须返回真实持久化成员：created=%+v updated=%+v", createdMember, updatedMember)
+	}
+	var persisted MemberRole
+	if err := db.Where("project_id = ? AND user_id = ?", createdProject.ID, 7).First(&persisted).Error; err != nil {
+		t.Fatalf("读取更新后的成员关系失败：%v", err)
+	}
+	if persisted.ID != updatedMember.ID || !persisted.CreatedAt.Equal(updatedMember.CreatedAt) || persisted.Role != updatedMember.Role {
+		t.Fatalf("响应必须准确反映已持久化成员：persisted=%+v updated=%+v", persisted, updatedMember)
+	}
+}
+
 // TestUpdateDoesNotResurrectProjectDeletedAfterRead 防止并发删除发生在读取和更新之间时，Save 把已删除项目重新插入。
 func TestUpdateDoesNotResurrectProjectDeletedAfterRead(t *testing.T) {
 	service, db := newProjectServiceWithDatabase(t)

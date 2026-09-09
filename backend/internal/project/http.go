@@ -57,10 +57,10 @@ func (h *HTTPHandler) Create(c *gin.Context, claims identity.UserClaims) {
 	c.JSON(http.StatusCreated, project)
 }
 
-// Update 暂仅允许系统管理员修改项目资料；成员角色授权将在独立的项目成员能力中统一收紧。
+// Update 仅允许系统管理员修改项目资料；普通用户统一得到项目不存在，避免写接口泄露目标存在性。
 func (h *HTTPHandler) Update(c *gin.Context, claims identity.UserClaims) {
 	if !isSystemAdmin(claims) {
-		writeProjectError(c, http.StatusForbidden, "PROJECT_FORBIDDEN", "无权执行该操作")
+		writeProjectError(c, http.StatusNotFound, "PROJECT_NOT_FOUND", "项目不存在")
 		return
 	}
 	projectID, ok := projectIDFromPath(c)
@@ -132,10 +132,10 @@ func (h *HTTPHandler) Get(c *gin.Context) {
 	c.JSON(http.StatusOK, project)
 }
 
-// Delete 仅允许系统管理员移除项目，避免普通用户破坏其他项目成员的数据归属边界。
+// Delete 仅允许系统管理员移除项目；普通用户统一得到项目不存在，避免删除接口泄露目标存在性。
 func (h *HTTPHandler) Delete(c *gin.Context, claims identity.UserClaims) {
 	if !isSystemAdmin(claims) {
-		writeProjectError(c, http.StatusForbidden, "PROJECT_FORBIDDEN", "无权执行该操作")
+		writeProjectError(c, http.StatusNotFound, "PROJECT_NOT_FOUND", "项目不存在")
 		return
 	}
 	projectID, ok := projectIDFromPath(c)
