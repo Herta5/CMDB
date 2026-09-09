@@ -50,5 +50,12 @@ func New(dependencies Dependencies) *gin.Engine {
 	projects.DELETE("/:id", func(c *gin.Context) {
 		projectHandler.Delete(c, CurrentUser(c))
 	})
+	projectReadRoles := []string{project.MemberRoleProjectAdmin, project.MemberRoleMember, project.MemberRoleViewer}
+	projects.GET("/:id", project.RequireRole(projectRepository, projectReadRoles...), projectHandler.Get)
+	members := projects.Group("/:id/members", project.RequireRole(projectRepository, projectReadRoles...))
+	members.GET("", projectHandler.ListMembers)
+	members.POST("", project.RequireRole(projectRepository, project.MemberRoleProjectAdmin), projectHandler.AddMember)
+	members.PUT("/:user_id", project.RequireRole(projectRepository, project.MemberRoleProjectAdmin), projectHandler.UpdateMemberRole)
+	members.DELETE("/:user_id", project.RequireRole(projectRepository, project.MemberRoleProjectAdmin), projectHandler.RemoveMember)
 	return engine
 }

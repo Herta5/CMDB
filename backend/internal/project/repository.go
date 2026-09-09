@@ -17,6 +17,11 @@ type Repository interface {
 	Delete(ctx context.Context, id uint64) error
 	List(ctx context.Context) ([]Project, error)
 	ListForUser(ctx context.Context, userID uint64) ([]Project, error)
+	FindMemberRole(ctx context.Context, projectID, userID uint64) (*MemberRole, error)
+	ListMembers(ctx context.Context, projectID uint64) ([]MemberRole, error)
+	CreateMember(ctx context.Context, member *MemberRole) error
+	UpdateMemberRole(ctx context.Context, projectID, userID uint64, role string) error
+	DeleteMember(ctx context.Context, projectID, userID uint64) error
 }
 
 // gormRepository 是 Repository 的 GORM 实现，所有查询都明确落在新版项目表。
@@ -97,4 +102,51 @@ func (r *gormRepository) ListForUser(ctx context.Context, userID uint64) ([]Proj
 		return nil, err
 	}
 	return projects, nil
+}
+
+// FindMemberRole 按项目和用户查询唯一成员关系，权限中间件不得改为先查询项目以免泄露项目存在性。
+func (r *gormRepository) FindMemberRole(ctx context.Context, projectID, userID uint64) (*MemberRole, error) {
+	var member MemberRole
+	if err := r.db.WithContext(ctx).Where("project_id = ? AND user_id = ?", projectID, userID).First(&member).Error; err != nil {
+		return nil, err
+	}
+	return &member, nil
+}
+
+// ListMembers 返回项目内全部成员关系，仅应由已完成项目权限校验的处理器调用。
+func (r *gormRepository) ListMembers(ctx context.Context, projectID uint64) ([]MemberRole, error) {
+	var members []MemberRole
+	if err := r.db.WithContext(ctx).Where("project_id = ?", projectID).Order("user_id ASC").Find(&members).Error; err != nil {
+		return nil, err
+	}
+	return members, nil
+}
+
+// CreateMember 写入项目成员关系，联合唯一索引负责并发情况下的一人一角色约束。
+func (r *gormRepository) CreateMember(ctx context.Context, member *MemberRole) error {
+	return r.db.WithContext(ctx).Create(member).Error
+}
+
+// UpdateMemberRole 只更新成员角色，零行受影响代表成员已被并发移除。
+func (r *gormRepository) UpdateMemberRole(ctx context.Context, projectID, userID uint64, role string) error {
+	result := r.db.WithContext(ctx).Model(&MemberRole{}).Where("project_id = ? AND user_id = ?", projectID, userID).Update("role", role)
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected == 0 {
+		return gorm.ErrRecordNotFound
+	}
+	return nil
+}
+
+// DeleteMember 删除指定成员关系；未命中也返回未找到，避免把并发删除误报为成功。
+func (r *gormRepository) DeleteMember(ctx context.Context, projectID, userID uint64) error {
+	result := r.db.WithContext(ctx).Where("project_id = ? AND user_id = ?", projectID, userID).Delete(&MemberRole{})
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected == 0 {
+		return gorm.ErrRecordNotFound
+	}
+	return nil
 }

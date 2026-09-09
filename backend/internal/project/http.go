@@ -109,6 +109,29 @@ func (h *HTTPHandler) List(c *gin.Context, claims identity.UserClaims) {
 	c.JSON(http.StatusOK, projects)
 }
 
+// Get 返回单个项目资料；路由上的项目角色中间件已在读取前隐藏无权项目的存在性。
+func (h *HTTPHandler) Get(c *gin.Context) {
+	projectID, ok := projectIDFromPath(c)
+	if !ok {
+		writeProjectError(c, http.StatusBadRequest, "PROJECT_INVALID_REQUEST", "请求格式错误")
+		return
+	}
+	project, err := h.service.Get(c.Request.Context(), projectID)
+	if errors.Is(err, ErrProjectNotFound) {
+		writeProjectError(c, http.StatusNotFound, "PROJECT_NOT_FOUND", "项目不存在")
+		return
+	}
+	if errors.Is(err, ErrInvalidProjectInput) {
+		writeProjectError(c, http.StatusBadRequest, "PROJECT_INVALID_REQUEST", "请求格式错误")
+		return
+	}
+	if err != nil {
+		writeProjectError(c, http.StatusInternalServerError, "PROJECT_SERVICE_UNAVAILABLE", "项目服务暂不可用")
+		return
+	}
+	c.JSON(http.StatusOK, project)
+}
+
 // Delete 仅允许系统管理员移除项目，避免普通用户破坏其他项目成员的数据归属边界。
 func (h *HTTPHandler) Delete(c *gin.Context, claims identity.UserClaims) {
 	if !isSystemAdmin(claims) {
@@ -130,9 +153,13 @@ func (h *HTTPHandler) Delete(c *gin.Context, claims identity.UserClaims) {
 	c.Status(http.StatusNoContent)
 }
 
-// projectIDFromPath 严格解析正整数项目标识，避免零值或非数字路径进入项目服务。
+// projectIDFromPath 严格解析正整数项目标识，同时兼容项目详情的 id 和项目级子资源的 projectId 路径参数。
 func projectIDFromPath(c *gin.Context) (uint64, bool) {
-	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
+	rawID := c.Param("id")
+	if rawID == "" {
+		rawID = c.Param("projectId")
+	}
+	id, err := strconv.ParseUint(rawID, 10, 64)
 	return id, err == nil && id > 0
 }
 

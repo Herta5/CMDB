@@ -4,6 +4,9 @@ package identity
 import "time"
 
 const (
+	// UserClaimsContextKey 是认证中间件保存已验证身份声明的上下文键，项目权限中间件据此读取当前用户。
+	UserClaimsContextKey = "cmdb.identity.user_claims"
+
 	// GlobalRoleSystemAdmin 表示拥有全局运维权限的系统管理员。
 	GlobalRoleSystemAdmin = "system_admin"
 	// GlobalRoleUser 表示仅能通过项目成员关系访问资源的普通用户。

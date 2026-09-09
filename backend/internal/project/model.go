@@ -13,10 +13,8 @@ const (
 	// ProjectStatusDisabled 表示项目暂时不可用，但保留其资源归属和审计边界。
 	ProjectStatusDisabled = "disabled"
 
-	// MemberRoleOwner 表示项目负责人拥有项目内最高管理权限。
-	MemberRoleOwner = "owner"
-	// MemberRoleAdmin 表示项目管理员可执行项目内管理操作。
-	MemberRoleAdmin = "admin"
+	// MemberRoleProjectAdmin 表示可管理本项目成员关系的项目管理员。
+	MemberRoleProjectAdmin = "project_admin"
 	// MemberRoleMember 表示项目普通成员可按后续授权访问项目资源。
 	MemberRoleMember = "member"
 	// MemberRoleViewer 表示项目只读成员不得变更项目资源。

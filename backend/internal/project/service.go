@@ -22,6 +22,12 @@ var (
 	ErrInvalidProjectStatus = errors.New("项目状态无效")
 	// ErrProjectRepositoryUnavailable 表示服务未被正确装配，不能继续执行项目操作。
 	ErrProjectRepositoryUnavailable = errors.New("项目仓储不可用")
+	// ErrInvalidMemberInput 表示成员用户或项目内角色不满足最小权限约束。
+	ErrInvalidMemberInput = errors.New("项目成员参数无效")
+	// ErrMemberAlreadyExists 表示同一用户已在目标项目拥有唯一成员关系。
+	ErrMemberAlreadyExists = errors.New("项目成员已存在")
+	// ErrMemberNotFound 表示目标项目内不存在指定成员关系。
+	ErrMemberNotFound = errors.New("项目成员不存在")
 )
 
 // CreateInput 是创建项目所需的可写字段；Code 只在此处出现，以保证创建后不可修改。
@@ -125,6 +131,95 @@ func (s *Service) ListForUser(ctx context.Context, userID uint64, globalRole str
 	return s.repository.ListForUser(ctx, userID)
 }
 
+// Get 返回单个项目资料；权限中间件必须先于该方法执行，普通用户不得借此判断项目存在性。
+func (s *Service) Get(ctx context.Context, id uint64) (*Project, error) {
+	if s.repository == nil {
+		return nil, ErrProjectRepositoryUnavailable
+	}
+	if id == 0 {
+		return nil, ErrInvalidProjectInput
+	}
+	project, err := s.repository.FindByID(ctx, id)
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, ErrProjectNotFound
+		}
+		return nil, err
+	}
+	if project == nil {
+		return nil, ErrProjectNotFound
+	}
+	return project, nil
+}
+
+// ListMembers 返回项目成员关系；调用方必须已验证对目标项目拥有读取权限。
+func (s *Service) ListMembers(ctx context.Context, projectID uint64) ([]MemberRole, error) {
+	if s.repository == nil {
+		return nil, ErrProjectRepositoryUnavailable
+	}
+	if projectID == 0 {
+		return nil, ErrInvalidMemberInput
+	}
+	return s.repository.ListMembers(ctx, projectID)
+}
+
+// AddMember 为已有用户建立项目内唯一角色，角色集合受统一校验以避免写入未定义权限。
+func (s *Service) AddMember(ctx context.Context, projectID, userID uint64, role string) (*MemberRole, error) {
+	if s.repository == nil {
+		return nil, ErrProjectRepositoryUnavailable
+	}
+	if projectID == 0 || userID == 0 || !validMemberRole(role) {
+		return nil, ErrInvalidMemberInput
+	}
+	if _, err := s.repository.FindMemberRole(ctx, projectID, userID); err == nil {
+		return nil, ErrMemberAlreadyExists
+	} else if !errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, err
+	}
+	member := &MemberRole{ProjectID: projectID, UserID: userID, Role: role}
+	if err := s.repository.CreateMember(ctx, member); err != nil {
+		if isDuplicateCodeError(err) {
+			return nil, ErrMemberAlreadyExists
+		}
+		return nil, err
+	}
+	return member, nil
+}
+
+// UpdateMemberRole 修改已有成员的项目内角色，不存在的成员关系不应被隐式创建。
+func (s *Service) UpdateMemberRole(ctx context.Context, projectID, userID uint64, role string) (*MemberRole, error) {
+	if s.repository == nil {
+		return nil, ErrProjectRepositoryUnavailable
+	}
+	if projectID == 0 || userID == 0 || !validMemberRole(role) {
+		return nil, ErrInvalidMemberInput
+	}
+	if err := s.repository.UpdateMemberRole(ctx, projectID, userID, role); err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, ErrMemberNotFound
+		}
+		return nil, err
+	}
+	return &MemberRole{ProjectID: projectID, UserID: userID, Role: role}, nil
+}
+
+// RemoveMember 移除项目成员关系；调用方必须先确认当前用户具备项目管理员或系统管理员权限。
+func (s *Service) RemoveMember(ctx context.Context, projectID, userID uint64) error {
+	if s.repository == nil {
+		return ErrProjectRepositoryUnavailable
+	}
+	if projectID == 0 || userID == 0 {
+		return ErrInvalidMemberInput
+	}
+	if err := s.repository.DeleteMember(ctx, projectID, userID); err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return ErrMemberNotFound
+		}
+		return err
+	}
+	return nil
+}
+
 // Delete 删除项目本体；调用方必须在调用前确认当前用户具有系统管理员权限。
 func (s *Service) Delete(ctx context.Context, id uint64) error {
 	if s.repository == nil {
@@ -158,4 +253,9 @@ func isDuplicateCodeError(err error) bool {
 // validProjectStatus 集中维护项目允许的生命周期状态，避免接口写入未定义状态。
 func validProjectStatus(status string) bool {
 	return status == ProjectStatusEnabled || status == ProjectStatusDisabled
+}
+
+// validMemberRole 集中维护首期项目内角色，避免成员接口写入无法被权限中间件识别的值。
+func validMemberRole(role string) bool {
+	return role == MemberRoleProjectAdmin || role == MemberRoleMember || role == MemberRoleViewer
 }

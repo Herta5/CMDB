@@ -34,7 +34,7 @@ CREATE TABLE IF NOT EXISTS project_members (
     id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT COMMENT '项目成员关系唯一标识',
     project_id BIGINT UNSIGNED NOT NULL COMMENT '所属业务项目标识',
     user_id BIGINT UNSIGNED NOT NULL COMMENT '成员用户标识',
-    role ENUM('owner', 'admin', 'member', 'viewer') NOT NULL COMMENT '用户在该业务项目内的角色',
+    role ENUM('project_admin', 'member', 'viewer') NOT NULL COMMENT '用户在该业务项目内的角色',
     created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) COMMENT '加入项目时间',
     updated_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3) COMMENT '成员关系最后更新时间',
     PRIMARY KEY (id),

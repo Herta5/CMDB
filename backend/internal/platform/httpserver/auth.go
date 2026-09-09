@@ -11,8 +11,6 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 )
 
-const userClaimsContextKey = "cmdb.identity.user_claims"
-
 // jwtSecret 仅在服务启动装配时设置，运行中只用于验证客户端提交的 JWT 签名。
 var jwtSecret []byte
 
@@ -42,14 +40,14 @@ func RequireUser() gin.HandlerFunc {
 			return
 		}
 
-		c.Set(userClaimsContextKey, claims)
+		c.Set(identity.UserClaimsContextKey, claims)
 		c.Next()
 	}
 }
 
 // CurrentUser 读取已由 RequireUser 验证的用户声明；未经过中间件时返回零值声明。
 func CurrentUser(c *gin.Context) identity.UserClaims {
-	claims, _ := c.Get(userClaimsContextKey)
+	claims, _ := c.Get(identity.UserClaimsContextKey)
 	if value, ok := claims.(identity.UserClaims); ok {
 		return value
 	}
