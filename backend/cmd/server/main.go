@@ -3,10 +3,12 @@ package main
 
 import (
 	"log"
+	"os"
 
 	"github-cmdb/internal/platform/config"
 	"github-cmdb/internal/platform/database"
 	"github-cmdb/internal/platform/httpserver"
+	"github-cmdb/internal/web"
 	"github.com/gin-gonic/gin"
 )
 
@@ -25,11 +27,23 @@ func main() {
 		log.Fatalf("连接数据库失败：%v", err)
 	}
 
-	server := httpserver.New(httpserver.Dependencies{
+	server, err := buildServer(httpserver.Dependencies{
 		Database:  db,
 		JWTSecret: configuration.JWTSecret,
-	})
+	}, os.Getenv("STATIC_DIR"))
+	if err != nil {
+		log.Fatalf("装配 HTTP 服务失败：%v", err)
+	}
 	if err := server.Run(":" + configuration.Server.Port); err != nil {
 		log.Fatalf("启动 HTTP 服务失败：%v", err)
 	}
+}
+
+// buildServer 在同一服务中装配 API 与可选静态页面；显式静态目录损坏时拒绝带缺失页面启动。
+func buildServer(dependencies httpserver.Dependencies, staticDir string) (*gin.Engine, error) {
+	server := httpserver.New(dependencies)
+	if err := web.Mount(server, staticDir); err != nil {
+		return nil, err
+	}
+	return server, nil
 }

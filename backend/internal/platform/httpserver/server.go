@@ -2,6 +2,8 @@
 package httpserver
 
 import (
+	"net/http"
+
 	"github-cmdb/internal/identity"
 	"github-cmdb/internal/project"
 	"github.com/gin-gonic/gin"
@@ -20,6 +22,10 @@ type Dependencies struct {
 func New(dependencies Dependencies) *gin.Engine {
 	engine := gin.New()
 	engine.Use(gin.Recovery())
+	// 健康检查只报告进程存活，不暴露数据库配置，也不要求部署探针持有用户凭证。
+	engine.GET("/health", func(c *gin.Context) {
+		c.JSON(http.StatusOK, gin.H{"status": "ok"})
+	})
 
 	repository := dependencies.UserRepository
 	var projectRepository project.Repository
