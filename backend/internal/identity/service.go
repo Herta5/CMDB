@@ -22,6 +22,9 @@ var (
 // defaultTokenLifetime 限制会话可被盗用的时间窗口，同时保证每个 JWT 都带有到期时间。
 const defaultTokenLifetime = 24 * time.Hour
 
+// missingUserPasswordHash 是仅用于补齐 bcrypt 工作量的固定有效哈希，绝不对应可登录用户或写入响应、日志。
+const missingUserPasswordHash = "$2a$10$N9qo8uLOickgx2ZMRZoMyeIjZAgcfl7p92ldGxad68LJZdL17lhWy"
+
 // UserClaims 是 JWT 中唯一允许保存的身份信息；不要向其中添加用户名或任何敏感字段。
 type UserClaims struct {
 	UserID     uint64 `json:"user_id"`
@@ -53,12 +56,20 @@ func (s *Service) Login(ctx context.Context, username, password string) (*User, 
 
 	user, err := s.repository.FindByUsername(ctx, username)
 	if errors.Is(err, gorm.ErrRecordNotFound) {
+		// 不存在用户也执行一次与真实用户同成本的 bcrypt 比较，避免由耗时枚举登录名。
+		_ = VerifyPassword(missingUserPasswordHash, password)
 		return nil, "", ErrInvalidCredentials
 	}
 	if err != nil {
 		return nil, "", err
 	}
-	if user == nil || user.Status != "active" || !VerifyPassword(user.PasswordHash, password) {
+	if user == nil {
+		// 异常仓储结果同样不能降低认证工作量或泄露内部状态。
+		_ = VerifyPassword(missingUserPasswordHash, password)
+		return nil, "", ErrInvalidCredentials
+	}
+	passwordMatches := VerifyPassword(user.PasswordHash, password)
+	if user.Status != "active" || !passwordMatches {
 		return nil, "", ErrInvalidCredentials
 	}
 
@@ -82,7 +93,7 @@ func (s *Service) CurrentUser(ctx context.Context, claims UserClaims) (*User, er
 	if err != nil {
 		return nil, err
 	}
-	if user == nil {
+	if user == nil || user.Status != "active" {
 		return nil, ErrAuthenticatedUserNotFound
 	}
 	return user, nil
