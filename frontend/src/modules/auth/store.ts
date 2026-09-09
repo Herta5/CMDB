@@ -9,6 +9,7 @@ export const useAuthStore = defineStore('cmdb-auth', () => {
   const state = shallowRef({ session: readAuthSession(), version: 0 })
   const token = computed(() => state.value.session?.token ?? '')
   const currentUser = computed(() => state.value.session?.currentUser ?? null)
+  const sessionId = computed(() => state.value.session?.sessionId ?? null)
   const sessionVersion = computed(() => state.value.version)
   if (!state.value.session) clearAuthStorage()
 
@@ -19,9 +20,7 @@ export const useAuthStore = defineStore('cmdb-auth', () => {
 
   /** 接受服务端已验证会话；相同令牌重新登录仍是新会话，旧请求不能将其注销。 */
   function acceptSession(nextToken: string, nextUser: CurrentUser) {
-    const nextSession = { token: nextToken, currentUser: { ...nextUser } }
-    saveAuthSession(nextSession.token, nextSession.currentUser)
-    replaceSession(nextSession)
+    replaceSession(saveAuthSession(nextToken, nextUser))
   }
 
   /** 提交登录信息；密码仅穿透到接口层，不保留在 Pinia 或本地存储中。 */
@@ -47,9 +46,10 @@ export const useAuthStore = defineStore('cmdb-auth', () => {
   }
 
   /** 先补齐可能尚未送达的外部会话事件，旧 401 不能删除另一标签页刚建立的会话。 */
-  function expireSession(version: number): boolean {
+  function expireSession(requestSessionId: string | null): boolean {
     synchronizeStoredSession()
-    if (state.value.version !== version) return false
+    // 请求必须属于跨标签页共享的同一次登录，本地递增版本无法识别另一标签页的相同令牌重登。
+    if (sessionId.value !== requestSessionId) return false
     logout()
     return true
   }
@@ -70,5 +70,5 @@ export const useAuthStore = defineStore('cmdb-auth', () => {
   browser?.addEventListener?.('storage', synchronizeStorage)
   onScopeDispose(() => browser?.removeEventListener?.('storage', synchronizeStorage))
 
-  return { token, currentUser, sessionVersion, acceptSession, signIn, refreshCurrentUser, logout, expireSession }
+  return { token, currentUser, sessionId, sessionVersion, acceptSession, signIn, refreshCurrentUser, logout, expireSession }
 })

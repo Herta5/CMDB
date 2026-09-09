@@ -62,6 +62,66 @@ function notifyStorage(key: string | null = 'cmdb.auth.session') {
 }
 
 describe('跨标签页与在途请求的身份隔离', () => {
+  it.each(['事件已送达', '事件未送达'])('两标签页使用相同用户和令牌重新登录后，旧 401 不得删除新会话：%s', async delivery => {
+    const tabA = useAuthStore()
+    await tabA.signIn('user-a', '测试输入')
+    const projectsA = useProjectStore()
+    await projectsA.loadProjects()
+    await projectsA.loadProject(1)
+    const original = request.defaults.adapter as (config: any) => Promise<AxiosResponse>
+    const sent = deferred<void>(), release = deferred<void>()
+    request.defaults.adapter = async config => {
+      if (config.url === '/projects') {
+        sent.resolve()
+        await release.promise
+        const response: AxiosResponse = { config, status: 401, statusText: '认证失效', headers: {}, data: { message: '身份认证已失效' } }
+        throw new AxiosError('身份认证已失效', undefined, config, undefined, response)
+      }
+      return original(config)
+    }
+    const pendingA = projectsA.loadProjects()
+    await sent.promise
+
+    // 第二个 Pinia 实例模拟另一标签页，只共享持久化存储，不共享内存会话版本。
+    const piniaB = createPinia()
+    setActivePinia(piniaB)
+    try {
+      const tabB = useAuthStore()
+      await tabB.signIn('user-a', '测试输入')
+      expect(tabB.token === tabA.token).toBe(true)
+      expect(tabB.currentUser?.id).toBe(tabA.currentUser?.id)
+      if (delivery === '事件已送达') {
+        notifyStorage()
+        // 即便用户和令牌未变，新登录事件也应立即丢弃旧项目上下文，不能等 401 才清理。
+        expect(projectsA.detail).toBeNull()
+        expect(projectsA.currentProjectId).toBeNull()
+      }
+      release.resolve()
+      await pendingA
+
+      // 先验证共享存储，直接捕获旧请求删除新登录的后果；失败时不输出会话内容。
+      expect(localStorage.getItem('cmdb.auth.session') !== null).toBe(true)
+      notifyStorage()
+      expect(tabA.currentUser?.id).toBe(1)
+      expect(tabB.currentUser?.id).toBe(1)
+      expect(projectsA.projects).toEqual([])
+      expect(projectsA.detail).toBeNull()
+      expect(projectsA.currentProjectId).toBeNull()
+      expect(window.location.href).toBe('/projects')
+    } finally {
+      disposePinia(piniaB)
+      setActivePinia(pinia!)
+    }
+  })
+
+  it('缺少独立会话标识的旧快照必须重新登录，不能恢复不可区分的登录会话', () => {
+    localStorage.setItem('cmdb.auth.session', JSON.stringify({ token: tokens[0], currentUser: users[0] }))
+    const auth = useAuthStore()
+    expect(auth.currentUser).toBeNull()
+    expect(auth.token.length).toBe(0)
+    expect(localStorage.getItem('cmdb.auth.session')).toBeNull()
+  })
+
   it('外部会话事件尚未送达时，请求仍使用页面正在显示的身份', async () => {
     const auth = useAuthStore()
     await auth.signIn('user-a', '测试输入')

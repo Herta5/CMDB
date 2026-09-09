@@ -15,6 +15,8 @@ const legacyAuthStorageKeys = [
 
 /** 单键会话防止跨标签页分别收到令牌和用户事件时拼接两个不同身份。 */
 export interface StoredAuthSession {
+  // 仅区分登录批次，不是服务端凭证；相同 JWT 的再次登录也必须获得不同标识。
+  sessionId: string
   token: string
   currentUser: CurrentUser
 }
@@ -25,16 +27,17 @@ export function clearAuthStorage() {
   legacyAuthStorageKeys.forEach(key => localStorage.removeItem(key))
 }
 
-/** 只恢复完整且格式有效的单键会话；旧版分离键无法证明配对，必须重新登录。 */
+/** 只恢复带独立标识的完整会话；旧快照无法区分重复登录，必须重新登录建立新边界。 */
 export function readAuthSession(): StoredAuthSession | null {
   try {
     const value = JSON.parse(localStorage.getItem(authSessionStorageKey) || 'null')
     const user = value?.currentUser
-    if (typeof value?.token === 'string' && value.token.trim() &&
+    if (typeof value?.sessionId === 'string' && /^[0-9a-f]{32}$/.test(value.sessionId) &&
+      typeof value.token === 'string' && value.token.trim() &&
       typeof user?.id === 'number' && Number.isSafeInteger(user.id) && user.id > 0 &&
       typeof user.username === 'string' && user.username.length > 0 &&
       (user.globalRole === 'system_admin' || user.globalRole === 'user')) {
-      return { token: value.token, currentUser: user }
+      return { sessionId: value.sessionId, token: value.token, currentUser: user }
     }
   } catch {
     // 损坏资料按未登录处理，不能让本地解析异常阻断登录入口。
@@ -42,8 +45,12 @@ export function readAuthSession(): StoredAuthSession | null {
   return null
 }
 
-/** 一次存储写入发布完整会话；清理旧键不会触发新版会话监听，避免出现半个新身份。 */
-export function saveAuthSession(token: string, currentUser: CurrentUser) {
+/** 每次接受会话都生成新的非秘密标识，再一次写入完整快照，让其他标签页识别相同令牌的重新登录。 */
+export function saveAuthSession(token: string, currentUser: CurrentUser): StoredAuthSession {
+  // getRandomValues 在普通 HTTP 部署也可使用，避免依赖仅安全上下文提供的 randomUUID。
+  const sessionId = Array.from(crypto.getRandomValues(new Uint8Array(16)), value => value.toString(16).padStart(2, '0')).join('')
+  const session = { sessionId, token, currentUser: { ...currentUser } }
   legacyAuthStorageKeys.forEach(key => localStorage.removeItem(key))
-  localStorage.setItem(authSessionStorageKey, JSON.stringify({ token, currentUser }))
+  localStorage.setItem(authSessionStorageKey, JSON.stringify(session))
+  return session
 }
