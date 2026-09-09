@@ -1,103 +1,33 @@
-import { createRouter, createWebHistory } from 'vue-router'
-import { useAuthStore } from '@/stores/auth'
+// 本文件定义新版 CMDB 的认证路由边界；项目与资源页面将在对应领域模块交付时接入。
+import { createRouter, createWebHistory, type RouteRecordRaw } from 'vue-router'
+import { h } from 'vue'
 
-const routes = [
+import { useAuthStore } from '@/modules/auth/store'
+
+/**
+ * 此占位路由仅表示认证已通过，不承担控制台或项目展示职责，避免认证基础先行恢复旧版页面。
+ */
+const AuthenticatedPlaceholder = {
+  name: 'AuthenticatedPlaceholder',
+  render: () => h('main', { class: 'authenticated-placeholder', 'aria-live': 'polite' }, '身份认证成功，正在加载 CMDB。'),
+}
+
+const routes: RouteRecordRaw[] = [
+  {
+    path: '/',
+    name: 'AuthenticatedHome',
+    component: AuthenticatedPlaceholder,
+    meta: { requiresAuth: true, title: 'CMDB' },
+  },
   {
     path: '/login',
     name: 'Login',
-    component: () => import('@/views/Login.vue'),
-    meta: { title: '登录' },
+    component: () => import('@/modules/auth/LoginPage.vue'),
+    meta: { requiresAuth: false, title: '登录' },
   },
   {
-    path: '/',
-    component: () => import('@/components/AppLayout.vue'),
-    redirect: '/dashboard',
-    children: [
-      {
-        path: 'dashboard',
-        name: 'Dashboard',
-        component: () => import('@/views/Dashboard.vue'),
-        meta: { title: '仪表盘', icon: 'Odometer' },
-      },
-      {
-        path: 'ci-types',
-        name: 'CITypes',
-        component: () => import('@/views/CITypeList.vue'),
-        meta: { title: '资产类型', icon: 'Collection' },
-      },
-      {
-        path: 'ci-instances',
-        name: 'CIInstances',
-        component: () => import('@/views/CIInstanceList.vue'),
-        meta: { title: '资产列表', icon: 'Monitor' },
-      },
-      {
-        path: 'ci-instances/:id',
-        name: 'CIInstanceDetail',
-        component: () => import('@/views/CIInstanceDetail.vue'),
-        meta: { title: '实例详情', hidden: true },
-      },
-      {
-        path: 'relations',
-        name: 'Relations',
-        component: () => import('@/views/RelationList.vue'),
-        meta: { title: '关系管理', icon: 'Connection' },
-      },
-      {
-        path: 'relations/topology',
-        name: 'Topology',
-        component: () => import('@/views/Topology.vue'),
-        meta: { title: '拓扑图谱', icon: 'Share' },
-      },
-      {
-        path: 'changes',
-        name: 'ChangeList',
-        component: () => import('@/views/ChangeList.vue'),
-        meta: { title: '变更管理', icon: 'Document' },
-      },
-      {
-        path: 'changes/:id',
-        name: 'ChangeDetail',
-        component: () => import('@/views/ChangeDetail.vue'),
-        meta: { title: '变更详情', hidden: true },
-      },
-      {
-        path: 'discovery/strategies',
-        name: 'DiscoveryStrategy',
-        component: () => import('@/views/DiscoveryStrategy.vue'),
-        meta: { title: '采集策略', icon: 'Search' },
-      },
-      {
-        path: 'discovery/history',
-        name: 'DiscoveryHistory',
-        component: () => import('@/views/DiscoveryHistory.vue'),
-        meta: { title: '采集历史', hidden: true },
-      },
-      {
-        path: 'snapshots',
-        name: 'SnapshotDiff',
-        component: () => import('@/views/SnapshotDiff.vue'),
-        meta: { title: '配置快照', icon: 'Timer' },
-      },
-      {
-        path: 'integrations',
-        name: 'IntegrationSettings',
-        component: () => import('@/views/IntegrationSettings.vue'),
-        meta: { title: '集成中心', icon: 'Connection' },
-      },
-      {
-        path: 'users',
-        name: 'UserManagement',
-        component: () => import('@/views/UserManagement.vue'),
-        meta: { title: '用户管理', icon: 'User', roles: ['cmdb_admin'] },
-      },
-      {
-        path: 'audit',
-        name: 'AuditLog',
-        component: () => import('@/views/AuditLog.vue'),
-        meta: { title: '审计日志', icon: 'List', roles: ['cmdb_admin'] },
-      },
-    ],
+    path: '/:pathMatch(.*)*',
+    redirect: '/',
   },
 ]
 
@@ -106,14 +36,26 @@ const router = createRouter({
   routes,
 })
 
-router.beforeEach((to, _from, next) => {
-  document.title = (to.meta.title as string) + ' - CMDB' || 'CMDB'
+/**
+ * 未登录请求一律在进入业务页面前跳转登录，并保留站内目标；
+ * 已登录用户访问登录页则回到原目标，避免形成无意义的登录循环。
+ */
+router.beforeEach((to) => {
+  if (typeof document !== 'undefined') {
+    document.title = to.meta.title ? `${String(to.meta.title)} - CMDB` : 'CMDB'
+  }
+
   const auth = useAuthStore()
-  if (to.path === '/login') { next(); return }
-  if (!auth.token) { next('/login'); return }
-  const requiredRoles = to.meta.roles as string[] | undefined
-  if (requiredRoles && !auth.canAccessRoles(requiredRoles)) { next('/dashboard'); return }
-  next()
+  if (to.meta.requiresAuth !== false && !auth.token) {
+    return { name: 'Login', query: { redirect: to.fullPath } }
+  }
+
+  if (to.name === 'Login' && auth.token) {
+    const redirect = to.query.redirect
+    return typeof redirect === 'string' && redirect.startsWith('/') && !redirect.startsWith('//') ? redirect : '/'
+  }
+
+  return true
 })
 
 export default router
