@@ -40,6 +40,9 @@ export const useProjectStore = defineStore('cmdb-project', () => {
     return true
   }
 
+  /** 当前详情无法访问时清空上下文和持久化，避免继续暗示另一个项目是页面归属。 */
+  function clearSelection() { saveSelection(null) }
+
   /** 恢复有效选择，并用请求版本阻止旧会话或旧刷新的响应覆盖新状态。 */
   async function loadProjects() {
     const version = ++listVersion
@@ -90,5 +93,5 @@ export const useProjectStore = defineStore('cmdb-project', () => {
     listState.value = 'idle'
     detailState.value = 'idle'
   }, { flush: 'sync' })
-  return { projects, currentProjectId, currentProject, listState, detail, detailState, loadProjects, selectProject, loadProject }
+  return { projects, currentProjectId, currentProject, listState, detail, detailState, loadProjects, selectProject, clearSelection, loadProject }
 })

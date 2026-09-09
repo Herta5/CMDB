@@ -14,6 +14,7 @@ const switcherPlaceholder = computed(() => {
   if (projects.listState === 'loading') return '正在加载项目…'
   if (projects.listState === 'error') return '项目加载失败'
   if (projects.listState === 'forbidden') return '无权访问项目'
+  if (projects.listState === 'ready') return route.params.projectId ? '当前项目不可访问' : '请选择业务项目'
   return '暂无可访问的项目'
 })
 
@@ -22,10 +23,12 @@ watch(() => [auth.currentUser?.id, auth.token], () => {
   if (auth.token) void projects.loadProjects()
 }, { immediate: true })
 
-// 直接打开详情链接时也同步顶部上下文，避免详情与当前项目指向不同边界。
-watch(() => [route.params.projectId, projects.listState], () => {
+// 直达或历史导航都同步上下文；未知项目和详情授权失败时不能保留另一项目的选择。
+watch(() => [route.params.projectId, projects.listState, projects.detailState], () => {
   if (projects.listState === 'ready' && route.params.projectId) {
-    projects.selectProject(Number(route.params.projectId))
+    if (projects.detailState === 'forbidden' || !projects.selectProject(Number(route.params.projectId))) {
+      projects.clearSelection()
+    }
   }
 }, { immediate: true })
 

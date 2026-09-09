@@ -66,6 +66,69 @@ async function mount(component: Component, path = '/projects') {
 }
 
 describe('项目控制台页面', () => {
+  // 相同地址下换用户或更新令牌都必须重新授权，不能只依赖路由变化。
+  it.each([
+    [4, '用户切换后的资料'], [1, '令牌更新后的资料'],
+  ])('详情地址不变时，会话用户 %s 的有效新会话重新加载详情', async (userId, name) => {
+    get.mockImplementation(() => Promise.resolve(useAuthStore().token === '更新后的会话' ? { ...fixture, name } : fixture))
+    const { root, app, router } = await mount(ProjectDetailPage, '/projects/2')
+    expect(text(root)).toContain('平台项目')
+    useAuthStore().acceptSession('更新后的会话', { id: userId as number, username: 'operator', globalRole: 'user' })
+    await flush()
+    expect(router.currentRoute.value.path).toBe('/projects/2')
+    expect(useProjectStore().detailState).toBe('ready')
+    expect(text(root)).toContain(name)
+    expect(text(root)).not.toContain('正在加载项目详情')
+    app.unmount()
+  })
+  it('会话切换触发详情重载后，上一会话的晚到响应不覆盖新资料', async () => {
+    let resolvePrevious!: (value: unknown) => void
+    get.mockReturnValueOnce(new Promise(resolve => { resolvePrevious = resolve })).mockResolvedValueOnce({ ...fixture, name: '新会话项目资料' })
+    const { root, app } = await mount(ProjectDetailPage, '/projects/2')
+    expect(useProjectStore().detailState).toBe('loading')
+    useAuthStore().acceptSession('新会话', { id: 4, username: 'viewer', globalRole: 'user' })
+    await flush()
+    resolvePrevious(fixture)
+    await flush()
+    expect(useProjectStore().detailState).toBe('ready')
+    expect(text(root)).toContain('新会话项目资料')
+    expect(text(root)).not.toContain('平台项目')
+    app.unmount()
+  })
+  it.each([2, 999])('直接打开不可访问项目 %s 时清空顶部选择，不沿用另一项目', async id => {
+    get.mockImplementation((url: string) => url === '/projects' ? Promise.resolve([fixture]) : Promise.reject({ response: { status: 404 } }))
+    const { root, app } = await mount(ConsoleLayout, `/projects/${id}`)
+    expect(text(root)).toContain('项目不可访问')
+    expect(useProjectStore().currentProjectId).toBeNull()
+    expect(localStorage.getItem('cmdb.currentProjectId')).toBeNull()
+    const switcher = all(root).find(n => n.type === 'select' && n.props['aria-label'] === '当前业务项目')!
+    expect(switcher.props.value).toBe('')
+    expect(text(switcher)).toContain('当前项目不可访问')
+    app.unmount()
+  })
+  it('浏览器后退和前进时，顶部上下文跟随详情权限恢复或清空', async () => {
+    get.mockImplementation((url: string) => url === '/projects' ? Promise.resolve([fixture]) : url === '/projects/2' ? Promise.resolve(fixture) : Promise.reject({ response: { status: 404 } }))
+    const { app, router } = await mount(ConsoleLayout, '/projects/2')
+    expect(useProjectStore().currentProjectId).toBe(2)
+    await router.push('/projects/999')
+    await flush()
+    expect(useProjectStore().currentProjectId).toBeNull()
+    // 等待实际历史导航完成，不用固定延时猜测路由调度时机。
+    async function travel(delta: number) {
+      await new Promise<void>(resolve => {
+        const remove = router.afterEach(() => { remove(); resolve() })
+        router.go(delta)
+      })
+      await flush()
+    }
+    await travel(-1)
+    expect(router.currentRoute.value.path).toBe('/projects/2')
+    expect(useProjectStore().currentProjectId).toBe(2)
+    await travel(1)
+    expect(router.currentRoute.value.path).toBe('/projects/999')
+    expect(useProjectStore().currentProjectId).toBeNull()
+    app.unmount()
+  })
   it.each([
     ['loading', '正在加载项目'], ['empty', '暂无可访问的项目'],
     ['error', '项目加载失败'], ['forbidden', '无权访问项目列表'],

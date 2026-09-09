@@ -2,14 +2,19 @@
 // 项目详情始终按路由重新请求授权资料，不将列表缓存当作详情访问凭据。
 import { watch } from 'vue'
 import { useRoute } from 'vue-router'
+import { useAuthStore } from '@/modules/auth/store'
 import { useProjectStore } from './store'
 
+const auth = useAuthStore()
 const store = useProjectStore()
 const route = useRoute()
 
-/** 每次重试均以当前路由为准，防止快速切换时重试上一项目。 */
-function reload() { return store.loadProject(Number(route.params.projectId)) }
-watch(() => route.params.projectId, () => { void reload() }, { immediate: true })
+/** 每次请求以有效会话和当前路由为准，登出期间不能重新发起项目访问。 */
+function reload() {
+  if (auth.token && auth.currentUser) return store.loadProject(Number(route.params.projectId))
+}
+// 会话切换会先由状态层同步作废在途响应；即使地址不变，页面也必须重新授权并加载。
+watch(() => [route.params.projectId, auth.currentUser?.id, auth.token], () => { void reload() }, { immediate: true })
 
 /** 日期按用户本地时区展示，缺失或无效值使用中文占位。 */
 function formatDate(value: string): string {
