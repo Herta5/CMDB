@@ -1,11 +1,11 @@
-FROM golang:1.23-alpine AS builder
+FROM registry.aliyuncs.com/acheron/golang:1.25-alpine AS builder
 WORKDIR /app
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
 RUN CGO_ENABLED=0 GOOS=linux go build -buildvcs=false -o cmdb-server ./cmd/server
 
-FROM alpine:3.19
+FROM registry.aliyuncs.com/acheron/alpine:latest
 RUN apk --no-cache add ca-certificates tzdata
 ENV TZ=Asia/Shanghai
 WORKDIR /app
