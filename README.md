@@ -1,58 +1,80 @@
-# CMDB - 企业级配置管理数据库系统
+# CMDB
 
-基于 Gin + Vue 3 + MySQL 8.4 构建的 IT 资产与配置管理平台，适用于 500+ 服务器规模的企业基础设施。
+CMDB 是面向公有云和 Kubernetes 的云资源配置管理平台，业务项目是最高级的数据归属和权限隔离边界。
 
-## 快速开始
+当前交付第一阶段基础能力：用户名密码登录、当前身份查询、业务项目管理、项目成员与角色授权，以及带项目切换的控制台项目列表和详情页。项目创建、修改、删除及成员管理目前通过 API 操作，页面提供查询与项目切换。阿里云、AWS 和 Kubernetes 采集及资源管理尚未交付；三者将在同一个 CMDB 服务内按独立模块接入共享资源核心。
 
-### 1. 环境要求
+## 技术栈
 
-| 组件 | 版本 |
-|------|------|
-| Go | 1.25.1+ |
-| Node.js | 18+ |
-| MySQL | 8.4 |
-| Docker (可选) | 24+ |
+后端使用 Go 1.25.1、Gin、GORM；前端使用 Vue 3、TypeScript、Pinia、Vue Router、Element Plus；数据库使用 MySQL 8.4。Docker Compose 启动一个 MySQL 容器和一个同时提供前端静态文件与 API 的应用容器。
 
-### 2. 方式一：Docker Compose（推荐）
+## 从空库部署
+
+需要 Docker Engine、Docker Compose、Bash 和 OpenSSL。新版使用独立的 `cmdb-foundation-mysql-data` 数据卷，只执行 `backend/migrations/100_new_cmdb_schema.sql` 建表，不创建默认账号或业务项目。已有旧版数据库不属于本阶段迁移范围，请保留旧卷及备份。
+
+先在当前终端设置部署环境，数据库密码由操作者提供，两个应用密钥独立随机生成。以下命令不会回显输入或生成值：
 
 ```bash
-# 构建并启动 MySQL + 单体应用镜像；升级时同时移除旧的前后端容器
-docker compose -p github-cmdb up -d --build --remove-orphans
+read -rsp 'MySQL root 密码：' MYSQL_ROOT_PASSWORD; echo
+read -rsp 'CMDB 数据库用户密码：' DB_PASSWORD; echo
+export MYSQL_ROOT_PASSWORD DB_PASSWORD
+export JWT_SECRET="$(openssl rand -hex 32)"
+export CMDB_ENCRYPTION_KEY="$(openssl rand -hex 32)"
 
-# 查看日志
-docker compose logs -f
+# 请将这四个值保存在部署环境的安全配置中；后续重启沿用原值，不要重新生成。
+docker compose config --quiet
+docker compose up -d --build
+docker compose ps
 ```
 
-访问 `http://服务器IP`（本机访问 `http://localhost`），首次启动自动创建默认账号 `admin / admin123`。
+所有四个安全变量均无默认值，缺失或为空时 Compose 拒绝启动。应用使用独立的 `cmdb` 数据库用户，MySQL 不对宿主机公开端口。普通 `docker compose config` 会展开环境值，请使用 `--quiet` 验证配置，避免将输出贴入日志、工单或版本库。生产环境应在入口代理配置 HTTPS。
 
-Docker Compose 会启动独立的 MySQL 容器和一个应用镜像。该应用镜像同时包含前端静态文件与 Go 后端，由 Go 在 80 端口同时提供 UI 和 API；MySQL 3306 仅在容器内部网络开放。当前未提供 Kubernetes 部署配置。
+MySQL 首次就绪后，显式创建第一个系统管理员。用户名可自行选择，密码必须为 12 至 72 字节；密码通过标准输入传入，不使用命令行参数，也不写入应用环境：
 
-从旧版前端/后端双容器升级时，请使用上面的 `--remove-orphans` 命令清理旧容器，避免它们继续占用 80 端口。请勿执行 `docker compose down -v`，以保留现有的 MySQL 数据卷。
+```bash
+read -rsp '首次系统管理员密码：' CMDB_INITIAL_PASSWORD; echo
+printf '%s' "$CMDB_INITIAL_PASSWORD" | docker compose exec -T app ./cmdb-init-admin --username operator
+unset CMDB_INITIAL_PASSWORD
+```
 
-### 3. 方式二：本地开发
+初始化命令只保存 bcrypt 哈希；只要 `users` 表已有任何用户就会拒绝再次执行，不修改或覆盖已有身份。此命令不提供用户管理或密码重置功能。当前尚无用户创建页面或 API，额外用户需由受控运维流程向新版 `users` 表配置有效 bcrypt 哈希及身份资料，随后管理员可通过成员 API 授权；不得使用旧版用户接口。
 
-**后端:**
+打开 [CMDB 控制台](http://localhost:8080)，用刚创建的身份登录。空库首次登录显示空项目状态；系统管理员通过项目 API 创建项目后即可在页面查看。端口可通过 `CMDB_PORT` 覆盖。健康检查地址为 `/health`，仅报告 HTTP 进程存活，不代表数据库或下游服务就绪。
+
+数据库初始化 SQL 只在新数据卷首次启动时执行；已有空卷或外部数据库需由运维显式执行同一迁移文件。服务不运行旧版迁移，也不会自动迁移或覆盖现有表。停止服务使用 `docker compose down`，不要附加 `-v`，以保留数据。
+
+## API 与权限
+
+除登录和健康检查外，请求均通过 `Authorization: Bearer <会话令牌>` 认证。登录响应仅包含会话令牌与公开身份资料。API 直接返回 JSON 数据，失败返回稳定的 `code` 与中文 `message`。
+
+| 方法 | 路径 | 权限与用途 |
+| --- | --- | --- |
+| POST | `/api/v1/auth/login` | 用户名密码登录 |
+| GET | `/api/v1/me` | 当前登录身份 |
+| GET | `/api/v1/projects` | 系统管理员查看全部；普通用户仅查看所属项目 |
+| POST | `/api/v1/projects` | 系统管理员创建项目，必填 `code`、`name` |
+| GET | `/api/v1/projects/:id` | 系统管理员或该项目成员查看详情 |
+| PUT | `/api/v1/projects/:id` | 系统管理员修改项目；`code` 创建后不可变 |
+| DELETE | `/api/v1/projects/:id` | 系统管理员删除项目 |
+| GET | `/api/v1/projects/:id/members` | 系统管理员或该项目成员查看成员 |
+| POST | `/api/v1/projects/:id/members` | 系统管理员或项目管理员添加成员，提供 `user_id`、`role` |
+| PUT | `/api/v1/projects/:id/members/:user_id` | 系统管理员或项目管理员修改 `role` |
+| DELETE | `/api/v1/projects/:id/members/:user_id` | 系统管理员或项目管理员移除成员 |
+
+全局角色为 `system_admin`、`user`；项目角色为 `project_admin`、`member`、`viewer`。系统管理员是显式全局权限例外；普通用户必须具有对应项目成员关系，前端切换项目不授予权限。未授权项目与不存在项目返回相同错误以隐藏目标存在性，移除成员后原会话的项目权限立即失效。
+
+审计表已建立，但完整审计写入、云凭证加密、接入源、同步任务及资源生命周期属于后续阶段，当前不宣称这些能力可用。`CMDB_ENCRYPTION_KEY` 已作为必需部署配置预留。
+
+## 本地开发与验证
+
+后端需要可连接的 MySQL 8.4 和已执行新版迁移的数据库；设置 `DB_HOST`、`DB_PORT`、`DB_USER`、`DB_PASSWORD`、`DB_NAME`、`JWT_SECRET`、`CMDB_ENCRYPTION_KEY`。`SERVER_PORT` 默认 `8080`，本地独立前端开发不设置 `STATIC_DIR`。
 
 ```bash
 cd backend
-
-# 设置环境变量 (Windows PowerShell)
-$env:DB_HOST='127.0.0.1'
-$env:DB_PORT='3306'
-$env:DB_USER='root'
-$env:DB_PASSWORD='your-password'
-$env:DB_NAME='cmdb'
-$env:JWT_SECRET='your-secret-key'
-
-# 下载依赖 & 构建
-go mod tidy
-go build -o cmdb-server.exe ./cmd/server
-
-# 运行
-./cmdb-server.exe
+go run ./cmd/server
 ```
 
-**前端:**
+前端要求 Node.js 20 与 Corepack，在另一个终端运行：
 
 ```bash
 cd frontend
@@ -60,149 +82,18 @@ corepack pnpm install --frozen-lockfile
 corepack pnpm dev
 ```
 
-前端开发服务器运行在 http://localhost:3000，自动代理 API 到后端 8080 端口。
-
-### 4. 初始化数据
-
-Docker Compose 启动时会自动执行 `backend/migrations/001_seed.sql` 初始化 CI 类型、属性和关系规则。默认管理员账号由 `SeedDefaultAdmin()` 在首次迁移时自动创建。
-
-本地开发时可手动导入：
+[开发控制台](http://localhost:3000) 将 `/api` 请求代理至本机后端 `8080` 端口。
 
 ```bash
-mysql -u root -p cmdb < backend/migrations/001_seed.sql
+# 后端测试使用隔离 SQLite 数据库，需要本机 C 编译器，不依赖真实云账号或集群。
+cd backend
+go test ./...
+
+# 前端验证：状态与应用流程、类型检查、生产构建。
+cd ../frontend
+corepack pnpm test
+corepack pnpm exec vue-tsc --noEmit
+corepack pnpm build
 ```
 
-## 项目结构
-
-```
-github-cmdb/
-├── backend/                    # Go 后端
-│   ├── cmd/server/main.go      # 入口
-│   ├── internal/
-│   │   ├── config/             # 配置
-│   │   ├── model/              # 数据模型 (GORM)
-│   │   ├── handler/            # HTTP Handler
-│   │   ├── service/            # 业务逻辑
-│   │   ├── repository/         # 数据访问
-│   │   ├── middleware/         # JWT/RBAC/CORS/审计
-│   │   ├── collector/          # 自动发现采集器
-│   │   ├── eventbus/           # 事件总线
-│   │   └── router/             # 路由定义
-│   ├── migrations/             # SQL 初始化脚本
-│   └── pkg/response/           # 统一响应格式
-├── frontend/                   # Vue 3 前端
-│   ├── src/
-│   │   ├── views/              # 页面组件
-│   │   ├── components/         # 公共组件
-│   │   ├── api/                # API 封装
-│   │   ├── router/             # 路由
-│   │   ├── stores/             # Pinia 状态
-│   │   └── utils/              # 工具(axios)
-│   └── vite.config.ts
-└── docker-compose.yml
-```
-
-## API 概览
-
-### 认证
-| 方法 | 路径 | 说明 |
-|------|------|------|
-| POST | `/api/v1/auth/login` | 登录获取 Token |
-
-### 用户管理 (Phase 5)
-| 方法 | 路径 | 说明 |
-|------|------|------|
-| GET  | `/api/v1/users` | 用户列表 (分页+筛选) |
-| POST | `/api/v1/users` | 创建用户 |
-| GET  | `/api/v1/users/:id` | 用户详情 |
-| PUT  | `/api/v1/users/:id` | 更新用户 |
-| DELETE | `/api/v1/users/:id` | 删除用户 |
-| PUT  | `/api/v1/users/:id/password` | 管理员重置密码 |
-| PUT  | `/api/v1/profile/password` | 当前用户自助修改密码 |
-
-### CI 管理
-| 方法 | 路径 | 说明 |
-|------|------|------|
-| GET  | `/api/v1/ci-types` | CI 类型树 |
-| POST | `/api/v1/ci-types` | 创建 CI 类型 |
-| GET  | `/api/v1/ci-types/:id/attributes` | 获取类型属性 |
-| GET  | `/api/v1/ci-instances` | CI 实例列表 (支持分页/筛选) |
-| POST | `/api/v1/ci-instances` | 创建 CI 实例 |
-| GET  | `/api/v1/ci-instances/:id` | CI 实例详情 |
-| POST | `/api/v1/ci-instances/import` | CSV 批量导入 |
-| GET  | `/api/v1/ci-instances/export` | CSV 批量导出 |
-
-### 关系与拓扑
-| 方法 | 路径 | 说明 |
-|------|------|------|
-| GET  | `/api/v1/relations/rules` | 关系规则列表 |
-| GET  | `/api/v1/relations/instances` | 关系实例列表 |
-| GET  | `/api/v1/relations/topology?ci_id=1&depth=3` | 多层拓扑图谱 (nodes+edges) |
-| GET  | `/api/v1/relations/impact?ci_id=1` | 影响分析 |
-
-### 变更管理
-| 方法 | 路径 | 说明 |
-|------|------|------|
-| POST | `/api/v1/changes` | 创建变更单 |
-| GET  | `/api/v1/changes` | 变更单列表 |
-| POST | `/api/v1/changes/:id/submit` | 提交审批 |
-| POST | `/api/v1/changes/:id/approve` | 批准变更 |
-| POST | `/api/v1/changes/:id/execute` | 执行变更 |
-| POST | `/api/v1/changes/:id/complete` | 标记完成 |
-| POST | `/api/v1/changes/:id/rollback` | 回滚变更 |
-
-### 自动发现
-目前可执行的采集器为 SSH（Agentless）主机发现；Agent 和 Kubernetes API 采集器仅保留接口占位，Cloud 采集器尚未注册。
-
-| 方法 | 路径 | 说明 |
-|------|------|------|
-| GET  | `/api/v1/discovery/collectors` | 采集器类型列表 |
-| POST | `/api/v1/discovery/strategies` | 创建发现策略 |
-| GET  | `/api/v1/discovery/strategies/:id/history` | 策略执行历史 |
-
-### 快照
-| 方法 | 路径 | 说明 |
-|------|------|------|
-| GET  | `/api/v1/snapshots` | 配置快照列表 |
-| GET  | `/api/v1/snapshots/diff?from=X&to=Y` | 快照差异对比 |
-
-### 仪表盘
-| 方法 | 路径 | 说明 |
-|------|------|------|
-| GET  | `/api/v1/dashboard/summary` | 仪表盘汇总 |
-| GET  | `/api/v1/dashboard/distribution` | CI 分布统计 |
-| GET  | `/api/v1/dashboard/trends` | 趋势数据 |
-| GET  | `/api/v1/dashboard/capacity` | 容量概览 |
-
-### 系统集成
-| 方法 | 路径 | 说明 |
-|------|------|------|
-| GET  | `/api/v1/integration/prometheus/targets` | Prometheus HTTP SD 目标 (公开) |
-| GET  | `/api/v1/integration/ansible/inventory` | Ansible 动态清单 (公开) |
-| POST | `/api/v1/integration/webhook/alertmanager` | 接收 Alertmanager 告警 (公开) |
-| POST | `/api/v1/integration/webhook/generic` | 通用 Webhook 接收端 (公开) |
-| GET  | `/api/v1/integration/webhooks` | Webhook 接收历史 |
-| GET  | `/api/v1/audit/logs` | 操作审计日志 (cmdb_admin) |
-
-## 设计决策
-
-- **EAV + JSON 混合模型**：动态属性存 JSON，高频查询字段冗余索引列，兼顾灵活性与性能
-- **MySQL CTE 递归查询**：实现拓扑影响分析，500 台规模下无需图数据库
-- **RBAC 权限**：super_admin / cmdb_admin / asset_mgr / change_op / viewer 五种角色
-- **bcrypt 密码哈希**：用户密码加盐存储，防彩虹表与暴力破解
-- **插件式采集器**：Go interface 注册模式，新增采集源无需改核心代码
-- **事件总线**：发布/订阅模式，change 状态变更和 CI 生命周期变更可被外部系统订阅
-- **审计日志**：基于 Gin 中间件，异步写入，记录用户操作、请求参数、响应状态等
-
-## MVP 路线图
-
-- **Phase 1 (已完成)**: 资产 CRUD、CI模型、RBAC、基础搜索
-- **Phase 2 (部分完成)**: SSH（Agentless）自动发现、发现策略/采集历史、配置快照 Diff；Agent、K8s 和 Cloud 采集器仍待实现
-- **Phase 3 (已完成)**: 拓扑图谱可视化、变更管理(审批流)、Dashboard、批量导入导出
-- **Phase 4 (已完成)**: 系统集成(Prometheus/Ansible/Webhook)、审计日志、事件总线
-- **Phase 5 (进行中)**: 用户管理(DB-backed登录、用户CRUD、角色分配、密码策略)
-- **Phase 6 (规划中)**: 多级审批流、集成自动化平台(Jenkins/GitLab CI)、合规报表
-
-## License
-
-MIT
+新版后端入口为 `backend/cmd/server`，一次性初始化入口为 `backend/cmd/init-admin`，基础设施、身份和项目域分别位于 `backend/internal/platform`、`identity`、`project`。新版前端位于 `frontend/src/modules/auth`、`modules/project` 和 `layouts`。仓库仍保留部分旧代码供最终验收清理，新入口不挂载旧业务路由。

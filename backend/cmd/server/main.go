@@ -1,135 +1,49 @@
+// Command server 启动 CMDB 单体服务，并仅负责装配平台基础设施。
 package main
 
 import (
 	"log"
 	"os"
-	"os/signal"
-	"syscall"
 
-	"github-cmdb/internal/collector"
-	"github-cmdb/internal/config"
-	"github-cmdb/internal/handler"
-	"github-cmdb/internal/middleware"
-	"github-cmdb/internal/model"
-	"github-cmdb/internal/repository"
-	"github-cmdb/internal/router"
-	"github-cmdb/internal/service"
+	"github-cmdb/internal/platform/config"
+	"github-cmdb/internal/platform/database"
+	"github-cmdb/internal/platform/httpserver"
 	"github-cmdb/internal/web"
 	"github.com/gin-gonic/gin"
-	"gorm.io/driver/mysql"
-	"gorm.io/gorm"
 )
 
 func main() {
-	cfg := config.Load()
-
-	db, err := gorm.Open(mysql.Open(cfg.Database.DSN()), &gorm.Config{})
+	configuration, err := config.Load()
 	if err != nil {
-		log.Fatalf("failed to connect database: %v", err)
+		log.Fatalf("加载服务配置失败：%v", err)
 	}
 
-	if err := model.MigrateRelationRuleUnique(db); err != nil {
-		log.Fatalf("failed to migrate relation rule uniqueness: %v", err)
-	}
-	if err := db.AutoMigrate(
-		&model.CIType{},
-		&model.CIAttribute{},
-		&model.CIInstance{},
-		&model.CIRelationRule{},
-		&model.CIRelationInstance{},
-		&model.ConfigSnapshot{},
-		&model.DiscoveryStrategy{},
-		&model.DiscoveryHistory{},
-		&model.ChangeTicket{},
-		&model.AuditLog{},
-		&model.WebhookRecord{},
-		&model.User{},
-	); err != nil {
-		log.Fatalf("failed to migrate: %v", err)
-	}
-	log.Println("database migration completed")
-
-	// --- Seed default admin ---
-	model.SeedDefaultAdmin(db)
-
-	// --- Repositories ---
-	ciTypeRepo := repository.NewCITypeRepo(db)
-	ciInstanceRepo := repository.NewCIInstanceRepo(db)
-	snapRepo := repository.NewConfigSnapshotRepo(db)
-	relationRepo := repository.NewRelationRepo(db)
-	discoveryRepo := repository.NewDiscoveryRepo(db)
-	changeRepo := repository.NewChangeRepo(db)
-	auditRepo := repository.NewAuditRepo(db)
-	userRepo := repository.NewUserRepo(db)
-
-	// --- Services ---
-	ciTypeSvc := service.NewCITypeSvc(ciTypeRepo)
-	ciInstanceSvc := service.NewCIInstanceSvc(ciInstanceRepo, ciTypeRepo, snapRepo)
-	relationSvc := service.NewRelationSvc(relationRepo)
-	discoverySvc := service.NewDiscoverySvc(discoveryRepo)
-	changeSvc := service.NewChangeSvc(changeRepo, ciInstanceRepo, snapRepo)
-	userSvc := service.NewUserSvc(userRepo)
-
-	// --- Handlers ---
-	ciTypeHandler := handler.NewCITypeHandler(ciTypeSvc)
-	ciInstanceHandler := handler.NewCIInstanceHandler(ciInstanceSvc)
-	relationHandler := handler.NewRelationHandler(relationSvc)
-	dashboardHandler := handler.NewDashboardHandler(ciInstanceSvc)
-	discoveryHandler := handler.NewDiscoveryHandler(discoverySvc, ciTypeRepo)
-	snapshotHandler := handler.NewSnapshotHandler(snapRepo)
-	changeHandler := handler.NewChangeHandler(changeSvc)
-	batchHandler := handler.NewBatchHandler(ciInstanceSvc)
-	integrationHandler := handler.NewIntegrationHandler(ciInstanceRepo, ciTypeRepo, auditRepo, changeSvc)
-	auditHandler := handler.NewAuditHandler(auditRepo)
-	userHandler := handler.NewUserHandler(userSvc, cfg.JWT)
-
-	// --- Discovery Executor & Scheduler ---
-	exec := collector.NewDiscoveryExecutor(ciInstanceRepo, ciTypeRepo, snapRepo, relationRepo, discoveryRepo)
-	scheduler := collector.NewScheduler(exec, discoveryRepo)
-	scheduler.Start()
-	defer scheduler.Stop()
-
-	// --- JWT Secret ---
-	middleware.SetJWTSecret(cfg.JWT.Secret)
-
-	// --- Audit Middleware ---
-	middleware.SetAuditRepo(auditRepo)
-
-	// --- Gin Engine ---
-	if cfg.Server.Mode == "release" {
+	if configuration.Server.Mode == gin.ReleaseMode {
 		gin.SetMode(gin.ReleaseMode)
 	}
-	r := gin.Default()
 
-	router.Setup(r, &router.Handlers{
-		CIType:      ciTypeHandler,
-		CIInstance:  ciInstanceHandler,
-		Relation:    relationHandler,
-		Dashboard:   dashboardHandler,
-		Discovery:   discoveryHandler,
-		Snapshot:    snapshotHandler,
-		Change:      changeHandler,
-		Batch:       batchHandler,
-		Integration: integrationHandler,
-		Audit:       auditHandler,
-		User:        userHandler,
-	})
-	if err := web.Mount(r, os.Getenv("STATIC_DIR")); err != nil {
-		log.Fatalf("failed to configure frontend: %v", err)
+	db, err := database.Open(configuration.Database)
+	if err != nil {
+		log.Fatalf("连接数据库失败：%v", err)
 	}
 
-	// --- Graceful shutdown ---
-	go func() {
-		quit := make(chan os.Signal, 1)
-		signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
-		<-quit
-		log.Println("shutting down server...")
-		scheduler.Stop()
-		os.Exit(0)
-	}()
-
-	log.Printf("server starting on :%s", cfg.Server.Port)
-	if err := r.Run(":" + cfg.Server.Port); err != nil {
-		log.Fatalf("server failed: %v", err)
+	server, err := buildServer(httpserver.Dependencies{
+		Database:  db,
+		JWTSecret: configuration.JWTSecret,
+	}, os.Getenv("STATIC_DIR"))
+	if err != nil {
+		log.Fatalf("装配 HTTP 服务失败：%v", err)
 	}
+	if err := server.Run(":" + configuration.Server.Port); err != nil {
+		log.Fatalf("启动 HTTP 服务失败：%v", err)
+	}
+}
+
+// buildServer 在同一服务中装配 API 与可选静态页面；显式静态目录损坏时拒绝带缺失页面启动。
+func buildServer(dependencies httpserver.Dependencies, staticDir string) (*gin.Engine, error) {
+	server := httpserver.New(dependencies)
+	if err := web.Mount(server, staticDir); err != nil {
+		return nil, err
+	}
+	return server, nil
 }

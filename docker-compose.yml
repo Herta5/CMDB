@@ -1,30 +1,32 @@
+# CMDB 第一阶段只初始化新版空库；安全关键配置必须由部署环境显式提供。
+name: cmdb
 services:
   mysql:
-    image: registry.aliyuncs.com/acheron/mysql:8.4
-    container_name: cmdb-mysql
+    image: mysql:8.4
     restart: unless-stopped
     environment:
-      MYSQL_ROOT_PASSWORD: cmdb-root-2024
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?请设置 MYSQL_ROOT_PASSWORD}
       MYSQL_DATABASE: cmdb
-      MYSQL_CHARSET: utf8mb4
-      MYSQL_COLLATION: utf8mb4_unicode_ci
+      MYSQL_USER: cmdb
+      MYSQL_PASSWORD: ${DB_PASSWORD:?请设置 DB_PASSWORD}
     volumes:
-      - mysql-data:/var/lib/mysql
-      - ./backend/migrations/001_seed.sql:/docker-entrypoint-initdb.d/001_seed.sql
+      # 新卷名避免新版表结构与旧部署的数据混用；旧卷由操作者保留。
+      - cmdb-foundation-mysql-data:/var/lib/mysql
+      - ./backend/migrations/100_new_cmdb_schema.sql:/docker-entrypoint-initdb.d/100_new_cmdb_schema.sql:ro
     command:
       - --character-set-server=utf8mb4
-      - --collation-server=utf8mb4_unicode_ci
+      - --collation-server=utf8mb4_0900_ai_ci
     healthcheck:
       test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
       interval: 10s
       timeout: 5s
-      retries: 5
+      retries: 10
+      start_period: 30s
 
   app:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: cmdb-app
     restart: unless-stopped
     environment:
       SERVER_PORT: "80"
@@ -32,15 +34,16 @@ services:
       GIN_MODE: release
       DB_HOST: mysql
       DB_PORT: "3306"
-      DB_USER: root
-      DB_PASSWORD: cmdb-root-2024
+      DB_USER: cmdb
+      DB_PASSWORD: ${DB_PASSWORD:?请设置 DB_PASSWORD}
       DB_NAME: cmdb
-      JWT_SECRET: cmdb-jwt-secret-change-in-production
+      JWT_SECRET: ${JWT_SECRET:?请设置 JWT_SECRET}
+      CMDB_ENCRYPTION_KEY: ${CMDB_ENCRYPTION_KEY:?请设置 CMDB_ENCRYPTION_KEY}
     ports:
-      - "80:80"
+      - "${CMDB_PORT:-8080}:80"
     depends_on:
       mysql:
         condition: service_healthy
 
 volumes:
-  mysql-data:
+  cmdb-foundation-mysql-data:

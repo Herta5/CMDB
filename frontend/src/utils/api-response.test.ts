@@ -1,6 +1,10 @@
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
+
+// 该遗留数据转换测试不渲染消息组件，替换浏览器提示依赖可避免测试运行器加载完整 UI 库后挂起。
+vi.mock('element-plus', () => ({ ElMessage: { error: vi.fn() } }))
+
 import { extractPagePayload, extractPayload, type ApiResponse, type PagePayload } from './request'
 import { parseTargetConfig } from '@/api/discovery'
 
