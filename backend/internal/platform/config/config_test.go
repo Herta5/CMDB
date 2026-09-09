@@ -48,7 +48,8 @@ func TestLoadReturnsRequiredConfiguration(t *testing.T) {
 		t.Fatalf("期望有效配置加载成功，实际为 %v", err)
 	}
 	if config.Database.Host != "127.0.0.1" || config.Database.Port != "3306" || config.Database.Name != "cmdb_test" {
-		t.Fatalf("数据库配置未按预期加载：%+v", config.Database)
+		// 失败诊断仅输出非敏感数据库定位信息，避免测试日志泄露密码。
+		t.Fatalf("数据库配置未按预期加载：host=%q, port=%q, name=%q", config.Database.Host, config.Database.Port, config.Database.Name)
 	}
 	if config.JWTSecret != "test-jwt-secret" || config.EncryptionKey != "test-encryption-key" {
 		t.Fatal("安全配置未按预期加载")
