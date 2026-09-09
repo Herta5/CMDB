@@ -1,0 +1,89 @@
+<script setup lang="ts">
+// 控制台统一维护项目上下文与身份入口，平台模块只通过内容出口接入。
+import { computed, watch } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
+import { useAuthStore } from '@/modules/auth/store'
+import { useProjectStore } from '@/modules/project/store'
+
+const auth = useAuthStore()
+const projects = useProjectStore()
+const route = useRoute()
+const router = useRouter()
+const userName = computed(() => auth.currentUser?.displayName || auth.currentUser?.username || '当前用户')
+const switcherPlaceholder = computed(() => {
+  if (projects.listState === 'loading') return '正在加载项目…'
+  if (projects.listState === 'error') return '项目加载失败'
+  if (projects.listState === 'forbidden') return '无权访问项目'
+  return '暂无可访问的项目'
+})
+
+// 每次进入控制台或更换会话都重新获取授权列表，持久化选择不能代替服务端授权。
+watch(() => [auth.currentUser?.id, auth.token], () => {
+  if (auth.token) void projects.loadProjects()
+}, { immediate: true })
+
+// 直接打开详情链接时也同步顶部上下文，避免详情与当前项目指向不同边界。
+watch(() => [route.params.projectId, projects.listState], () => {
+  if (projects.listState === 'ready' && route.params.projectId) {
+    projects.selectProject(Number(route.params.projectId))
+  }
+}, { immediate: true })
+
+/** 切换后进入对应项目详情，使页面地址和资源归属上下文保持一致。 */
+async function switchProject(event: Event) {
+  const id = Number((event.target as HTMLSelectElement).value)
+  if (projects.selectProject(id)) await router.push(`/projects/${id}`)
+}
+
+/** 退出统一清理认证状态，项目状态通过会话监听同步失效。 */
+async function logout() {
+  auth.logout()
+  await router.replace('/login')
+}
+</script>
+
+<template>
+  <div class="cmdb-console">
+    <a class="skip-link" href="#console-content">跳至主要内容</a>
+    <aside class="console-sidebar">
+      <router-link class="console-brand" to="/projects" aria-label="CMDB 项目首页">
+        <span class="brand-mark" aria-hidden="true">C</span><strong>CMDB</strong>
+        <span class="brand-caption">云资源管理</span>
+      </router-link>
+      <nav aria-label="主导航" class="console-nav">
+        <p class="nav-group-label">工作空间</p>
+        <router-link to="/projects" class="nav-item" :class="{ 'is-active': route.path === '/' || route.path.startsWith('/projects') }">
+          <span class="nav-symbol" aria-hidden="true">▦</span>业务项目
+        </router-link>
+        <p class="nav-group-label">云平台</p>
+        <!-- 平台保留清晰的一级模块位置，交付采集与资源能力前不提供不可用的页面路由。 -->
+        <button class="nav-item platform-nav" disabled><span class="platform-dot aliyun" aria-hidden="true" />阿里云<span class="nav-soon">待开放</span></button>
+        <button class="nav-item platform-nav" disabled><span class="platform-dot aws" aria-hidden="true" />AWS<span class="nav-soon">待开放</span></button>
+        <button class="nav-item platform-nav" disabled><span class="platform-dot kubernetes" aria-hidden="true" />Kubernetes<span class="nav-soon">待开放</span></button>
+      </nav>
+      <div class="sidebar-footer"><span class="status-dot" />项目隔离 · 统一管理</div>
+    </aside>
+
+    <div class="console-workspace">
+      <header class="console-topbar">
+        <div class="project-switcher">
+          <label for="current-project">业务项目</label>
+          <select id="current-project" aria-label="当前业务项目" :value="projects.currentProjectId ?? ''" :disabled="projects.listState !== 'ready'" @change="switchProject">
+            <option v-if="projects.currentProjectId === null" value="" disabled>{{ switcherPlaceholder }}</option>
+            <option v-for="project in projects.projects" :key="project.id" :value="project.id">{{ project.name }}</option>
+          </select>
+        </div>
+        <details class="user-menu">
+          <summary><span class="user-avatar" aria-hidden="true">{{ userName.slice(0, 1) }}</span><span>{{ userName }}</span><span class="menu-chevron" aria-hidden="true">⌄</span></summary>
+          <div class="user-menu-panel">
+            <p>{{ auth.currentUser?.globalRole === 'system_admin' ? '系统管理员' : '普通用户' }}</p>
+            <button class="menu-action" @click="logout">退出登录</button>
+          </div>
+        </details>
+      </header>
+      <!-- 资源核心尚未交付，全局搜索入口保持隐藏。 -->
+      <main id="console-content" class="console-content" tabindex="-1"><router-view /></main>
+      <footer class="console-footer">CMDB · 公有云与 Kubernetes 资源配置管理</footer>
+    </div>
+  </div>
+</template>

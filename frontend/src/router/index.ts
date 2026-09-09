@@ -1,23 +1,20 @@
-// 本文件定义新版 CMDB 的认证路由边界；项目与资源页面将在对应领域模块交付时接入。
+// 本文件定义新版 CMDB 的认证边界和项目控制台路由，不提供旧版领域入口。
 import { createRouter, createWebHistory, type RouteRecordRaw } from 'vue-router'
-import { h } from 'vue'
 
 import { useAuthStore } from '@/modules/auth/store'
-
-/**
- * 此占位路由仅表示认证已通过，不承担控制台或项目展示职责，避免认证基础先行恢复旧版页面。
- */
-const AuthenticatedPlaceholder = {
-  name: 'AuthenticatedPlaceholder',
-  render: () => h('main', { class: 'authenticated-placeholder', 'aria-live': 'polite' }, '身份认证成功，正在加载 CMDB。'),
-}
 
 const routes: RouteRecordRaw[] = [
   {
     path: '/',
-    name: 'AuthenticatedHome',
-    component: AuthenticatedPlaceholder,
+    name: 'Console',
+    component: () => import('@/layouts/ConsoleLayout.vue'),
     meta: { requiresAuth: true, title: 'CMDB' },
+    // 首页和显式项目列表共享同一页面，保留登录守卫的原始目标地址。
+    children: [
+      { path: '', name: 'AuthenticatedHome', component: () => import('@/modules/project/ProjectListPage.vue'), meta: { title: '业务项目' } },
+      { path: 'projects', name: 'ProjectList', component: () => import('@/modules/project/ProjectListPage.vue'), meta: { title: '业务项目' } },
+      { path: 'projects/:projectId', name: 'ProjectDetail', component: () => import('@/modules/project/ProjectDetailPage.vue'), meta: { title: '项目详情' } },
+    ],
   },
   {
     path: '/login',

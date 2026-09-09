@@ -20,7 +20,8 @@ function readStoredUser(): CurrentUser | null {
     const value = JSON.parse(localStorage.getItem(currentUserStorageKey) || 'null') as Partial<CurrentUser> | null
     if (
       value &&
-      Number.isSafeInteger(value.id) && value.id > 0 &&
+      // 先收窄可选字段类型，再验证安全整数，避免损坏资料绕过恢复边界。
+      typeof value.id === 'number' && Number.isSafeInteger(value.id) && value.id > 0 &&
       typeof value.username === 'string' && value.username.length > 0 &&
       (value.globalRole === 'system_admin' || value.globalRole === 'user')
     ) {

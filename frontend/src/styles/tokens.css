@@ -1,0 +1,18 @@
+/* CMDB 控制台采用低饱和中性色，平台品牌色仅用于导航识别。 */
+:root {
+  --cmdb-bg: #f5f7fa;
+  --cmdb-surface: #ffffff;
+  --cmdb-text: #253247;
+  --cmdb-muted: #68758a;
+  --cmdb-border: #e4e9f0;
+  --cmdb-accent: #375eaa;
+  --cmdb-accent-soft: #edf2fc;
+  --cmdb-success: #34775d;
+  --cmdb-radius: 10px;
+  --cmdb-sidebar-width: 224px;
+  --el-color-primary: var(--cmdb-accent);
+  --el-text-color-primary: var(--cmdb-text);
+  --el-border-color: var(--cmdb-border);
+  --el-border-radius-base: 6px;
+  color-scheme: light;
+}
