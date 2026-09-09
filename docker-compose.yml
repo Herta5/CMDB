@@ -20,14 +20,15 @@ services:
       timeout: 5s
       retries: 5
 
-  backend:
+  app:
     build:
-      context: ./backend
+      context: .
       dockerfile: Dockerfile
-    container_name: cmdb-backend
+    container_name: cmdb-app
     restart: unless-stopped
     environment:
-      SERVER_PORT: "8080"
+      SERVER_PORT: "80"
+      STATIC_DIR: /app/web
       GIN_MODE: release
       DB_HOST: mysql
       DB_PORT: "3306"
@@ -35,20 +36,11 @@ services:
       DB_PASSWORD: cmdb-root-2024
       DB_NAME: cmdb
       JWT_SECRET: cmdb-jwt-secret-change-in-production
-    depends_on:
-      mysql:
-        condition: service_healthy
-
-  frontend:
-    build:
-      context: ./frontend
-      dockerfile: Dockerfile
-    container_name: cmdb-frontend
-    restart: unless-stopped
     ports:
       - "80:80"
     depends_on:
-      - backend
+      mysql:
+        condition: service_healthy
 
 volumes:
   mysql-data:

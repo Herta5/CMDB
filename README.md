@@ -16,7 +16,7 @@
 ### 2. 方式一：Docker Compose（推荐）
 
 ```bash
-# 构建并启动 MySQL + 后端 + 前端
+# 构建并启动 MySQL + 单体应用镜像
 docker compose up -d --build
 
 # 查看日志
@@ -25,7 +25,7 @@ docker compose logs -f
 
 访问 `http://服务器IP`（本机访问 `http://localhost`），首次启动自动创建默认账号 `admin / admin123`。
 
-Docker Compose 会启动 MySQL、后端和前端生产容器。Nginx 通过 80 端口提供统一入口并将 `/api` 转发到后端；MySQL 3306 和后端 8080 仅在容器内部网络开放。当前未提供 Kubernetes 部署配置。
+Docker Compose 会启动独立的 MySQL 容器和一个应用镜像。该应用镜像同时包含前端静态文件与 Go 后端，由 Go 在 80 端口同时提供 UI 和 API；MySQL 3306 仅在容器内部网络开放。当前未提供 Kubernetes 部署配置。
 
 ### 3. 方式二：本地开发
 
