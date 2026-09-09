@@ -25,7 +25,10 @@ func main() {
 		log.Fatalf("连接数据库失败：%v", err)
 	}
 
-	server := httpserver.New(httpserver.Dependencies{Database: db})
+	server := httpserver.New(httpserver.Dependencies{
+		Database:  db,
+		JWTSecret: configuration.JWTSecret,
+	})
 	if err := server.Run(":" + configuration.Server.Port); err != nil {
 		log.Fatalf("启动 HTTP 服务失败：%v", err)
 	}
