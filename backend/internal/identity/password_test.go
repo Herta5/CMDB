@@ -7,6 +7,6 @@ import "testing"
 func TestPasswordHashNeverStoresPlaintext(t *testing.T) {
 	hash, err := HashPassword("Cmdb-Test-123")
 	if err != nil || hash == "Cmdb-Test-123" || !VerifyPassword(hash, "Cmdb-Test-123") {
-		t.Fatalf("密码必须安全哈希并可验证，hash=%q err=%v", hash, err)
+		t.Fatalf("密码必须安全哈希并可验证，生成哈希是否为空=%t，err=%v", hash == "", err)
 	}
 }
