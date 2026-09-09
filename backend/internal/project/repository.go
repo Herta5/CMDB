@@ -3,6 +3,7 @@ package project
 
 import (
 	"context"
+	"time"
 
 	"gorm.io/gorm"
 )
@@ -51,9 +52,24 @@ func (r *gormRepository) FindByCode(ctx context.Context, code string) (*Project,
 	return &project, nil
 }
 
-// Update 保存项目可变属性；编码不在更新输入中，因此不能被此仓储路径变更。
+// Update 只更新项目可变属性，并在零行受影响时返回未找到，绝不使用 Save 复活已被并发删除的项目。
 func (r *gormRepository) Update(ctx context.Context, project *Project) error {
-	return r.db.WithContext(ctx).Save(project).Error
+	updatedAt := time.Now()
+	result := r.db.WithContext(ctx).Model(&Project{}).Where("id = ?", project.ID).Updates(map[string]interface{}{
+		"name":          project.Name,
+		"description":   project.Description,
+		"status":        project.Status,
+		"owner_user_id": project.OwnerUserID,
+		"updated_at":    updatedAt,
+	})
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected == 0 {
+		return gorm.ErrRecordNotFound
+	}
+	project.UpdatedAt = updatedAt
+	return nil
 }
 
 // Delete 物理删除项目，关联成员关系由数据库外键级联清理，审计记录由外键外的数值保留。

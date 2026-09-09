@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github-cmdb/internal/identity"
+	"github.com/go-sql-driver/mysql"
 	"gorm.io/gorm"
 )
 
@@ -71,7 +72,7 @@ func (s *Service) Create(ctx context.Context, input CreateInput) (*Project, erro
 		OwnerUserID: input.OwnerUserID,
 	}
 	if err := s.repository.Create(ctx, project); err != nil {
-		if errors.Is(err, gorm.ErrDuplicatedKey) {
+		if isDuplicateCodeError(err) {
 			return nil, ErrDuplicateCode
 		}
 		return nil, err
@@ -91,17 +92,23 @@ func (s *Service) Update(ctx context.Context, id uint64, input UpdateInput) (*Pr
 		return nil, ErrInvalidProjectStatus
 	}
 	project, err := s.repository.FindByID(ctx, id)
-	if errors.Is(err, gorm.ErrRecordNotFound) || project == nil {
-		return nil, ErrProjectNotFound
-	}
 	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, ErrProjectNotFound
+		}
 		return nil, err
+	}
+	if project == nil {
+		return nil, ErrProjectNotFound
 	}
 	project.Name = input.Name
 	project.Description = input.Description
 	project.Status = input.Status
 	project.OwnerUserID = input.OwnerUserID
 	if err := s.repository.Update(ctx, project); err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, ErrProjectNotFound
+		}
 		return nil, err
 	}
 	return project, nil
@@ -127,13 +134,25 @@ func (s *Service) Delete(ctx context.Context, id uint64) error {
 		return ErrInvalidProjectInput
 	}
 	project, err := s.repository.FindByID(ctx, id)
-	if errors.Is(err, gorm.ErrRecordNotFound) || project == nil {
-		return ErrProjectNotFound
-	}
 	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return ErrProjectNotFound
+		}
 		return err
 	}
+	if project == nil {
+		return ErrProjectNotFound
+	}
 	return s.repository.Delete(ctx, id)
+}
+
+// isDuplicateCodeError 兼容 GORM 已翻译错误和未启用 TranslateError 时原样返回的 MySQL 1062。
+func isDuplicateCodeError(err error) bool {
+	if errors.Is(err, gorm.ErrDuplicatedKey) {
+		return true
+	}
+	var mysqlError *mysql.MySQLError
+	return errors.As(err, &mysqlError) && mysqlError.Number == 1062
 }
 
 // validProjectStatus 集中维护项目允许的生命周期状态，避免接口写入未定义状态。

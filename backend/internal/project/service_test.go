@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github-cmdb/internal/identity"
+	"github.com/go-sql-driver/mysql"
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
@@ -92,6 +93,101 @@ func TestListForUserRestrictsRegularUserToMembership(t *testing.T) {
 	if len(administratorProjects) != 2 {
 		t.Fatalf("系统管理员必须看到全部项目，实际数量为 %d", len(administratorProjects))
 	}
+}
+
+// TestUpdateDoesNotResurrectProjectDeletedAfterRead 防止并发删除发生在读取和更新之间时，Save 把已删除项目重新插入。
+func TestUpdateDoesNotResurrectProjectDeletedAfterRead(t *testing.T) {
+	service, db := newProjectServiceWithDatabase(t)
+	created, err := service.Create(context.Background(), CreateInput{Name: "云平台", Code: "cloud"})
+	if err != nil {
+		t.Fatalf("准备项目失败：%v", err)
+	}
+	service = NewService(&deleteProjectAfterReadRepository{Repository: NewRepository(db), db: db})
+
+	_, err = service.Update(context.Background(), created.ID, UpdateInput{Name: "云资源平台", Status: ProjectStatusDisabled})
+	if !errors.Is(err, ErrProjectNotFound) {
+		t.Fatalf("并发删除后的更新必须返回项目不存在，实际为 %v", err)
+	}
+	var remaining int64
+	if err := db.Model(&Project{}).Where("id = ?", created.ID).Count(&remaining).Error; err != nil || remaining != 0 {
+		t.Fatalf("并发删除后的更新不得复活项目：count=%d err=%v", remaining, err)
+	}
+}
+
+// TestCreateConvertsMySQLDuplicateKeyWhenPrecheckMisses 防止并发创建绕过预查询后将 MySQL 1062 误报为内部错误。
+func TestCreateConvertsMySQLDuplicateKeyWhenPrecheckMisses(t *testing.T) {
+	service := NewService(&duplicateOnCreateRepository{})
+
+	_, err := service.Create(context.Background(), CreateInput{Name: "云平台", Code: "cloud"})
+	if !errors.Is(err, ErrDuplicateCode) {
+		t.Fatalf("MySQL 重复键必须转换为领域错误，实际为 %v", err)
+	}
+}
+
+// TestUpdatePropagatesRepositoryFailure 防止数据库不可用时被错误转换为项目不存在。
+func TestUpdatePropagatesRepositoryFailure(t *testing.T) {
+	repositoryFailure := errors.New("项目数据库不可用")
+	service := NewService(&findProjectFailureRepository{err: repositoryFailure})
+
+	_, err := service.Update(context.Background(), 1, UpdateInput{Name: "云平台", Status: ProjectStatusEnabled})
+	if !errors.Is(err, repositoryFailure) || errors.Is(err, ErrProjectNotFound) {
+		t.Fatalf("更新必须保留仓储错误而非报告项目不存在，实际为 %v", err)
+	}
+}
+
+// TestDeletePropagatesRepositoryFailure 防止数据库不可用时被错误转换为项目不存在。
+func TestDeletePropagatesRepositoryFailure(t *testing.T) {
+	repositoryFailure := errors.New("项目数据库不可用")
+	service := NewService(&findProjectFailureRepository{err: repositoryFailure})
+
+	err := service.Delete(context.Background(), 1)
+	if !errors.Is(err, repositoryFailure) || errors.Is(err, ErrProjectNotFound) {
+		t.Fatalf("删除必须保留仓储错误而非报告项目不存在，实际为 %v", err)
+	}
+}
+
+// deleteProjectAfterReadRepository 在测试中精确模拟读取完成后、更新开始前被并发删除的时序。
+type deleteProjectAfterReadRepository struct {
+	Repository
+	db *gorm.DB
+}
+
+// FindByID 返回已读取的项目后立即删除它，使服务更新路径面对真实的零行更新条件。
+func (r *deleteProjectAfterReadRepository) FindByID(ctx context.Context, id uint64) (*Project, error) {
+	project, err := r.Repository.FindByID(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	if err := r.db.WithContext(ctx).Delete(&Project{}, id).Error; err != nil {
+		return nil, err
+	}
+	return project, nil
+}
+
+// duplicateOnCreateRepository 模拟预查询未命中后 MySQL 在写入阶段返回 1062 的并发冲突。
+type duplicateOnCreateRepository struct {
+	Repository
+}
+
+// FindByCode 固定模拟创建前不存在同编码项目。
+func (r *duplicateOnCreateRepository) FindByCode(context.Context, string) (*Project, error) {
+	return nil, gorm.ErrRecordNotFound
+}
+
+// Create 返回未由 GORM TranslateError 转换的原始 MySQL 唯一键错误。
+func (r *duplicateOnCreateRepository) Create(context.Context, *Project) error {
+	return &mysql.MySQLError{Number: 1062, Message: "Duplicate entry"}
+}
+
+// findProjectFailureRepository 模拟项目读取阶段的基础设施错误，其他方法不应在这些测试中被调用。
+type findProjectFailureRepository struct {
+	Repository
+	err error
+}
+
+// FindByID 返回基础设施错误，验证服务不会先用 nil 结果误判项目不存在。
+func (r *findProjectFailureRepository) FindByID(context.Context, uint64) (*Project, error) {
+	return nil, r.err
 }
 
 // newProjectService 创建每个测试独立的真实仓储，确保唯一性由持久化层与领域错误转换共同保障。
