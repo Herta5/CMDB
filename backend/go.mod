@@ -1,4 +1,4 @@
-module github-cmdb
+module cmdb
 
 go 1.25.1
 

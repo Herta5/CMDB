@@ -10,9 +10,9 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	"github-cmdb/internal/identity"
-	"github-cmdb/internal/platform/config"
-	"github-cmdb/internal/platform/database"
+	"cmdb/internal/identity"
+	"cmdb/internal/platform/config"
+	"cmdb/internal/platform/database"
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
 )

@@ -6,7 +6,7 @@ import (
 	"net/http"
 	"strings"
 
-	"github-cmdb/internal/identity"
+	"cmdb/internal/identity"
 	"github.com/gin-gonic/gin"
 	"github.com/golang-jwt/jwt/v5"
 )

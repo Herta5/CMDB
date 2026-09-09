@@ -1,4 +1,4 @@
--- CMDB 新版基础领域迁移：仅建立身份、项目成员和审计的最小数据边界。
+-- CMDB 基础领域迁移：建立身份、项目成员和审计的数据边界。
 
 CREATE TABLE IF NOT EXISTS users (
     id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT COMMENT '全局用户唯一标识',

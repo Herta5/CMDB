@@ -4,8 +4,8 @@ package httpserver
 import (
 	"net/http"
 
-	"github-cmdb/internal/identity"
-	"github-cmdb/internal/project"
+	"cmdb/internal/identity"
+	"cmdb/internal/project"
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
 )

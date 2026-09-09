@@ -92,7 +92,7 @@ describe('跨标签页与在途请求的身份隔离', () => {
       expect(tabB.currentUser?.id).toBe(tabA.currentUser?.id)
       if (delivery === '事件已送达') {
         notifyStorage()
-        // 即便用户和令牌未变，新登录事件也应立即丢弃旧项目上下文，不能等 401 才清理。
+        // 即便用户和令牌未变，新登录事件也应立即丢弃上一次项目上下文，不能等 401 才清理。
         expect(projectsA.detail).toBeNull()
         expect(projectsA.currentProjectId).toBeNull()
       }

@@ -11,9 +11,9 @@ import (
 	"testing"
 	"time"
 
-	"github-cmdb/internal/identity"
-	"github-cmdb/internal/platform/httpserver"
-	"github-cmdb/internal/project"
+	"cmdb/internal/identity"
+	"cmdb/internal/platform/httpserver"
+	"cmdb/internal/project"
 	"github.com/golang-jwt/jwt/v5"
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"

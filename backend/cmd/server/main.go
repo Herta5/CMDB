@@ -5,10 +5,10 @@ import (
 	"log"
 	"os"
 
-	"github-cmdb/internal/platform/config"
-	"github-cmdb/internal/platform/database"
-	"github-cmdb/internal/platform/httpserver"
-	"github-cmdb/internal/web"
+	"cmdb/internal/platform/config"
+	"cmdb/internal/platform/database"
+	"cmdb/internal/platform/httpserver"
+	"cmdb/internal/web"
 	"github.com/gin-gonic/gin"
 )
 

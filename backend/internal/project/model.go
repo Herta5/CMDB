@@ -4,7 +4,7 @@ package project
 import (
 	"time"
 
-	"github-cmdb/internal/identity"
+	"cmdb/internal/identity"
 )
 
 const (

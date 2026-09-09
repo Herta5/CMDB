@@ -4,7 +4,7 @@ package database
 import (
 	"fmt"
 
-	"github-cmdb/internal/platform/config"
+	"cmdb/internal/platform/config"
 	"gorm.io/driver/mysql"
 	"gorm.io/gorm"
 )

@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github-cmdb/internal/platform/httpserver"
+	"cmdb/internal/platform/httpserver"
 )
 
 // TestBuildServerServesConsoleAndAPI 防止镜像启动后仅有 API、刷新详情页面失败或未知 API 被首页掩盖。

@@ -2,7 +2,7 @@
 
 CMDB 是面向公有云和 Kubernetes 的云资源配置管理平台，业务项目是最高级的数据归属和权限隔离边界。
 
-当前交付第一阶段基础能力：用户名密码登录、当前身份查询、业务项目管理、项目成员与角色授权，以及带项目切换的控制台项目列表和详情页。项目创建、修改、删除及成员管理目前通过 API 操作，页面提供查询与项目切换。阿里云、AWS 和 Kubernetes 采集及资源管理尚未交付；三者将在同一个 CMDB 服务内按独立模块接入共享资源核心。
+当前提供用户名密码登录、当前身份查询、业务项目管理、项目成员与角色授权，以及带项目切换的控制台项目列表和详情页。项目创建、修改、删除及成员管理通过 API 操作，页面提供查询与项目切换。阿里云、AWS 和 Kubernetes 采集及资源管理尚未交付；三者将在同一个 CMDB 服务内按独立模块接入共享资源核心。
 
 ## 技术栈
 
@@ -10,7 +10,7 @@ CMDB 是面向公有云和 Kubernetes 的云资源配置管理平台，业务项
 
 ## 从空库部署
 
-需要 Docker Engine、Docker Compose、Bash 和 OpenSSL。新版使用独立的 `cmdb-foundation-mysql-data` 数据卷，只执行 `backend/migrations/100_new_cmdb_schema.sql` 建表，不创建默认账号或业务项目。已有旧版数据库不属于本阶段迁移范围，请保留旧卷及备份。
+需要 Docker Engine、Docker Compose、Bash 和 OpenSSL。部署使用独立的 `cmdb-mysql-data` 数据卷，并通过 `backend/migrations/001_schema.sql` 建表，不创建默认账号或业务项目。
 
 先在当前终端设置部署环境，数据库密码由操作者提供，两个应用密钥独立随机生成。以下命令不会回显输入或生成值：
 
@@ -37,11 +37,11 @@ printf '%s' "$CMDB_INITIAL_PASSWORD" | docker compose exec -T app ./cmdb-init-ad
 unset CMDB_INITIAL_PASSWORD
 ```
 
-初始化命令只保存 bcrypt 哈希；只要 `users` 表已有任何用户就会拒绝再次执行，不修改或覆盖已有身份。此命令不提供用户管理或密码重置功能。当前尚无用户创建页面或 API，额外用户需由受控运维流程向新版 `users` 表配置有效 bcrypt 哈希及身份资料，随后管理员可通过成员 API 授权；不得使用旧版用户接口。
+初始化命令只保存 bcrypt 哈希；只要 `users` 表已有任何用户就会拒绝再次执行，不修改或覆盖已有身份。此命令不提供用户管理或密码重置功能。当前尚无用户创建页面或 API，额外用户需由受控运维流程向 `users` 表配置有效 bcrypt 哈希及身份资料，随后管理员可通过成员 API 授权。
 
 打开 [CMDB 控制台](http://localhost:8080)，用刚创建的身份登录。空库首次登录显示空项目状态；系统管理员通过项目 API 创建项目后即可在页面查看。端口可通过 `CMDB_PORT` 覆盖。健康检查地址为 `/health`，仅报告 HTTP 进程存活，不代表数据库或下游服务就绪。
 
-数据库初始化 SQL 只在新数据卷首次启动时执行；已有空卷或外部数据库需由运维显式执行同一迁移文件。服务不运行旧版迁移，也不会自动迁移或覆盖现有表。停止服务使用 `docker compose down`，不要附加 `-v`，以保留数据。
+数据库初始化 SQL 只在数据卷首次启动时执行；已有空卷或外部数据库需由运维显式执行同一迁移文件。服务不会自动迁移或覆盖现有表。停止服务使用 `docker compose down`，不要附加 `-v`，以保留数据。
 
 ## API 与权限
 
@@ -67,7 +67,7 @@ unset CMDB_INITIAL_PASSWORD
 
 ## 本地开发与验证
 
-后端需要可连接的 MySQL 8.4 和已执行新版迁移的数据库；设置 `DB_HOST`、`DB_PORT`、`DB_USER`、`DB_PASSWORD`、`DB_NAME`、`JWT_SECRET`、`CMDB_ENCRYPTION_KEY`。`SERVER_PORT` 默认 `8080`，本地独立前端开发不设置 `STATIC_DIR`。
+后端需要可连接的 MySQL 8.4 和已执行数据库迁移的数据库；设置 `DB_HOST`、`DB_PORT`、`DB_USER`、`DB_PASSWORD`、`DB_NAME`、`JWT_SECRET`、`CMDB_ENCRYPTION_KEY`。`SERVER_PORT` 默认 `8080`，本地独立前端开发不设置 `STATIC_DIR`。
 
 ```bash
 cd backend
@@ -96,4 +96,4 @@ corepack pnpm exec vue-tsc --noEmit
 corepack pnpm build
 ```
 
-新版后端入口为 `backend/cmd/server`，一次性初始化入口为 `backend/cmd/init-admin`，基础设施、身份和项目域分别位于 `backend/internal/platform`、`identity`、`project`。新版前端位于 `frontend/src/modules/auth`、`modules/project` 和 `layouts`。仓库仍保留部分旧代码供最终验收清理，新入口不挂载旧业务路由。
+后端入口为 `backend/cmd/server`，一次性初始化入口为 `backend/cmd/init-admin`，基础设施、身份和项目域分别位于 `backend/internal/platform`、`identity`、`project`。前端位于 `frontend/src/modules/auth`、`modules/project` 和 `layouts`。

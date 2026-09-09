@@ -6,7 +6,7 @@ import (
 	"net/http"
 	"strconv"
 
-	"github-cmdb/internal/identity"
+	"cmdb/internal/identity"
 	"github.com/gin-gonic/gin"
 )
 

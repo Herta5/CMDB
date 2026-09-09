@@ -6,7 +6,7 @@ import (
 	"errors"
 	"strings"
 
-	"github-cmdb/internal/identity"
+	"cmdb/internal/identity"
 	"github.com/go-sql-driver/mysql"
 	"gorm.io/gorm"
 )

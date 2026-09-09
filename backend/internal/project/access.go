@@ -5,7 +5,7 @@ import (
 	"errors"
 	"net/http"
 
-	"github-cmdb/internal/identity"
+	"cmdb/internal/identity"
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
 )

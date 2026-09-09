@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github-cmdb/internal/identity"
+	"cmdb/internal/identity"
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
