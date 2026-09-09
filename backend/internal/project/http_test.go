@@ -22,7 +22,8 @@ import (
 
 // TestProjectHTTPRejectsNonAdministratorCreation 防止普通用户创建新的全局项目隔离边界。
 func TestProjectHTTPRejectsNonAdministratorCreation(t *testing.T) {
-	server := newProjectHTTPServer(t)
+	server, db := newProjectHTTPServerWithDatabase(t)
+	createProjectUser(t, db, 7)
 	request := httptest.NewRequest(http.MethodPost, "/api/v1/projects", bytes.NewBufferString(`{"code":"cloud","name":"云平台"}`))
 	request.Header.Set("Content-Type", "application/json")
 	request.Header.Set("Authorization", "Bearer "+projectTestToken(t, 7, identity.GlobalRoleUser))
@@ -37,6 +38,7 @@ func TestProjectHTTPRejectsNonAdministratorCreation(t *testing.T) {
 // TestProjectHTTPHidesProjectFromNonAdministratorDeletion 防止普通用户通过删除接口枚举项目存在性。
 func TestProjectHTTPHidesProjectFromNonAdministratorDeletion(t *testing.T) {
 	server, db := newProjectHTTPServerWithDatabase(t)
+	createProjectUser(t, db, 7)
 	created := createProjectThroughHTTP(t, server, `{"code":"cloud","name":"云平台"}`)
 	request := httptest.NewRequest(http.MethodDelete, "/api/v1/projects/"+strconv.FormatUint(created.ID, 10), nil)
 	request.Header.Set("Authorization", "Bearer "+projectTestToken(t, 7, identity.GlobalRoleUser))
@@ -55,6 +57,7 @@ func TestProjectHTTPHidesProjectFromNonAdministratorDeletion(t *testing.T) {
 // TestProjectHTTPHidesExistingAndMissingProjectWrites 防止普通用户从项目更新或删除响应区分项目是否存在。
 func TestProjectHTTPHidesExistingAndMissingProjectWrites(t *testing.T) {
 	server, db := newProjectHTTPServerWithDatabase(t)
+	createProjectUser(t, db, 7)
 	created := createProjectThroughHTTP(t, server, `{"code":"cloud","name":"云平台"}`)
 	for _, method := range []string{http.MethodPut, http.MethodDelete} {
 		t.Run(method, func(t *testing.T) {
@@ -210,6 +213,10 @@ func newProjectHTTPServerWithDatabase(t *testing.T) (http.Handler, *gorm.DB) {
 	}
 	if err := db.AutoMigrate(&identity.User{}, &project.Project{}, &project.MemberRole{}); err != nil {
 		t.Fatalf("创建项目 HTTP 测试表失败：%v", err)
+	}
+	// 所有项目接口必须验证当前账户，测试管理员也必须是真实持久化的有效身份。
+	if err := db.Create(&identity.User{ID: 1, Username: "project-admin", DisplayName: "系统管理员", GlobalRole: identity.GlobalRoleSystemAdmin, Status: "active"}).Error; err != nil {
+		t.Fatal("准备项目管理员失败")
 	}
 	return httpserver.New(httpserver.Dependencies{Database: db, JWTSecret: "project-http-test-key"}), db
 }

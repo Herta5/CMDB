@@ -1,8 +1,9 @@
-/**
- * 新旧认证键统一在此处维护，避免 401 处理遗漏旧页面残留的身份资料。
- * 旧键只为安全清理保留，新的认证状态只会写入 cmdb.auth.* 键。
- */
-const authStorageKeys = [
+// 本文件只负责会话的原子持久化；请求身份必须来自认证状态，不能独立读取存储中的令牌。
+import type { CurrentUser } from '@/modules/auth/api'
+
+// 单一存储键同时发布身份与令牌，供其他标签页监听完整会话变更。
+export const authSessionStorageKey = 'cmdb.auth.session'
+const legacyAuthStorageKeys = [
   'cmdb.auth.token',
   'cmdb.auth.current-user',
   'cmdb_token',
@@ -12,35 +13,37 @@ const authStorageKeys = [
   'cmdb_roles',
 ]
 
-// 请求模块在 Pinia 尚未初始化时也必须能安全清理存储，因此以可选回调同步已创建的状态实例。
-let clearInMemorySession: (() => void) | undefined
+/** 单键会话防止跨标签页分别收到令牌和用户事件时拼接两个不同身份。 */
+export interface StoredAuthSession {
+  token: string
+  currentUser: CurrentUser
+}
 
 /** 清除 CMDB 身份资料，不影响主题等与会话无关的本地设置。 */
 export function clearAuthStorage() {
-  authStorageKeys.forEach(key => localStorage.removeItem(key))
+  localStorage.removeItem(authSessionStorageKey)
+  legacyAuthStorageKeys.forEach(key => localStorage.removeItem(key))
 }
 
-/** 读取令牌时只信任新版键，禁止页面各自拼接或注入认证头。 */
-export function readAuthToken(): string {
-  return localStorage.getItem('cmdb.auth.token') || ''
+/** 只恢复完整且格式有效的单键会话；旧版分离键无法证明配对，必须重新登录。 */
+export function readAuthSession(): StoredAuthSession | null {
+  try {
+    const value = JSON.parse(localStorage.getItem(authSessionStorageKey) || 'null')
+    const user = value?.currentUser
+    if (typeof value?.token === 'string' && value.token.trim() &&
+      typeof user?.id === 'number' && Number.isSafeInteger(user.id) && user.id > 0 &&
+      typeof user.username === 'string' && user.username.length > 0 &&
+      (user.globalRole === 'system_admin' || user.globalRole === 'user')) {
+      return { token: value.token, currentUser: user }
+    }
+  } catch {
+    // 损坏资料按未登录处理，不能让本地解析异常阻断登录入口。
+  }
+  return null
 }
 
-/** 持久化已验证会话，用户资料与令牌成对保存以避免半个会话被误恢复。 */
-export function saveAuthSession(token: string, currentUser: unknown) {
-  localStorage.setItem('cmdb.auth.token', token)
-  localStorage.setItem('cmdb.auth.current-user', JSON.stringify(currentUser))
-}
-
-/** 注册当前认证状态的清理入口，使统一请求模块可在 401 时同步清空内存会话。 */
-export function registerSessionClearer(clearer: () => void) {
-  clearInMemorySession = clearer
-}
-
-/**
- * 处理服务端确认失效的会话。先清理持久化状态，再通知已经创建的 Pinia 状态；
- * 回调为空表示应用尚未初始化，仍然不能保留失效令牌。
- */
-export function expireAuthSession() {
-  clearAuthStorage()
-  clearInMemorySession?.()
+/** 一次存储写入发布完整会话；清理旧键不会触发新版会话监听，避免出现半个新身份。 */
+export function saveAuthSession(token: string, currentUser: CurrentUser) {
+  legacyAuthStorageKeys.forEach(key => localStorage.removeItem(key))
+  localStorage.setItem(authSessionStorageKey, JSON.stringify({ token, currentUser }))
 }

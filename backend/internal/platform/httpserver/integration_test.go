@@ -79,8 +79,79 @@ func TestHealthEndpoint(t *testing.T) {
 	}
 }
 
+// TestIssuedAdminSessionUsesCurrentAccount 验证旧管理员 JWT 不能绕过数据库中的实时停用、删除或降权。
+func TestIssuedAdminSessionUsesCurrentAccount(t *testing.T) {
+	for _, scenario := range []struct {
+		name   string
+		change func(*gorm.DB) error
+		status int
+	}{
+		{"停用", func(db *gorm.DB) error {
+			return db.Model(&identity.User{}).Where("id = ?", 1).Update("status", "disabled").Error
+		}, 401},
+		{"删除", func(db *gorm.DB) error { return db.Delete(&identity.User{}, 1).Error }, 401},
+		{"降为普通用户", func(db *gorm.DB) error {
+			return db.Model(&identity.User{}).Where("id = ?", 1).Update("global_role", "user").Error
+		}, 404},
+	} {
+		t.Run(scenario.name, func(t *testing.T) {
+			server, password, db := integrationServerWithDatabase(t)
+			token := loginUser(t, server, "operator", password)
+			var created project.Project
+			decodeIntegration(t, integrationRequest(t, server, token, "POST", "/api/v1/projects", map[string]any{"code": "cloud", "name": "云项目"}, 201), &created)
+			path := "/api/v1/projects/" + strconv.FormatUint(created.ID, 10)
+			integrationRequest(t, server, token, "GET", path, nil, 200)
+			if err := scenario.change(db); err != nil {
+				t.Fatal("更新当前账户状态失败")
+			}
+			for _, method := range []string{"GET", "PUT", "DELETE"} {
+				integrationRequest(t, server, token, method, path, map[string]any{"name": "禁止修改"}, scenario.status)
+			}
+			integrationRequest(t, server, token, "GET", path+"/members", nil, scenario.status)
+			if scenario.status == 401 {
+				response := integrationRequest(t, server, token, "GET", "/api/v1/projects", nil, 401)
+				if response.Body.String() != `{"code":"AUTH_UNAUTHORIZED","message":"身份认证已失效"}` {
+					t.Fatal("不可用账户必须使用统一认证错误")
+				}
+				integrationRequest(t, server, token, "POST", "/api/v1/projects", map[string]any{"code": "forbidden", "name": "禁止创建"}, 401)
+			} else {
+				var projects []project.Project
+				decodeIntegration(t, integrationRequest(t, server, token, "GET", "/api/v1/projects", nil, 200), &projects)
+				if len(projects) != 0 {
+					t.Fatal("降权后的非成员不得列出项目")
+				}
+				integrationRequest(t, server, token, "POST", "/api/v1/projects", map[string]any{"code": "forbidden", "name": "禁止创建"}, 403)
+			}
+			var unchanged project.Project
+			if err := db.First(&unchanged, created.ID).Error; err != nil || unchanged.Name != "云项目" {
+				t.Fatal("失去权限后不能修改或删除原项目")
+			}
+		})
+	}
+}
+
+// TestEnginesKeepIndependentSigningKeys 防止后创建的服务实例替换已有服务的 JWT 校验密钥。
+func TestEnginesKeepIndependentSigningKeys(t *testing.T) {
+	first, firstPassword := integrationServer(t)
+	firstToken := loginUser(t, first, "operator", firstPassword)
+	integrationRequest(t, first, firstToken, "GET", "/api/v1/me", nil, 200)
+	second, secondPassword := integrationServer(t)
+	secondToken := loginUser(t, second, "operator", secondPassword)
+	integrationRequest(t, first, firstToken, "GET", "/api/v1/me", nil, 200)
+	integrationRequest(t, second, secondToken, "GET", "/api/v1/me", nil, 200)
+	integrationRequest(t, first, secondToken, "GET", "/api/v1/me", nil, 401)
+	integrationRequest(t, second, firstToken, "GET", "/api/v1/me", nil, 401)
+}
+
 // integrationServer 为每个流程建立独立的真实数据库；凭证仅在运行时生成且不进入失败输出。
 func integrationServer(t *testing.T) (http.Handler, string) {
+	t.Helper()
+	server, password, _ := integrationServerWithDatabase(t)
+	return server, password
+}
+
+// integrationServerWithDatabase 允许通过真实持久化变更验证已签发会话的授权撤销。
+func integrationServerWithDatabase(t *testing.T) (http.Handler, string, *gorm.DB) {
 	t.Helper()
 	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{Logger: logger.Default.LogMode(logger.Silent)})
 	if err != nil {
@@ -115,7 +186,7 @@ func integrationServer(t *testing.T) (http.Handler, string) {
 	if _, err := rand.Read(secret); err != nil {
 		t.Fatal("生成签名密钥失败")
 	}
-	return httpserver.New(httpserver.Dependencies{Database: db, JWTSecret: hex.EncodeToString(secret)}), password
+	return httpserver.New(httpserver.Dependencies{Database: db, JWTSecret: hex.EncodeToString(secret)}), password, db
 }
 
 // loginUser 必须通过公开登录流程获取 JWT，不能以自行签发令牌跳过密码认证。

@@ -19,7 +19,7 @@ const switcherPlaceholder = computed(() => {
 })
 
 // 每次进入控制台或更换会话都重新获取授权列表，持久化选择不能代替服务端授权。
-watch(() => [auth.currentUser?.id, auth.token], () => {
+watch(() => auth.sessionVersion, () => {
   if (auth.token) void projects.loadProjects()
 }, { immediate: true })
 

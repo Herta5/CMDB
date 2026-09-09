@@ -153,7 +153,7 @@ func TestSystemAdminBypassesMembership(t *testing.T) {
 	server := newProjectHTTPServer(t)
 	target := createProjectThroughHTTP(t, server, `{"code":"platform","name":"平台项目"}`)
 
-	response := requestProjectAsRole(t, server, target.ID, 99, identity.GlobalRoleSystemAdmin)
+	response := requestProjectAsRole(t, server, target.ID, 1, identity.GlobalRoleSystemAdmin)
 	if response.Code != http.StatusOK {
 		t.Fatalf("系统管理员必须绕过项目成员检查：status=%d body=%s", response.Code, response.Body.String())
 	}

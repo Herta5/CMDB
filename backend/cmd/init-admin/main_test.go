@@ -4,6 +4,7 @@ package main
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -70,6 +71,57 @@ func TestInitializeAdminRejectsAnyExistingUser(t *testing.T) {
 	}
 	if err := run([]string{"--username", "operator"}, strings.NewReader(adminPassword(t)), db); err == nil {
 		t.Fatal("存在任何用户都必须拒绝初始化")
+	}
+}
+
+// TestConcurrentInitializeAdminCreatesOnlyOneUser 验证两个并发命令最多建立一个可登录管理员，不覆盖胜出者。
+func TestConcurrentInitializeAdminCreatesOnlyOneUser(t *testing.T) {
+	// 文件数据库与独立连接允许两个事务真实竞争；WAL 避免读事务阻塞胜出者提交。
+	db, err := gorm.Open(sqlite.Open(filepath.Join(t.TempDir(), "bootstrap.db")+"?_journal_mode=WAL&_busy_timeout=5000"), &gorm.Config{Logger: logger.Default.LogMode(logger.Silent)})
+	if err != nil {
+		t.Fatal("创建并发初始化数据库失败")
+	}
+	sqlDB, err := db.DB()
+	if err != nil {
+		t.Fatal("读取并发初始化连接失败")
+	}
+	sqlDB.SetMaxOpenConns(2)
+	t.Cleanup(func() { _ = sqlDB.Close() })
+	if err := db.AutoMigrate(&identity.User{}); err != nil {
+		t.Fatal("创建并发初始化身份表失败")
+	}
+	passwords := []string{adminPassword(t), adminPassword(t)}
+	names := []string{"first-operator", "second-operator"}
+	start := make(chan struct{})
+	results := make(chan int, 2)
+	for index := range 2 {
+		go func() {
+			<-start
+			if err := run([]string{"--username", names[index]}, strings.NewReader(passwords[index]), db); err != nil {
+				results <- -1
+				return
+			}
+			results <- index
+		}()
+	}
+	close(start)
+	successes, winner := 0, -1
+	for range 2 {
+		if result := <-results; result >= 0 {
+			successes++
+			winner = result
+		}
+	}
+	var users []identity.User
+	if err := db.Find(&users).Error; err != nil {
+		t.Fatal("读取并发初始化结果失败")
+	}
+	if successes != 1 || len(users) != 1 {
+		t.Fatal("并发初始化必须恰好一次成功且只保留一个用户")
+	}
+	user := users[0]
+	if user.ID != 1 || user.Username != names[winner] || user.GlobalRole != "system_admin" || !identity.VerifyPassword(user.PasswordHash, passwords[winner]) {
+		t.Fatal("并发初始化不得覆盖胜出管理员的身份或凭证")
 	}
 }
 

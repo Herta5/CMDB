@@ -14,7 +14,7 @@ function reload() {
   if (auth.token && auth.currentUser) return store.loadProject(Number(route.params.projectId))
 }
 // 会话切换会先由状态层同步作废在途响应；即使地址不变，页面也必须重新授权并加载。
-watch(() => [route.params.projectId, auth.currentUser?.id, auth.token], () => { void reload() }, { immediate: true })
+watch(() => [route.params.projectId, auth.sessionVersion], () => { void reload() }, { immediate: true })
 
 /** 日期按用户本地时区展示，缺失或无效值使用中文占位。 */
 function formatDate(value: string): string {

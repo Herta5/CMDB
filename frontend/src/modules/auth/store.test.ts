@@ -1,3 +1,4 @@
+// 本文件验证认证状态的恢复、资料映射和单键会话持久化，失败输出不回显认证材料。
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { createPinia, setActivePinia } from 'pinia'
 
@@ -33,7 +34,7 @@ beforeEach(() => {
   requestPost.mockReset()
 })
 
-describe('auth store', () => {
+describe('认证状态', () => {
   it('恢复到缺少令牌的会话时同时清除存储和内存用户', () => {
     storage.setItem('cmdb.auth.current-user', JSON.stringify({
       id: 1,
@@ -107,8 +108,11 @@ describe('auth store', () => {
 
     expect(auth.token).toBe('token')
     expect(auth.currentUser).toEqual({ id: 1, username: 'admin', globalRole: 'system_admin' })
-    expect(storage.getItem('cmdb.auth.token')).toBe('token')
-    expect(storage.getItem('cmdb.auth.current-user')).toBe('{"id":1,"username":"admin","globalRole":"system_admin"}')
+    const stored = JSON.parse(storage.getItem('cmdb.auth.session') || 'null')
+    expect(stored?.token === auth.token).toBe(true)
+    expect(stored?.currentUser).toEqual({ id: 1, username: 'admin', globalRole: 'system_admin' })
+    expect(storage.getItem('cmdb.auth.token')).toBeNull()
+    expect(storage.getItem('cmdb.auth.current-user')).toBeNull()
   })
 
   it('登出后清除令牌和当前用户', () => {

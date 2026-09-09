@@ -84,7 +84,7 @@ export const useProjectStore = defineStore('cmdb-project', () => {
   }
 
   // 同步清除可阻止同一渲染周期内出现上一身份的数据；所有在途响应同时失效。
-  watch(() => [auth.currentUser?.id, auth.token], () => {
+  watch(() => auth.sessionVersion, () => {
     ++listVersion
     ++detailVersion
     projects.value = []

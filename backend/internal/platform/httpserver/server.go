@@ -35,15 +35,16 @@ func New(dependencies Dependencies) *gin.Engine {
 	if dependencies.Database != nil {
 		projectRepository = project.NewRepository(dependencies.Database)
 	}
-	SetJWTSecret(dependencies.JWTSecret)
-	handler := identity.NewHTTPHandler(identity.NewService(repository, dependencies.JWTSecret))
+	identityService := identity.NewService(repository, dependencies.JWTSecret)
+	authenticator := NewAuthenticator(identityService, dependencies.JWTSecret)
+	handler := identity.NewHTTPHandler(identityService)
 	projectHandler := project.NewHTTPHandler(project.NewService(projectRepository))
 	engine.POST("/api/v1/auth/login", handler.Login)
-	engine.GET("/api/v1/me", RequireUser(), func(c *gin.Context) {
+	engine.GET("/api/v1/me", authenticator.RequireUser(), func(c *gin.Context) {
 		handler.Me(c, CurrentUser(c))
 	})
 	projects := engine.Group("/api/v1/projects")
-	projects.Use(RequireUser())
+	projects.Use(authenticator.RequireUser())
 	projects.GET("", func(c *gin.Context) {
 		projectHandler.List(c, CurrentUser(c))
 	})

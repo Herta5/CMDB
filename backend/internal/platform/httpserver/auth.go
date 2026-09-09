@@ -1,4 +1,4 @@
-// 本文件实现 HTTP 服务的 JWT 身份中间件，并将经过验证的声明存入请求上下文。
+// 本文件实现实例独立的 JWT 认证，并在每次请求中用数据库当前身份建立统一授权边界。
 package httpserver
 
 import (
@@ -11,16 +11,19 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 )
 
-// jwtSecret 仅在服务启动装配时设置，运行中只用于验证客户端提交的 JWT 签名。
-var jwtSecret []byte
-
-// SetJWTSecret 在服务装配阶段设置 JWT 校验密钥；密钥只保留在进程内，绝不写入日志或响应。
-func SetJWTSecret(secret string) {
-	jwtSecret = []byte(secret)
+// Authenticator 只持有当前服务实例的校验密钥和身份服务，避免多个引擎互相改变认证结果。
+type Authenticator struct {
+	jwtSecret []byte
+	identity  *identity.Service
 }
 
-// RequireUser 验证 Bearer JWT 并建立当前用户声明；失败时统一返回不泄露令牌细节的认证错误。
-func RequireUser() gin.HandlerFunc {
+// NewAuthenticator 在服务装配时创建认证依赖；密钥不暴露给领域模块、日志或响应。
+func NewAuthenticator(service *identity.Service, secret string) *Authenticator {
+	return &Authenticator{jwtSecret: []byte(secret), identity: service}
+}
+
+// RequireUser 验证签名后重新读取当前账户；令牌中的历史角色不能用于项目授权。
+func (a *Authenticator) RequireUser() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		tokenString, ok := bearerToken(c.GetHeader("Authorization"))
 		if !ok {
@@ -33,19 +36,31 @@ func RequireUser() gin.HandlerFunc {
 			if token.Method.Alg() != jwt.SigningMethodHS256.Alg() {
 				return nil, errors.New("不支持的 JWT 签名算法")
 			}
-			return jwtSecret, nil
+			return a.jwtSecret, nil
 		}, jwt.WithValidMethods([]string{jwt.SigningMethodHS256.Alg()}))
-		if err != nil || !token.Valid {
+		if err != nil || !token.Valid || claims.UserID == 0 {
 			writeAuthenticationError(c)
 			return
 		}
 
+		user, err := a.identity.CurrentUser(c.Request.Context(), claims)
+		if errors.Is(err, identity.ErrAuthenticatedUserNotFound) {
+			writeAuthenticationError(c)
+			return
+		}
+		if err != nil {
+			// 仓储故障必须拒绝授权但保留服务错误语义，不能伪装成已失效会话。
+			c.AbortWithStatusJSON(http.StatusInternalServerError, authenticationErrorResponse{Code: "AUTH_SERVICE_UNAVAILABLE", Message: "认证服务暂不可用"})
+			return
+		}
+		// 停用和删除已由身份服务拒绝；所有下游项目接口只消费数据库当前全局角色。
+		claims.GlobalRole = user.GlobalRole
 		c.Set(identity.UserClaimsContextKey, claims)
 		c.Next()
 	}
 }
 
-// CurrentUser 读取已由 RequireUser 验证的用户声明；未经过中间件时返回零值声明。
+// CurrentUser 读取签名和当前账户均已验证的声明；未经过中间件时返回零值声明。
 func CurrentUser(c *gin.Context) identity.UserClaims {
 	claims, _ := c.Get(identity.UserClaimsContextKey)
 	if value, ok := claims.(identity.UserClaims); ok {
@@ -63,7 +78,7 @@ func bearerToken(header string) (string, bool) {
 	return parts[1], true
 }
 
-// writeAuthenticationError 将所有 JWT 解析失败统一为稳定错误响应，避免泄露令牌状态。
+// writeAuthenticationError 将令牌无效、账户停用和账户删除统一为稳定错误响应。
 func writeAuthenticationError(c *gin.Context) {
 	c.AbortWithStatusJSON(http.StatusUnauthorized, authenticationErrorResponse{
 		Code:    "AUTH_UNAUTHORIZED",
