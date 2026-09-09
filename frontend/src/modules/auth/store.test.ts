@@ -34,6 +34,21 @@ beforeEach(() => {
 })
 
 describe('auth store', () => {
+  it('恢复到缺少令牌的会话时同时清除存储和内存用户', () => {
+    storage.setItem('cmdb.auth.current-user', JSON.stringify({
+      id: 1,
+      username: 'admin',
+      globalRole: 'system_admin',
+    }))
+
+    const auth = useAuthStore()
+
+    expect(auth.token).toBe('')
+    expect(auth.currentUser).toBeNull()
+    expect(storage.getItem('cmdb.auth.token')).toBeNull()
+    expect(storage.getItem('cmdb.auth.current-user')).toBeNull()
+  })
+
   it('使用后端 snake_case 登录响应保存并在刷新后恢复会话', async () => {
     requestPost.mockResolvedValue({
       token: 'test-session',

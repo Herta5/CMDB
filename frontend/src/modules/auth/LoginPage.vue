@@ -17,7 +17,6 @@
             placeholder="密码"
             :prefix-icon="Lock"
             show-password
-            @keyup.enter="handleLogin"
           />
         </el-form-item>
         <el-button native-type="submit" type="primary" :loading="loading" class="submit-button">登录</el-button>
@@ -34,6 +33,7 @@ import { Lock, User } from '@element-plus/icons-vue'
 import type { FormInstance, FormRules } from 'element-plus'
 
 import { useAuthStore } from './store'
+import { submitLogin } from './login-submit'
 
 const router = useRouter()
 const route = useRoute()
@@ -56,17 +56,24 @@ function loginDestination(): string {
 
 /** 提交凭证并在成功后替换登录历史，防止浏览器返回键回到登录页。 */
 async function handleLogin() {
-  const valid = await formRef.value?.validate().catch(() => false)
-  if (!valid) return
-
-  loading.value = true
   try {
-    await auth.signIn(form.username, form.password)
-    await router.replace(loginDestination())
+    await submitLogin({
+      loading,
+      validate: async () => {
+        try {
+          await formRef.value?.validate()
+          return !!formRef.value
+        } catch {
+          return false
+        }
+      },
+      signIn: auth.signIn,
+      navigate: () => router.replace(loginDestination()),
+      username: form.username,
+      password: form.password,
+    })
   } catch {
     // 请求模块会显示已脱敏的服务端错误，页面不重复提示或记录凭证。
-  } finally {
-    loading.value = false
   }
 }
 </script>

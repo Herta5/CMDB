@@ -40,6 +40,8 @@ export const useAuthStore = defineStore('cmdb-auth', () => {
 
   // 令牌和用户资料缺一不可；清理残缺状态可阻止旧会话误通过路由守卫。
   if (!token.value || !currentUser.value) {
+    token.value = ''
+    currentUser.value = null
     clearAuthStorage()
   }
 
