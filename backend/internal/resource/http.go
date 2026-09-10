@@ -132,7 +132,7 @@ func (h *HTTPHandler) SyncSource(c *gin.Context) {
 		c.JSON(http.StatusServiceUnavailable, gin.H{"code": "SOURCE_COLLECTOR_UNAVAILABLE", "message": "平台采集器暂不可用"})
 		return
 	}
-	job, err := h.service.Sync(c.Request.Context(), source.ID, "manual", collector)
+	job, err := h.service.EnqueueSync(c.Request.Context(), source.ID, "manual", collector)
 	if errors.Is(err, ErrSyncAlreadyRunning) {
 		c.JSON(http.StatusConflict, gin.H{"code": "SOURCE_SYNC_RUNNING", "message": "接入源同步任务正在执行"})
 		return
@@ -141,7 +141,57 @@ func (h *HTTPHandler) SyncSource(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"code": "SOURCE_SYNC_FAILED", "message": "同步任务执行失败"})
 		return
 	}
-	c.JSON(http.StatusOK, job)
+	c.JSON(http.StatusAccepted, job)
+}
+
+// TestSourceConnection 验证接入源访问能力，但不会写入资源或触发生命周期变化。
+func (h *HTTPHandler) TestSourceConnection(c *gin.Context) {
+	projectID, ok := projectID(c)
+	sourceID, err := strconv.ParseUint(c.Param("sourceId"), 10, 64)
+	if !ok || err != nil || sourceID == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"code": "SOURCE_INVALID_REQUEST", "message": "请求格式错误"})
+		return
+	}
+	source, err := h.service.FindSourceForProject(c.Request.Context(), projectID, sourceID)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"code": "SOURCE_NOT_FOUND", "message": "接入源不存在"})
+		return
+	}
+	collector := h.collectors[source.Provider]
+	if collector == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"code": "SOURCE_COLLECTOR_UNAVAILABLE", "message": "平台采集器暂不可用"})
+		return
+	}
+	result, err := h.service.TestConnection(c.Request.Context(), projectID, sourceID, collector)
+	if err != nil {
+		c.JSON(http.StatusBadGateway, gin.H{"code": "SOURCE_CONNECTION_FAILED", "message": "连接测试失败，请检查凭证和网络"})
+		return
+	}
+	c.JSON(http.StatusOK, result)
+}
+
+// RetryJob 为当前项目内的失败任务创建新排队任务，原任务保持不变。
+func (h *HTTPHandler) RetryJob(c *gin.Context) {
+	projectID, ok := projectID(c)
+	jobID, err := strconv.ParseUint(c.Param("jobId"), 10, 64)
+	if !ok || err != nil || jobID == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"code": "SYNC_JOB_INVALID_REQUEST", "message": "请求格式错误"})
+		return
+	}
+	job, err := h.service.RetryJob(c.Request.Context(), projectID, jobID, h.collectors)
+	if errors.Is(err, ErrSyncAlreadyRunning) {
+		c.JSON(http.StatusConflict, gin.H{"code": "SOURCE_SYNC_RUNNING", "message": "接入源同步任务正在执行"})
+		return
+	}
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		c.JSON(http.StatusNotFound, gin.H{"code": "SYNC_JOB_NOT_FOUND", "message": "同步任务不存在"})
+		return
+	}
+	if err != nil {
+		c.JSON(http.StatusConflict, gin.H{"code": "SYNC_JOB_NOT_RETRYABLE", "message": "同步任务当前不可重试"})
+		return
+	}
+	c.JSON(http.StatusAccepted, job)
 }
 
 // ListJobs 按项目与可选接入源分页返回同步任务。

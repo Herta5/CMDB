@@ -124,6 +124,27 @@ func (r *Repository) SaveJob(ctx context.Context, job *SyncJob) error {
 	return r.db.WithContext(ctx).Save(job).Error
 }
 
+// FindJob 读取单个同步任务，服务层继续校验项目归属和可重试状态。
+func (r *Repository) FindJob(ctx context.Context, id uint64) (*SyncJob, error) {
+	var job SyncJob
+	if err := r.db.WithContext(ctx).First(&job, id).Error; err != nil {
+		return nil, err
+	}
+	return &job, nil
+}
+
+// RecoverableJobs 返回重启前尚未执行的排队任务。
+func (r *Repository) RecoverableJobs(ctx context.Context) ([]SyncJob, error) {
+	var jobs []SyncJob
+	err := r.db.WithContext(ctx).Where("status = ?", "queued").Order("id ASC").Find(&jobs).Error
+	return jobs, err
+}
+
+// FailInterruptedJobs 将进程中断时遗留的运行任务结束为脱敏失败状态。
+func (r *Repository) FailInterruptedJobs(ctx context.Context, finished time.Time) error {
+	return r.db.WithContext(ctx).Model(&SyncJob{}).Where("status = ?", "running").Updates(map[string]any{"status": "failed", "error_summary": "服务重启导致任务中断，可重新执行", "finished_at": finished}).Error
+}
+
 // UpdateSourceSchedule 记录最近同步与下一次调度时间。
 func (r *Repository) UpdateSourceSchedule(ctx context.Context, source *Source) error {
 	return r.db.WithContext(ctx).Model(&Source{}).Where("id = ?", source.ID).Updates(map[string]any{"last_sync_at": source.LastSyncAt, "next_sync_at": source.NextSyncAt}).Error

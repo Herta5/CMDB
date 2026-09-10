@@ -66,13 +66,15 @@ unset CMDB_INITIAL_PASSWORD
 | GET | `/api/v1/projects/:id/member-candidates` | 系统管理员或项目管理员查询可添加用户的最小公开资料 |
 | GET / POST | `/api/v1/projects/:id/sources` | 项目成员查询；系统或项目管理员创建接入源 |
 | PUT / DELETE | `/api/v1/projects/:id/sources/:sourceId` | 系统或项目管理员更新、启停或删除接入源 |
-| POST | `/api/v1/projects/:id/sources/:sourceId/sync` | 系统或项目管理员手工同步，同源并发返回 409 |
+| POST | `/api/v1/projects/:id/sources/:sourceId/sync` | 系统或项目管理员提交后台同步任务，同源并发返回 409 |
+| POST | `/api/v1/projects/:id/sources/:sourceId/test` | 系统或项目管理员测试现有凭证和网络，不写入资源 |
 | GET | `/api/v1/projects/:id/resources` | 项目成员按平台、类型、生命周期分页查询资源 |
 | GET | `/api/v1/projects/:id/sync-jobs` | 项目成员查询脱敏同步历史与类型级统计 |
+| POST | `/api/v1/projects/:id/sync-jobs/:jobId/retry` | 系统或项目管理员重试失败或部分成功任务 |
 
 全局角色为 `system_admin`、`user`；项目角色为 `project_admin`、`member`、`viewer`。系统管理员是显式全局权限例外；普通用户必须具有对应项目成员关系，前端切换项目不授予权限。未授权项目与不存在项目返回相同错误以隐藏目标存在性，移除成员后原会话的项目权限立即失效。
 
-接入凭证由 `CMDB_ENCRYPTION_KEY` 派生的 AES-256-GCM 密钥加密，接口、同步任务和审计均不返回凭证明文或完整密文。资源首次从成功采集结果中缺失时标记“已失联”，重新出现时恢复原记录，连续失联满 72 小时后物理删除；认证失败和类型级采集失败不会触发错误失联。
+接入凭证由 `CMDB_ENCRYPTION_KEY` 派生的 AES-256-GCM 密钥加密，接口、同步任务和审计均不返回凭证明文或完整密文。手工同步先返回排队任务，页面自动刷新运行状态；服务重启会恢复排队任务并结束异常中断任务。资源首次从成功采集结果中缺失时标记“已失联”，重新出现时恢复原记录，连续失联满 72 小时后物理删除；认证失败和类型级采集失败不会触发错误失联。
 
 ## 本地开发与验证
 

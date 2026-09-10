@@ -44,6 +44,12 @@ type UpdateSourceInput struct {
 	SyncIntervalMinutes int
 }
 
+// ConnectionTestResult 只报告各资源类型是否可访问，不携带云端原始响应。
+type ConnectionTestResult struct {
+	ReachableTypes []string `json:"reachable_types"`
+	FailedTypes    []string `json:"failed_types"`
+}
+
 // NewService 创建资源服务，调用方必须提供部署密钥派生的凭证加密器。
 func NewService(repository *Repository, cipher *CredentialCipher) *Service {
 	return &Service{repository: repository, cipher: cipher, now: time.Now}
@@ -185,22 +191,123 @@ func validProvider(provider string) bool {
 
 // Sync 执行一次接入源同步，单类失败不会影响其他成功类型。
 func (s *Service) Sync(ctx context.Context, sourceID uint64, trigger string, collector Collector) (*SyncJob, error) {
-	// TryLock 只拒绝同一接入源的重入，不阻塞其他接入源并行采集。
-	lockValue, _ := s.sourceLocks.LoadOrStore(sourceID, &sync.Mutex{})
-	lock := lockValue.(*sync.Mutex)
-	if !lock.TryLock() {
+	lock, ok := s.trySourceLock(sourceID)
+	if !ok {
 		return nil, ErrSyncAlreadyRunning
 	}
 	defer lock.Unlock()
+	return s.executeSync(ctx, sourceID, trigger, collector, nil)
+}
+
+// EnqueueSync 创建持久化排队任务并在后台执行，请求返回不等待云平台采集完成。
+func (s *Service) EnqueueSync(ctx context.Context, sourceID uint64, trigger string, collector Collector) (*SyncJob, error) {
+	return s.enqueueSync(ctx, sourceID, trigger, collector, nil)
+}
+
+// enqueueSync 允许重试任务记录原任务标识，同时保持普通入队接口简洁。
+func (s *Service) enqueueSync(ctx context.Context, sourceID uint64, trigger string, collector Collector, previousJobID *uint64) (*SyncJob, error) {
+	lock, ok := s.trySourceLock(sourceID)
+	if !ok {
+		return nil, ErrSyncAlreadyRunning
+	}
+	source, err := s.repository.FindSource(ctx, sourceID)
+	if err != nil {
+		lock.Unlock()
+		return nil, err
+	}
+	job := &SyncJob{ProjectID: source.ProjectID, SourceID: source.ID, PreviousJobID: previousJobID, Status: "queued", Trigger: trigger, StartedAt: s.now(), ErrorSummary: ""}
+	if err := s.repository.CreateJob(ctx, job); err != nil {
+		lock.Unlock()
+		return nil, err
+	}
+	// 后台工作器使用独立快照，避免与 HTTP 正在序列化的 queued 返回值发生数据竞争。
+	workerJob := *job
+	go func() {
+		defer lock.Unlock()
+		// HTTP 请求结束会取消原上下文，后台任务使用独立上下文完成状态落库。
+		_, _ = s.executeSync(context.Background(), sourceID, trigger, collector, &workerJob)
+	}()
+	return job, nil
+}
+
+// RetryJob 仅为当前项目的失败或部分成功任务创建新任务，历史记录保持不变。
+func (s *Service) RetryJob(ctx context.Context, projectID, jobID uint64, collectors map[string]Collector) (*SyncJob, error) {
+	job, err := s.repository.FindJob(ctx, jobID)
+	if err != nil || job.ProjectID != projectID {
+		return nil, gorm.ErrRecordNotFound
+	}
+	if job.Status != "failed" && job.Status != "partial_success" {
+		return nil, errors.New("同步任务当前不可重试")
+	}
+	source, err := s.FindSourceForProject(ctx, projectID, job.SourceID)
+	if err != nil {
+		return nil, err
+	}
+	collector := collectors[source.Provider]
+	if collector == nil {
+		return nil, errors.New("平台采集器不可用")
+	}
+	return s.enqueueSync(ctx, job.SourceID, "manual", collector, &job.ID)
+}
+
+// TestConnection 解密凭证调用采集器，但不写资源、不判断失联也不保存云端原始响应。
+func (s *Service) TestConnection(ctx context.Context, projectID, sourceID uint64, collector Collector) (*ConnectionTestResult, error) {
+	source, err := s.FindSourceForProject(ctx, projectID, sourceID)
+	if err != nil {
+		return nil, err
+	}
+	credential, err := s.cipher.Decrypt(source.EncryptedCredential)
+	if err != nil {
+		return nil, err
+	}
+	defer func() {
+		for index := range credential {
+			credential[index] = 0
+		}
+	}()
+	results, err := collector.Collect(ctx, *source, credential)
+	if err != nil {
+		return nil, err
+	}
+	value := &ConnectionTestResult{}
+	for _, result := range results {
+		if result.Err == nil {
+			value.ReachableTypes = append(value.ReachableTypes, result.ResourceType)
+		} else {
+			value.FailedTypes = append(value.FailedTypes, result.ResourceType)
+		}
+	}
+	_ = s.repository.CreateAudit(ctx, projectID, "source.connection_tested", "resource_source", sourceID, map[string]any{"reachable_types": value.ReachableTypes, "failed_types": value.FailedTypes})
+	return value, nil
+}
+
+// trySourceLock 非阻塞占用单个接入源，不影响其他接入源并行。
+func (s *Service) trySourceLock(sourceID uint64) (*sync.Mutex, bool) {
+	lockValue, _ := s.sourceLocks.LoadOrStore(sourceID, &sync.Mutex{})
+	lock := lockValue.(*sync.Mutex)
+	return lock, lock.TryLock()
+}
+
+// executeSync 执行同步主体；existingJob 非空时承接已返回给调用方的排队任务。
+func (s *Service) executeSync(ctx context.Context, sourceID uint64, trigger string, collector Collector, existingJob *SyncJob) (*SyncJob, error) {
 
 	source, err := s.repository.FindSource(ctx, sourceID)
 	if err != nil {
 		return nil, err
 	}
 	now := s.now()
-	job := &SyncJob{ProjectID: source.ProjectID, SourceID: source.ID, Status: "running", Trigger: trigger, StartedAt: now, ErrorSummary: ""}
-	if err := s.repository.CreateJob(ctx, job); err != nil {
-		return nil, err
+	job := existingJob
+	if job == nil {
+		job = &SyncJob{ProjectID: source.ProjectID, SourceID: source.ID, Status: "running", Trigger: trigger, StartedAt: now, ErrorSummary: ""}
+		if err := s.repository.CreateJob(ctx, job); err != nil {
+			return nil, err
+		}
+	} else {
+		job.Status = "running"
+		job.StartedAt = now
+		if err := s.repository.SaveJob(ctx, job); err != nil {
+			return nil, err
+		}
 	}
 	credential, err := s.cipher.Decrypt(source.EncryptedCredential)
 	if err != nil {
@@ -357,7 +464,7 @@ func (s *Service) SyncDueSources(ctx context.Context, collectors map[string]Coll
 		group.Add(1)
 		go func() {
 			defer group.Done()
-			_, _ = s.Sync(ctx, source.ID, "scheduled", collector)
+			_, _ = s.EnqueueSync(ctx, source.ID, "scheduled", collector)
 		}()
 	}
 	group.Wait()
@@ -365,6 +472,25 @@ func (s *Service) SyncDueSources(ctx context.Context, collectors map[string]Coll
 
 // StartScheduler 启动资源后台调度，并在服务上下文结束时自动退出。
 func (s *Service) StartScheduler(ctx context.Context, collectors map[string]Collector) {
+	// 启动恢复先结束异常中断任务，再继续执行已持久化但尚未开始的排队任务。
+	_ = s.repository.FailInterruptedJobs(ctx, s.now())
+	if queued, err := s.repository.RecoverableJobs(ctx); err == nil {
+		for index := range queued {
+			job := &queued[index]
+			source, sourceErr := s.repository.FindSource(ctx, job.SourceID)
+			if sourceErr != nil || collectors[source.Provider] == nil {
+				continue
+			}
+			lock, ok := s.trySourceLock(job.SourceID)
+			if !ok {
+				continue
+			}
+			go func(collector Collector) {
+				defer lock.Unlock()
+				_, _ = s.executeSync(context.Background(), job.SourceID, job.Trigger, collector, job)
+			}(collectors[source.Provider])
+		}
+	}
 	go func() {
 		// 服务启动后立即补跑已到期任务，再按分钟检查并清理过期失联资源。
 		s.SyncDueSources(ctx, collectors)

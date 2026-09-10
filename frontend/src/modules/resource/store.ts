@@ -1,7 +1,7 @@
 // 本文件为三个平台页面提供共享状态，平台差异只存在于表单和资源类型展示。
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
-import { createSource as createSourceRequest, deleteSource as deleteSourceRequest, listJobs, listResources, listSources, syncSource, updateSource as updateSourceRequest, type CloudResource, type Provider, type Source, type SourceInput, type SyncJob } from './api'
+import { createSource as createSourceRequest, deleteSource as deleteSourceRequest, listJobs, listResources, listSources, retrySyncJob, syncSource, testSourceConnection, updateSource as updateSourceRequest, type CloudResource, type Provider, type Source, type SourceInput, type SyncJob } from './api'
 
 export type ResourceLoadState = 'idle' | 'loading' | 'ready' | 'empty' | 'error' | 'forbidden'
 
@@ -11,6 +11,7 @@ function errorState(error: unknown): ResourceLoadState { const status = (error a
 export const useResourceStore = defineStore('cmdb-resource', () => {
   const sources = ref<Source[]>([]); const resources = ref<CloudResource[]>([]); const jobs = ref<SyncJob[]>([])
   const state = ref<ResourceLoadState>('idle'); const mutationError = ref(''); const syncingSourceId = ref<number | null>(null)
+  const testingSourceId = ref<number | null>(null); const retryingJobId = ref<number | null>(null); const connectionMessage = ref('')
   const resourceType = ref(''); const lifecycleStatus = ref(''); const page = ref(1); const pageSize = ref(20); const total = ref(0)
 
   /** 并行加载页面三块数据，任一失败都显示明确故障状态。 */
@@ -35,6 +36,16 @@ export const useResourceStore = defineStore('cmdb-resource', () => {
   async function update(projectId: number, provider: Provider, sourceId: number, input: SourceInput) { await updateSourceRequest(projectId, sourceId, { ...input, provider }); await load(projectId, provider) }
   /** 删除后由服务端级联资源，随后刷新页面。 */
   async function remove(projectId: number, provider: Provider, sourceId: number) { await deleteSourceRequest(projectId, sourceId); await load(projectId, provider) }
+  /** 使用现有凭证执行无副作用连接测试。 */
+  async function testConnection(projectId: number, sourceId: number) {
+    testingSourceId.value = sourceId; connectionMessage.value = ''
+    try { const result = await testSourceConnection(projectId, sourceId); connectionMessage.value = result.failed_types.length ? `部分可用：${result.reachable_types.map(value => value.toUpperCase()).join('、')}；失败：${result.failed_types.map(value => value.toUpperCase()).join('、')}` : `连接成功：${result.reachable_types.map(value => value.toUpperCase()).join('、')}` }
+    finally { testingSourceId.value = null }
+  }
+  /** 启停操作复用更新接口，并明确不传新凭证。 */
+  async function toggle(projectId: number, provider: Provider, source: Source) { await update(projectId, provider, source.id, { provider, name: source.name, region: source.region, config: {}, enabled: !source.enabled, syncIntervalMinutes: source.syncIntervalMinutes }) }
+  /** 失败重试生成新任务并刷新平台视图。 */
+  async function retry(projectId: number, provider: Provider, jobId: number) { retryingJobId.value = jobId; try { await retrySyncJob(projectId, jobId); await load(projectId, provider) } finally { retryingJobId.value = null } }
   /** 同步期间锁定单个按钮；409 等稳定错误只转换为用户可读提示。 */
   async function sync(projectId: number, provider: Provider, sourceId: number) {
     syncingSourceId.value = sourceId; mutationError.value = ''
@@ -42,5 +53,5 @@ export const useResourceStore = defineStore('cmdb-resource', () => {
     catch (error) { mutationError.value = (error as { response?: { status?: number } })?.response?.status === 409 ? '该接入源正在同步，请稍后刷新' : '同步失败，请检查接入配置'; throw error }
     finally { syncingSourceId.value = null }
   }
-  return { sources, resources, jobs, state, mutationError, syncingSourceId, resourceType, lifecycleStatus, page, pageSize, total, load, create, update, remove, sync }
+  return { sources, resources, jobs, state, mutationError, syncingSourceId, testingSourceId, retryingJobId, connectionMessage, resourceType, lifecycleStatus, page, pageSize, total, load, create, update, remove, testConnection, toggle, retry, sync }
 })

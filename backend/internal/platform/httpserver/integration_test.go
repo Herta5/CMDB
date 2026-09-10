@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"cmdb/internal/identity"
 	"cmdb/internal/platform/httpserver"
@@ -136,7 +137,7 @@ func TestProjectAdministratorReadsCandidatesAndManagesMemberRoles(t *testing.T) 
 
 // TestProjectSourceAPINeverReturnsCredentials 验证接入源接口权限和凭证响应边界。
 func TestProjectSourceAPINeverReturnsCredentials(t *testing.T) {
-	server, password := integrationServer(t)
+	server, password, db := integrationServerWithDatabase(t)
 	admin := loginUser(t, server, "operator", password)
 	member := loginUser(t, server, "member-a", password)
 	var created project.Project
@@ -154,7 +155,22 @@ func TestProjectSourceAPINeverReturnsCredentials(t *testing.T) {
 	integrationRequest(t, server, member, http.MethodPost, path+"/sources", map[string]any{"provider": "aws", "name": "禁止创建", "credential": map[string]any{"token": "value"}}, http.StatusNotFound)
 	var source cloudresource.Source
 	decodeIntegration(t, response, &source)
-	integrationRequest(t, server, admin, http.MethodPost, path+"/sources/"+strconv.FormatUint(source.ID, 10)+"/sync", nil, http.StatusOK)
+	integrationRequest(t, server, admin, http.MethodPost, path+"/sources/"+strconv.FormatUint(source.ID, 10)+"/test", nil, http.StatusOK)
+	var probeCount int64
+	_ = db.Model(&cloudresource.Resource{}).Count(&probeCount).Error
+	if probeCount != 0 {
+		t.Fatal("连接测试不得写入资源")
+	}
+	integrationRequest(t, server, admin, http.MethodPost, path+"/sources/"+strconv.FormatUint(source.ID, 10)+"/sync", nil, http.StatusAccepted)
+	// 后台任务完成后再检查资源，避免把调度速度当成接口契约。
+	for deadline := time.Now().Add(time.Second); time.Now().Before(deadline); {
+		var job cloudresource.SyncJob
+		_ = db.Order("id DESC").First(&job).Error
+		if job.Status == "success" {
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
 	updated := integrationRequest(t, server, admin, http.MethodPut, path+"/sources/"+strconv.FormatUint(source.ID, 10), map[string]any{"name": "AWS 更新账号", "region": "ap-east-1", "config": map[string]any{"environment": "production"}, "enabled": true, "sync_interval_minutes": 120}, http.StatusOK)
 	if strings.Contains(updated.Body.String(), "example") || !strings.Contains(updated.Body.String(), "AWS 更新账号") {
 		t.Fatal("更新接入源必须保留凭证且响应不得暴露凭证")
@@ -162,6 +178,12 @@ func TestProjectSourceAPINeverReturnsCredentials(t *testing.T) {
 	jobs := integrationRequest(t, server, member, http.MethodGet, path+"/sync-jobs?source_id="+strconv.FormatUint(source.ID, 10), nil, http.StatusOK)
 	if !strings.Contains(jobs.Body.String(), `"trigger":"manual"`) {
 		t.Fatal("项目成员必须能查询当前项目的同步任务")
+	}
+	failedJob := cloudresource.SyncJob{ProjectID: created.ID, SourceID: source.ID, Status: "failed", Trigger: "manual", StartedAt: time.Now(), ErrorSummary: "采集失败"}
+	_ = db.Create(&failedJob).Error
+	retried := integrationRequest(t, server, admin, http.MethodPost, path+"/sync-jobs/"+strconv.FormatUint(failedJob.ID, 10)+"/retry", nil, http.StatusAccepted)
+	if !strings.Contains(retried.Body.String(), `"previous_job_id":`+strconv.FormatUint(failedJob.ID, 10)) {
+		t.Fatal("重试任务必须引用原失败任务")
 	}
 	resources := integrationRequest(t, server, member, http.MethodGet, path+"/resources?provider=aws&resource_type=ec2", nil, http.StatusOK)
 	if !strings.Contains(resources.Body.String(), "i-integration") || !strings.Contains(resources.Body.String(), "10.0.0.8") {

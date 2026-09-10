@@ -84,7 +84,9 @@ func New(dependencies Dependencies) *gin.Engine {
 	sources.PUT("/:sourceId", project.RequireRole(projectRepository, project.MemberRoleProjectAdmin), resourceHandler.UpdateSource)
 	sources.DELETE("/:sourceId", project.RequireRole(projectRepository, project.MemberRoleProjectAdmin), resourceHandler.DeleteSource)
 	sources.POST("/:sourceId/sync", project.RequireRole(projectRepository, project.MemberRoleProjectAdmin), resourceHandler.SyncSource)
+	sources.POST("/:sourceId/test", project.RequireRole(projectRepository, project.MemberRoleProjectAdmin), resourceHandler.TestSourceConnection)
 	projects.GET("/:id/resources", project.RequireRole(projectRepository, projectReadRoles...), resourceHandler.ListResources)
 	projects.GET("/:id/sync-jobs", project.RequireRole(projectRepository, projectReadRoles...), resourceHandler.ListJobs)
+	projects.POST("/:id/sync-jobs/:jobId/retry", project.RequireRole(projectRepository, project.MemberRoleProjectAdmin), resourceHandler.RetryJob)
 	return engine
 }

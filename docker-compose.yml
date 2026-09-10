@@ -14,6 +14,7 @@ services:
       - cmdb-mysql-data:/var/lib/mysql
       - ./backend/migrations/001_schema.sql:/docker-entrypoint-initdb.d/001_schema.sql:ro
       - ./backend/migrations/002_cloud_resources.sql:/docker-entrypoint-initdb.d/002_cloud_resources.sql:ro
+      - ./backend/migrations/003_async_sync_jobs.sql:/docker-entrypoint-initdb.d/003_async_sync_jobs.sql:ro
     command:
       - --character-set-server=utf8mb4
       - --collation-server=utf8mb4_0900_ai_ci

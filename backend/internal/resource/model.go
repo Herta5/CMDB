@@ -79,15 +79,16 @@ type Endpoint struct {
 
 // SyncJob 记录一次同步的状态和脱敏统计，不保存凭证或完整请求响应。
 type SyncJob struct {
-	ID           uint64          `gorm:"primaryKey" json:"id"`
-	ProjectID    uint64          `gorm:"not null;index" json:"project_id"`
-	SourceID     uint64          `gorm:"not null;index" json:"source_id"`
-	Status       string          `gorm:"size:32;not null" json:"status"`
-	Trigger      string          `gorm:"size:32;not null" json:"trigger"`
-	Statistics   json.RawMessage `gorm:"type:json" json:"statistics"`
-	ErrorSummary string          `gorm:"size:500;not null" json:"error_summary"`
-	StartedAt    time.Time       `json:"started_at"`
-	FinishedAt   *time.Time      `json:"finished_at"`
+	ID            uint64          `gorm:"primaryKey" json:"id"`
+	ProjectID     uint64          `gorm:"not null;index" json:"project_id"`
+	SourceID      uint64          `gorm:"not null;index" json:"source_id"`
+	PreviousJobID *uint64         `gorm:"index" json:"previous_job_id"`
+	Status        string          `gorm:"size:32;not null" json:"status"`
+	Trigger       string          `gorm:"size:32;not null" json:"trigger"`
+	Statistics    json.RawMessage `gorm:"type:json" json:"statistics"`
+	ErrorSummary  string          `gorm:"size:500;not null" json:"error_summary"`
+	StartedAt     time.Time       `json:"started_at"`
+	FinishedAt    *time.Time      `json:"finished_at"`
 }
 
 // AuditLog 保存不含敏感信息的资源操作轨迹，资源物理删除后仍独立保留。

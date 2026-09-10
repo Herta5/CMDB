@@ -5,7 +5,7 @@ export type Provider = 'aliyun' | 'aws' | 'kubernetes'
 export interface Source { id: number; projectId: number; provider: Provider; name: string; region: string; credentialHint: string; enabled: boolean; syncIntervalMinutes: number; lastSyncAt?: string; nextSyncAt?: string }
 export interface Endpoint { id: number; kind: 'private' | 'public' | 'hostname'; address: string; port: number; protocol: string; resolvedIps: string[] }
 export interface CloudResource { id: number; sourceId: number; provider: Provider; resourceType: string; externalId: string; name: string; region: string; zone: string; cloudStatus: string; lifecycleStatus: 'active' | 'lost'; endpoints: Endpoint[]; lastSeenAt: string; missingSince?: string }
-export interface SyncJob { id: number; sourceId: number; status: 'running' | 'success' | 'partial_success' | 'failed'; trigger: 'manual' | 'scheduled'; statistics: Record<string, Record<string, number>>; errorSummary: string; startedAt: string; finishedAt?: string }
+export interface SyncJob { id: number; sourceId: number; status: 'queued' | 'running' | 'success' | 'partial_success' | 'failed'; trigger: 'manual' | 'scheduled'; statistics: Record<string, Record<string, number>>; errorSummary: string; startedAt: string; finishedAt?: string }
 export interface SourceInput { provider: Provider; name: string; region: string; credential?: Record<string, unknown>; config: Record<string, unknown>; enabled?: boolean; syncIntervalMinutes: number }
 
 interface PageDTO<T> { items: T[] | null; total: number; page: number; page_size: number }
@@ -32,3 +32,7 @@ export async function updateSource(projectId: number, sourceId: number, input: S
 export async function deleteSource(projectId: number, sourceId: number) { await request.delete(`/projects/${projectId}/sources/${sourceId}`) }
 /** 手工执行一次同步。 */
 export async function syncSource(projectId: number, sourceId: number) { return toJob(await request.post(`/projects/${projectId}/sources/${sourceId}/sync`) as JobDTO) }
+/** 测试现有凭证和网络，仅返回资源类型可达性。 */
+export async function testSourceConnection(projectId: number, sourceId: number) { return await request.post(`/projects/${projectId}/sources/${sourceId}/test`) as { reachable_types: string[]; failed_types: string[] } }
+/** 为失败任务创建新任务，原任务保留用于审计。 */
+export async function retrySyncJob(projectId: number, jobId: number) { return toJob(await request.post(`/projects/${projectId}/sync-jobs/${jobId}/retry`) as JobDTO) }

@@ -154,6 +154,49 @@ func TestSyncRejectsConcurrentRunForSameSource(t *testing.T) {
 	<-done
 }
 
+// TestEnqueueSyncReturnsBeforeCollectorCompletes 验证手工同步先返回排队任务，后台再完成采集。
+func TestEnqueueSyncReturnsBeforeCollectorCompletes(t *testing.T) {
+	service, db, source, _ := newResourceServiceTest(t)
+	collector := blockingCollector{entered: make(chan struct{}), release: make(chan struct{})}
+	job, err := service.EnqueueSync(context.Background(), source.ID, "manual", collector)
+	if err != nil || job.Status != "queued" {
+		t.Fatal("异步同步必须立即返回排队任务")
+	}
+	<-collector.entered
+	if _, err := service.EnqueueSync(context.Background(), source.ID, "manual", collectorStub{}); !errors.Is(err, ErrSyncAlreadyRunning) {
+		t.Fatal("排队或运行中的同源任务必须拒绝重复入队")
+	}
+	close(collector.release)
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		var persisted SyncJob
+		_ = db.First(&persisted, job.ID).Error
+		if persisted.Status == "success" {
+			// HTTP 响应持有的排队快照不得被后台工作器并发改写。
+			if job.Status != "queued" {
+				t.Fatalf("入队返回值必须保持 queued，实际为 %s", job.Status)
+			}
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatal("后台同步未完成任务")
+}
+
+// TestConnectionDoesNotPersistSnapshots 验证连接测试不会把探测结果写入资源表。
+func TestConnectionDoesNotPersistSnapshots(t *testing.T) {
+	service, db, source, _ := newResourceServiceTest(t)
+	result, err := service.TestConnection(context.Background(), source.ProjectID, source.ID, collectorStub{results: []CollectionResult{{ResourceType: "ec2", Snapshots: []Snapshot{{ExternalID: "probe-only"}}}}})
+	if err != nil || len(result.ReachableTypes) != 1 || result.ReachableTypes[0] != "ec2" {
+		t.Fatal("连接测试必须只返回可达资源类型")
+	}
+	var count int64
+	_ = db.Model(&Resource{}).Count(&count).Error
+	if count != 0 {
+		t.Fatal("连接测试不得持久化探测快照")
+	}
+}
+
 // TestSyncDueSourcesOnlyRunsEnabledDueSources 验证调度只处理已启用且到期的接入源。
 func TestSyncDueSourcesOnlyRunsEnabledDueSources(t *testing.T) {
 	service, db, source, now := newResourceServiceTest(t)

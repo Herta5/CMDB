@@ -2,13 +2,13 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { createPinia, setActivePinia } from 'pinia'
 
-const { get, post } = vi.hoisted(() => ({ get: vi.fn(), post: vi.fn() }))
-vi.mock('@/utils/request', () => ({ default: { get, post, put: vi.fn(), delete: vi.fn() } }))
+const { get, post, put, remove } = vi.hoisted(() => ({ get: vi.fn(), post: vi.fn(), put: vi.fn(), remove: vi.fn() }))
+vi.mock('@/utils/request', () => ({ default: { get, post, put, delete: remove } }))
 
 import { useResourceStore } from './store'
 
 describe('云资源状态层', () => {
-  beforeEach(() => { setActivePinia(createPinia()); get.mockReset(); post.mockReset() })
+  beforeEach(() => { setActivePinia(createPinia()); get.mockReset(); post.mockReset(); put.mockReset(); remove.mockReset() })
 
   it('按当前项目与平台加载接入源、资源和任务', async () => {
     get.mockImplementation((url: string) => {
@@ -34,5 +34,20 @@ describe('云资源状态层', () => {
     expect(post).toHaveBeenCalledWith('/projects/7/sources/4/sync')
     expect(store.syncingSourceId).toBeNull()
     expect(get).toHaveBeenCalled()
+  })
+
+  it('支持连接测试、启停、删除和失败任务重试', async () => {
+    get.mockImplementation((url: string) => Promise.resolve(url.includes('/sources') ? [{ id: 4, project_id: 7, provider: 'aws', name: '账号', enabled: true, sync_interval_minutes: 60 }] : { items: [], total: 0 }))
+    post.mockResolvedValue({ reachable_types: ['ec2'], failed_types: [] }); put.mockResolvedValue({}); remove.mockResolvedValue(undefined)
+    const store = useResourceStore()
+    store.sources = [{ id: 4, projectId: 7, provider: 'aws', name: '账号', region: '', enabled: true, credentialHint: '已配置', syncIntervalMinutes: 60 }]
+    await store.testConnection(7, 4)
+    expect(store.connectionMessage).toContain('EC2')
+    await store.toggle(7, 'aws', store.sources[0])
+    expect(put).toHaveBeenCalledWith('/projects/7/sources/4', expect.objectContaining({ enabled: false, credential: undefined }))
+    await store.remove(7, 'aws', 4)
+    expect(remove).toHaveBeenCalledWith('/projects/7/sources/4')
+    await store.retry(7, 'aws', 12)
+    expect(post).toHaveBeenCalledWith('/projects/7/sync-jobs/12/retry')
   })
 })
