@@ -13,9 +13,13 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_ADMIN_PASSWORD:?请设置 POSTGRES_ADMIN_PASSWORD}
       POSTGRES_DB: cmdb
       DB_PASSWORD: ${DB_PASSWORD:?请设置 DB_PASSWORD}
+    # 校验在官方入口执行 initdb 前完成，避免错误凭证留下不会自动重跑初始化脚本的数据卷。
+    entrypoint: ["/bin/sh", "/usr/local/bin/cmdb-postgresql-entrypoint.sh"]
     volumes:
       # 数据库使用独立持久卷，停止应用容器不会丢失业务数据。
       - cmdb-postgresql-data:/var/lib/postgresql/data
+      # 包装入口只负责 initdb 前的凭证校验，校验通过后仍由官方入口执行初始化流程。
+      - ./backend/database/entrypoint/validate_before_init.sh:/usr/local/bin/cmdb-postgresql-entrypoint.sh:ro
       # 官方镜像按文件名顺序执行只读初始化文件，先创建受限应用账号再初始化业务结构。
       - ./backend/database/init/001_create_app_role.sh:/docker-entrypoint-initdb.d/001_create_app_role.sh:ro
       - ./backend/database/init/002_schema.sql:/docker-entrypoint-initdb.d/002_schema.sql:ro
