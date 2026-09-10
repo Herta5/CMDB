@@ -5,7 +5,8 @@ const { get, post, put } = vi.hoisted(() => ({ get: vi.fn(), post: vi.fn(), put:
 vi.mock('@/utils/request', () => ({ default: { get, post, put } }))
 import { useUserStore } from './store'
 
-const dto = { id: 2, username: 'cloud-user', display_name: '云资源用户', email: 'cloud@example.invalid', global_role: 'user', status: 'active' }
+const permissions = [{ project_id: 7, project_name: '平台项目', role: 'project_admin' as const }]
+const dto = { id: 2, username: 'cloud-user', display_name: '云资源用户', email: 'cloud@example.invalid', global_role: 'user', status: 'active', project_permissions: permissions }
 
 beforeEach(() => {
   setActivePinia(createPinia())
@@ -19,25 +20,16 @@ describe('用户管理状态', () => {
     get.mockResolvedValue([dto])
     const store = useUserStore()
     await store.loadUsers()
-    expect(store.users).toEqual([{ id: 2, username: 'cloud-user', displayName: '云资源用户', email: 'cloud@example.invalid', globalRole: 'user', status: 'active' }])
+    expect(store.users).toEqual([{ id: 2, username: 'cloud-user', displayName: '云资源用户', email: 'cloud@example.invalid', globalRole: 'user', status: 'active', projectPermissions: [{ projectId: 7, projectName: '平台项目', role: 'project_admin' }] }])
     expect(store.loadState).toBe('ready')
   })
 
   it('创建用户后加入列表，密码不进入状态', async () => {
     post.mockResolvedValue(dto)
     const store = useUserStore()
-    await store.createUser({ username: 'cloud-user', password: 'secure-user-password', displayName: '云资源用户', email: 'cloud@example.invalid' })
-    expect(post).toHaveBeenCalledWith('/users', { username: 'cloud-user', password: 'secure-user-password', display_name: '云资源用户', email: 'cloud@example.invalid' })
+    await store.createUser({ username: 'cloud-user', password: 'secure-user-password', displayName: '云资源用户', email: 'cloud@example.invalid', globalRole: 'user', status: 'active', projectPermissions: [{ projectId: 7, role: 'project_admin' }] })
+    expect(post).toHaveBeenCalledWith('/users', { username: 'cloud-user', password: 'secure-user-password', display_name: '云资源用户', email: 'cloud@example.invalid', global_role: 'user', status: 'active', project_permissions: [{ project_id: 7, role: 'project_admin' }] })
     expect(store.users[0]).not.toHaveProperty('password')
-  })
-
-  it('修改状态后立即更新列表身份', async () => {
-    get.mockResolvedValue([dto])
-    put.mockResolvedValue({ ...dto, status: 'disabled' })
-    const store = useUserStore()
-    await store.loadUsers()
-    await store.updateStatus(2, 'disabled')
-    expect(store.users[0].status).toBe('disabled')
   })
 
   it('编辑用户后更新公开资料且不在状态中保存新密码', async () => {
@@ -45,9 +37,9 @@ describe('用户管理状态', () => {
     put.mockResolvedValue({ ...dto, display_name: '平台管理员', email: 'admin@example.invalid', global_role: 'system_admin' })
     const store = useUserStore()
     await store.loadUsers()
-    await store.updateUser(2, { displayName: '平台管理员', email: 'admin@example.invalid', globalRole: 'system_admin', status: 'active', password: 'replacement-password' })
-    expect(put).toHaveBeenCalledWith('/users/2', { display_name: '平台管理员', email: 'admin@example.invalid', global_role: 'system_admin', status: 'active', password: 'replacement-password' })
-    expect(store.users[0]).toEqual({ id: 2, username: 'cloud-user', displayName: '平台管理员', email: 'admin@example.invalid', globalRole: 'system_admin', status: 'active' })
+    await store.updateUser(2, { displayName: '平台管理员', email: 'admin@example.invalid', globalRole: 'system_admin', status: 'active', password: 'replacement-password', projectPermissions: [{ projectId: 9, role: 'viewer' }] })
+    expect(put).toHaveBeenCalledWith('/users/2', { display_name: '平台管理员', email: 'admin@example.invalid', global_role: 'system_admin', status: 'active', password: 'replacement-password', project_permissions: [{ project_id: 9, role: 'viewer' }] })
+    expect(store.users[0]).toEqual({ id: 2, username: 'cloud-user', displayName: '平台管理员', email: 'admin@example.invalid', globalRole: 'system_admin', status: 'active', projectPermissions: [{ projectId: 7, projectName: '平台项目', role: 'project_admin' }] })
     expect(store.users[0]).not.toHaveProperty('password')
   })
 })

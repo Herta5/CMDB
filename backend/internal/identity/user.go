@@ -25,6 +25,15 @@ type User struct {
 	LastLoginAt  *time.Time `gorm:"column:last_login_at" json:"last_login_at"`
 	CreatedAt    time.Time  `gorm:"column:created_at;not null" json:"created_at"`
 	UpdatedAt    time.Time  `gorm:"column:updated_at;not null" json:"updated_at"`
+	// ProjectPermissions 由仓储通过共享成员表加载，不是 users 表的直接列。
+	ProjectPermissions []ProjectPermission `gorm:"-" json:"project_permissions"`
+}
+
+// ProjectPermission 表示用户在某个业务项目中的角色，项目名称仅用于展示。
+type ProjectPermission struct {
+	ProjectID   uint64 `json:"project_id"`
+	ProjectName string `json:"project_name"`
+	Role        string `json:"role"`
 }
 
 // TableName 将身份域用户明确映射到 CMDB 的 users 表。

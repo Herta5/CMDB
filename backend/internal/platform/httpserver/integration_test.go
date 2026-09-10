@@ -83,13 +83,17 @@ func TestHealthEndpoint(t *testing.T) {
 	}
 }
 
-// TestSystemAdministratorManagesUsers 验证用户管理仅暴露公开资料，并立即执行停用状态。
+// TestSystemAdministratorManagesUsers 验证创建用户可原子授予多个项目角色，列表仅暴露公开资料。
 func TestSystemAdministratorManagesUsers(t *testing.T) {
-	server, password := integrationServer(t)
+	server, password, db := integrationServerWithDatabase(t)
 	admin := loginUser(t, server, "operator", password)
 	member := loginUser(t, server, "member-a", password)
+	var firstProject, secondProject project.Project
+	decodeIntegration(t, integrationRequest(t, server, admin, http.MethodPost, "/api/v1/projects", map[string]any{"code": "user-auth-a", "name": "用户授权甲"}, http.StatusCreated), &firstProject)
+	decodeIntegration(t, integrationRequest(t, server, admin, http.MethodPost, "/api/v1/projects", map[string]any{"code": "user-auth-b", "name": "用户授权乙"}, http.StatusCreated), &secondProject)
 	created := integrationRequest(t, server, admin, http.MethodPost, "/api/v1/users", map[string]any{
-		"username": "cloud-user", "password": "secure-user-password", "display_name": "云资源用户", "email": "cloud@example.invalid",
+		"username": "cloud-user", "password": "secure-user-password", "display_name": "云资源用户", "email": "cloud@example.invalid", "global_role": "user", "status": "active",
+		"project_permissions": []map[string]any{{"project_id": firstProject.ID, "role": "project_admin"}, {"project_id": secondProject.ID, "role": "viewer"}},
 	}, http.StatusCreated)
 	if strings.Contains(created.Body.String(), "password") {
 		t.Fatal("创建用户响应不得包含密码或密码哈希")
@@ -97,39 +101,70 @@ func TestSystemAdministratorManagesUsers(t *testing.T) {
 	var user identity.User
 	decodeIntegration(t, created, &user)
 	if user.ID == 0 || user.Username != "cloud-user" || user.GlobalRole != identity.GlobalRoleUser || user.Status != "active" {
-		t.Fatal("创建用户必须返回默认启用的普通用户公开资料")
+		t.Fatal("创建用户必须返回指定的全局角色和状态")
+	}
+	var memberships int64
+	if err := db.Table("project_members").Where("user_id = ?", user.ID).Count(&memberships).Error; err != nil || memberships != 2 {
+		t.Fatalf("创建用户必须在同一事务内保存两个项目权限：count=%d err=%v", memberships, err)
 	}
 	integrationRequest(t, server, member, http.MethodGet, "/api/v1/users", nil, http.StatusForbidden)
 	listed := integrationRequest(t, server, admin, http.MethodGet, "/api/v1/users", nil, http.StatusOK)
-	if strings.Contains(listed.Body.String(), "password_hash") {
-		t.Fatal("用户列表不得包含密码哈希")
+	if strings.Contains(listed.Body.String(), "password_hash") || !strings.Contains(listed.Body.String(), "用户授权甲") || !strings.Contains(listed.Body.String(), "project_admin") {
+		t.Fatal("用户列表必须返回项目权限和项目名称，且不得包含密码哈希")
 	}
-	integrationRequest(t, server, admin, http.MethodPut, "/api/v1/users/"+strconv.FormatUint(user.ID, 10)+"/status", map[string]any{"status": "disabled"}, http.StatusOK)
+	integrationRequest(t, server, admin, http.MethodPut, "/api/v1/users/"+strconv.FormatUint(user.ID, 10), map[string]any{"display_name": "云资源用户", "email": "cloud@example.invalid", "global_role": "user", "status": "disabled", "project_permissions": []map[string]any{{"project_id": secondProject.ID, "role": "member"}}}, http.StatusOK)
 	integrationRequest(t, server, "", http.MethodPost, "/api/v1/auth/login", map[string]any{"username": "cloud-user", "password": "secure-user-password"}, http.StatusUnauthorized)
 }
 
 // TestSystemAdministratorEditsUserAndCannotLockSelfOut 验证用户资料、角色和密码可维护，同时保护当前管理员权限。
 func TestSystemAdministratorEditsUserAndCannotLockSelfOut(t *testing.T) {
-	server, password := integrationServer(t)
+	server, password, db := integrationServerWithDatabase(t)
 	admin := loginUser(t, server, "operator", password)
 	member := loginUser(t, server, "member-a", password)
+	var firstProject, secondProject project.Project
+	decodeIntegration(t, integrationRequest(t, server, admin, http.MethodPost, "/api/v1/projects", map[string]any{"code": "replace-a", "name": "替换前项目"}, http.StatusCreated), &firstProject)
+	decodeIntegration(t, integrationRequest(t, server, admin, http.MethodPost, "/api/v1/projects", map[string]any{"code": "replace-b", "name": "替换后项目"}, http.StatusCreated), &secondProject)
 	created := integrationRequest(t, server, admin, http.MethodPost, "/api/v1/users", map[string]any{
-		"username": "editable-user", "password": "initial-user-password", "display_name": "待编辑用户", "email": "old@example.invalid",
+		"username": "editable-user", "password": "initial-user-password", "display_name": "待编辑用户", "email": "old@example.invalid", "global_role": "user", "status": "active", "project_permissions": []map[string]any{{"project_id": firstProject.ID, "role": "viewer"}},
 	}, http.StatusCreated)
 	var user identity.User
 	decodeIntegration(t, created, &user)
 	path := "/api/v1/users/" + strconv.FormatUint(user.ID, 10)
 	updated := integrationRequest(t, server, admin, http.MethodPut, path, map[string]any{
-		"display_name": "已编辑用户", "email": "new@example.invalid", "global_role": "system_admin", "status": "active", "password": "replacement-password",
+		"display_name": "已编辑用户", "email": "new@example.invalid", "global_role": "system_admin", "status": "active", "password": "replacement-password", "project_permissions": []map[string]any{{"project_id": secondProject.ID, "role": "member"}},
 	}, http.StatusOK)
 	if strings.Contains(updated.Body.String(), "password") || !strings.Contains(updated.Body.String(), "已编辑用户") || !strings.Contains(updated.Body.String(), "system_admin") {
 		t.Fatal("编辑响应必须返回更新后的公开资料且不得包含密码")
+	}
+	var roles []project.MemberRole
+	if err := db.Where("user_id = ?", user.ID).Find(&roles).Error; err != nil || len(roles) != 1 || roles[0].ProjectID != secondProject.ID || roles[0].Role != project.MemberRoleMember {
+		t.Fatalf("编辑用户必须全量替换项目权限：roles=%+v err=%v", roles, err)
 	}
 	integrationRequest(t, server, "", http.MethodPost, "/api/v1/auth/login", map[string]any{"username": "editable-user", "password": "initial-user-password"}, http.StatusUnauthorized)
 	integrationRequest(t, server, "", http.MethodPost, "/api/v1/auth/login", map[string]any{"username": "editable-user", "password": "replacement-password"}, http.StatusOK)
 	integrationRequest(t, server, member, http.MethodPut, path, map[string]any{"display_name": "越权修改", "email": "", "global_role": "user", "status": "active"}, http.StatusForbidden)
 	integrationRequest(t, server, admin, http.MethodPut, "/api/v1/users/1", map[string]any{"display_name": "当前管理员", "email": "", "global_role": "user", "status": "active"}, http.StatusConflict)
 	integrationRequest(t, server, admin, http.MethodPut, "/api/v1/users/1/status", map[string]any{"status": "disabled"}, http.StatusConflict)
+}
+
+// TestCreatingUserWithMissingProjectRollsBack 验证无效项目授权不会留下孤立用户或部分成员关系。
+func TestCreatingUserWithMissingProjectRollsBack(t *testing.T) {
+	server, password, db := integrationServerWithDatabase(t)
+	admin := loginUser(t, server, "operator", password)
+	integrationRequest(t, server, admin, http.MethodPost, "/api/v1/users", map[string]any{
+		"username": "rollback-user", "password": "rollback-user-password", "display_name": "回滚用户", "global_role": "user", "status": "active",
+		"project_permissions": []map[string]any{{"project_id": 999999, "role": "viewer"}},
+	}, http.StatusBadRequest)
+	var users, memberships int64
+	if err := db.Table("users").Where("username = ?", "rollback-user").Count(&users).Error; err != nil {
+		t.Fatalf("查询回滚用户失败：%v", err)
+	}
+	if err := db.Table("project_members").Where("user_id NOT IN ?", []uint64{1, 2, 3}).Count(&memberships).Error; err != nil {
+		t.Fatalf("查询回滚权限失败：%v", err)
+	}
+	if users != 0 || memberships != 0 {
+		t.Fatalf("无效授权必须整体回滚：users=%d memberships=%d", users, memberships)
+	}
 }
 
 // TestProjectAdministratorReadsCandidatesAndManagesMemberRoles 验证项目管理员只能在所属项目内查询候选身份并管理角色。

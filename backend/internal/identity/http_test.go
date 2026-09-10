@@ -296,8 +296,18 @@ func (inMemoryUserRepository) Create(context.Context, *identity.User) error {
 	return gorm.ErrInvalidDB
 }
 
+// CreateWithPermissions 不属于认证测试范围，返回明确的未实现错误。
+func (inMemoryUserRepository) CreateWithPermissions(context.Context, *identity.User, []identity.ProjectPermission) error {
+	return gorm.ErrInvalidDB
+}
+
 // Update 不属于认证接口测试范围，返回明确的未实现错误。
 func (inMemoryUserRepository) Update(context.Context, *identity.User) error {
+	return gorm.ErrInvalidDB
+}
+
+// UpdateWithPermissions 不属于认证测试范围，返回明确的未实现错误。
+func (inMemoryUserRepository) UpdateWithPermissions(context.Context, *identity.User, []identity.ProjectPermission) error {
 	return gorm.ErrInvalidDB
 }
 

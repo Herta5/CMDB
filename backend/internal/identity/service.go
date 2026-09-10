@@ -30,11 +30,18 @@ var (
 
 // UpdateUserInput 是系统管理员可维护的用户字段；空密码表示保持原密码。
 type UpdateUserInput struct {
-	DisplayName string
-	Email       string
-	GlobalRole  string
-	Status      string
-	Password    string
+	DisplayName        string
+	Email              string
+	GlobalRole         string
+	Status             string
+	Password           string
+	ProjectPermissions []ProjectPermission
+}
+
+// CreateUserInput 是系统管理员创建身份时可同时设置的全局与项目权限。
+type CreateUserInput struct {
+	Username, Password, DisplayName, Email, GlobalRole, Status string
+	ProjectPermissions                                         []ProjectPermission
 }
 
 // defaultTokenLifetime 限制会话可被盗用的时间窗口，同时保证每个 JWT 都带有到期时间。
@@ -117,27 +124,31 @@ func (s *Service) CurrentUser(ctx context.Context, claims UserClaims) (*User, er
 	return user, nil
 }
 
-// CreateUser 创建默认启用的普通用户，明文密码只在此调用链中用于生成不可逆哈希。
-func (s *Service) CreateUser(ctx context.Context, username, password, displayName, email string) (*User, error) {
+// CreateUser 按管理员选择创建用户并授权，明文密码只在此调用链中用于生成不可逆哈希。
+func (s *Service) CreateUser(ctx context.Context, input CreateUserInput) (*User, error) {
 	if s.repository == nil {
 		return nil, ErrIdentityRepositoryUnavailable
 	}
-	username = strings.TrimSpace(username)
-	displayName = strings.TrimSpace(displayName)
-	if username == "" || displayName == "" || len(password) < 12 || len(password) > 72 {
+	input.Username = strings.TrimSpace(input.Username)
+	input.DisplayName = strings.TrimSpace(input.DisplayName)
+	input.Email = strings.TrimSpace(input.Email)
+	if input.Username == "" || input.DisplayName == "" || len(input.Password) < 12 || len(input.Password) > 72 || !validRoleAndStatus(input.GlobalRole, input.Status) || !validProjectPermissions(input.ProjectPermissions) {
 		return nil, ErrInvalidUserInput
 	}
-	if _, err := s.repository.FindByUsername(ctx, username); err == nil {
+	if _, err := s.repository.FindByUsername(ctx, input.Username); err == nil {
 		return nil, ErrDuplicateUsername
 	} else if !errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, err
 	}
-	hash, err := HashPassword(password)
+	hash, err := HashPassword(input.Password)
 	if err != nil {
 		return nil, err
 	}
-	user := &User{Username: username, PasswordHash: hash, DisplayName: displayName, Email: strings.TrimSpace(email), GlobalRole: GlobalRoleUser, Status: "active"}
-	if err := s.repository.Create(ctx, user); err != nil {
+	user := &User{Username: input.Username, PasswordHash: hash, DisplayName: input.DisplayName, Email: input.Email, GlobalRole: input.GlobalRole, Status: input.Status}
+	if err := s.repository.CreateWithPermissions(ctx, user, input.ProjectPermissions); err != nil {
+		if errors.Is(err, ErrProjectPermissionInvalid) {
+			return nil, ErrInvalidUserInput
+		}
 		return nil, err
 	}
 	return user, nil
@@ -178,7 +189,7 @@ func (s *Service) UpdateUser(ctx context.Context, actorID, id uint64, input Upda
 	}
 	input.DisplayName = strings.TrimSpace(input.DisplayName)
 	input.Email = strings.TrimSpace(input.Email)
-	if actorID == 0 || id == 0 || input.DisplayName == "" || (input.GlobalRole != GlobalRoleSystemAdmin && input.GlobalRole != GlobalRoleUser) || (input.Status != "active" && input.Status != "disabled") || (input.Password != "" && (len(input.Password) < 12 || len(input.Password) > 72)) {
+	if actorID == 0 || id == 0 || input.DisplayName == "" || !validRoleAndStatus(input.GlobalRole, input.Status) || !validProjectPermissions(input.ProjectPermissions) || (input.Password != "" && (len(input.Password) < 12 || len(input.Password) > 72)) {
 		return nil, ErrInvalidUserInput
 	}
 	if actorID == id && (input.GlobalRole != GlobalRoleSystemAdmin || input.Status != "active") {
@@ -202,13 +213,36 @@ func (s *Service) UpdateUser(ctx context.Context, actorID, id uint64, input Upda
 		}
 		user.PasswordHash = hash
 	}
-	if err := s.repository.Update(ctx, user); err != nil {
+	if err := s.repository.UpdateWithPermissions(ctx, user, input.ProjectPermissions); err != nil {
+		if errors.Is(err, ErrProjectPermissionInvalid) {
+			return nil, ErrInvalidUserInput
+		}
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, ErrUserNotFound
 		}
 		return nil, err
 	}
 	return s.repository.FindByID(ctx, id)
+}
+
+// validRoleAndStatus 统一校验全局角色和账号状态，创建与编辑保持同一契约。
+func validRoleAndStatus(role, status string) bool {
+	return (role == GlobalRoleSystemAdmin || role == GlobalRoleUser) && (status == "active" || status == "disabled")
+}
+
+// validProjectPermissions 拒绝重复项目和非法角色，避免全量替换出现歧义。
+func validProjectPermissions(values []ProjectPermission) bool {
+	seen := make(map[uint64]struct{}, len(values))
+	for _, value := range values {
+		if value.ProjectID == 0 || (value.Role != "project_admin" && value.Role != "member" && value.Role != "viewer") {
+			return false
+		}
+		if _, exists := seen[value.ProjectID]; exists {
+			return false
+		}
+		seen[value.ProjectID] = struct{}{}
+	}
+	return true
 }
 
 // sign 使用 HS256 签发仅含最小身份声明的 JWT，令牌内容不可替代数据库中的用户资料。

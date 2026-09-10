@@ -1,7 +1,7 @@
 // 本文件维护用户管理页面状态，任何密码都不得写入响应列表或持久化存储。
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
-import { createUser as createUserRequest, listUsers, updateUser as updateUserRequest, updateUserStatus, type CreateUserInput, type UpdateUserInput, type User } from './api'
+import { createUser as createUserRequest, listUsers, updateUser as updateUserRequest, type CreateUserInput, type UpdateUserInput, type User } from './api'
 
 /** 用户页面明确区分加载、空数据、权限拒绝和服务失败。 */
 export type UserLoadState = 'idle' | 'loading' | 'ready' | 'empty' | 'forbidden' | 'error'
@@ -42,18 +42,6 @@ export const useUserStore = defineStore('cmdb-user', () => {
     }
   }
 
-  /** 状态修改后替换对应用户，确保停用结果即时反映在列表。 */
-  async function updateStatus(id: number, status: User['status']) {
-    submitting.value = true
-    try {
-      const user = await updateUserStatus(id, status)
-      users.value = users.value.map(value => value.id === id ? user : value)
-      return user
-    } finally {
-      submitting.value = false
-    }
-  }
-
   /** 编辑成功后仅保存服务端公开资料，提交的新密码不会进入 Pinia 状态。 */
   async function updateUser(id: number, input: UpdateUserInput) {
     submitting.value = true
@@ -70,5 +58,5 @@ export const useUserStore = defineStore('cmdb-user', () => {
     }
   }
 
-  return { users, loadState, submitting, errorCode, loadUsers, createUser, updateUser, updateStatus }
+  return { users, loadState, submitting, errorCode, loadUsers, createUser, updateUser }
 })

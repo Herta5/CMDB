@@ -39,16 +39,19 @@ func (h *HTTPHandler) CreateUser(c *gin.Context, claims UserClaims) {
 		return
 	}
 	var request struct {
-		Username    string `json:"username"`
-		Password    string `json:"password"`
-		DisplayName string `json:"display_name"`
-		Email       string `json:"email"`
+		Username           string              `json:"username"`
+		Password           string              `json:"password"`
+		DisplayName        string              `json:"display_name"`
+		Email              string              `json:"email"`
+		GlobalRole         string              `json:"global_role"`
+		Status             string              `json:"status"`
+		ProjectPermissions []ProjectPermission `json:"project_permissions"`
 	}
 	if c.ShouldBindJSON(&request) != nil {
 		writeError(c, http.StatusBadRequest, "USER_INVALID_REQUEST", "请求格式错误")
 		return
 	}
-	user, err := h.service.CreateUser(c.Request.Context(), request.Username, request.Password, request.DisplayName, request.Email)
+	user, err := h.service.CreateUser(c.Request.Context(), CreateUserInput{Username: request.Username, Password: request.Password, DisplayName: request.DisplayName, Email: request.Email, GlobalRole: request.GlobalRole, Status: request.Status, ProjectPermissions: request.ProjectPermissions})
 	if errors.Is(err, ErrInvalidUserInput) {
 		writeError(c, http.StatusBadRequest, "USER_INVALID_INPUT", "用户参数无效")
 		return
@@ -106,17 +109,18 @@ func (h *HTTPHandler) UpdateUser(c *gin.Context, claims UserClaims) {
 	}
 	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
 	var request struct {
-		DisplayName string `json:"display_name"`
-		Email       string `json:"email"`
-		GlobalRole  string `json:"global_role"`
-		Status      string `json:"status"`
-		Password    string `json:"password"`
+		DisplayName        string              `json:"display_name"`
+		Email              string              `json:"email"`
+		GlobalRole         string              `json:"global_role"`
+		Status             string              `json:"status"`
+		Password           string              `json:"password"`
+		ProjectPermissions []ProjectPermission `json:"project_permissions"`
 	}
 	if err != nil || id == 0 || c.ShouldBindJSON(&request) != nil {
 		writeError(c, http.StatusBadRequest, "USER_INVALID_REQUEST", "请求格式错误")
 		return
 	}
-	user, err := h.service.UpdateUser(c.Request.Context(), claims.UserID, id, UpdateUserInput{DisplayName: request.DisplayName, Email: request.Email, GlobalRole: request.GlobalRole, Status: request.Status, Password: request.Password})
+	user, err := h.service.UpdateUser(c.Request.Context(), claims.UserID, id, UpdateUserInput{DisplayName: request.DisplayName, Email: request.Email, GlobalRole: request.GlobalRole, Status: request.Status, Password: request.Password, ProjectPermissions: request.ProjectPermissions})
 	if errors.Is(err, ErrInvalidUserInput) {
 		writeError(c, http.StatusBadRequest, "USER_INVALID_INPUT", "用户参数无效")
 		return
@@ -186,23 +190,25 @@ type loginResponse struct {
 
 // publicUser 明确列出可暴露给客户端的用户字段，避免模型新增敏感字段时被意外序列化。
 type publicUser struct {
-	ID          uint64 `json:"id"`
-	Username    string `json:"username"`
-	DisplayName string `json:"display_name"`
-	Email       string `json:"email"`
-	GlobalRole  string `json:"global_role"`
-	Status      string `json:"status"`
+	ID                 uint64              `json:"id"`
+	Username           string              `json:"username"`
+	DisplayName        string              `json:"display_name"`
+	Email              string              `json:"email"`
+	GlobalRole         string              `json:"global_role"`
+	Status             string              `json:"status"`
+	ProjectPermissions []ProjectPermission `json:"project_permissions"`
 }
 
 // toPublicUser 将领域用户转为客户端可见的最小身份资料。
 func toPublicUser(user *User) publicUser {
 	return publicUser{
-		ID:          user.ID,
-		Username:    user.Username,
-		DisplayName: user.DisplayName,
-		Email:       user.Email,
-		GlobalRole:  user.GlobalRole,
-		Status:      user.Status,
+		ID:                 user.ID,
+		Username:           user.Username,
+		DisplayName:        user.DisplayName,
+		Email:              user.Email,
+		GlobalRole:         user.GlobalRole,
+		Status:             user.Status,
+		ProjectPermissions: user.ProjectPermissions,
 	}
 }
 
