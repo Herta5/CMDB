@@ -38,11 +38,13 @@ describe('认证路由守卫', () => {
     expect(router.resolve('/projects/2').matched[0].name).toBe('Console')
   })
 
-  it('仅保留阿里云和 AWS 两个云平台模块', () => {
-    expect(router.resolve('/aliyun').name).toBe('AliyunResources')
-    expect(router.resolve('/aws').name).toBe('AWSResources')
+  it('资产按服务器、数据库和负载均衡分类，原平台地址转入云同步管理', () => {
+    expect(router.resolve('/assets/servers').name).toBe('ServerAssets')
+    expect(router.resolve('/assets/databases').name).toBe('DatabaseAssets')
+    expect(router.resolve('/assets/load-balancers').name).toBe('LoadBalancerAssets')
+    expect(router.resolve('/cloud-sync').name).toBe('CloudSyncManagement')
+    expect(router.resolve('/aliyun').name).toBe('LegacyAliyunResources')
     expect(router.resolve('/kubernetes').name).not.toBe('KubernetesResources')
-    expect(router.resolve('/aws').matched[0].name).toBe('Console')
   })
 
   it('未登录访问项目详情时保留完整项目目标供登录后恢复', async () => {
@@ -55,7 +57,7 @@ describe('认证路由守卫', () => {
     await router.push('/')
 
     expect(router.currentRoute.value.path).toBe('/login')
-    expect(router.currentRoute.value.query.redirect).toBe('/')
+    expect(router.currentRoute.value.query.redirect).toBe('/assets/servers')
   })
 
   it('已登录用户访问登录页时回到受保护入口', async () => {
@@ -63,6 +65,6 @@ describe('认证路由守卫', () => {
 
     await router.push('/login')
 
-    expect(router.currentRoute.value.path).toBe('/')
+    expect(router.currentRoute.value.path).toBe('/assets/servers')
   })
 })

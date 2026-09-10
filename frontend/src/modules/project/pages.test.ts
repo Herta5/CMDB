@@ -1,6 +1,6 @@
 // 使用 Vue 真实渲染器检查可见页面及交互；仅以内存节点替代浏览器 DOM。
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { createRenderer, nextTick, type Component } from 'vue'
+import { createRenderer, h, nextTick, type Component } from 'vue'
 import { createPinia, setActivePinia } from 'pinia'
 import { createMemoryHistory, createRouter } from 'vue-router'
 const { get, post, put, remove } = vi.hoisted(() => ({ get: vi.fn(), post: vi.fn(), put: vi.fn(), remove: vi.fn() }))
@@ -11,6 +11,7 @@ import ProjectListPage from './ProjectListPage.vue'
 import ProjectDetailPage from './ProjectDetailPage.vue'
 import ConsoleLayout from '@/layouts/ConsoleLayout.vue'
 import UserManagementPage from '@/modules/user/UserManagementPage.vue'
+import AssetListPage from '@/modules/resource/AssetListPage.vue'
 
 // 节点模型只承担宿主操作，页面逻辑、路由和项目状态均执行生产代码。
 type Node = { type: string; text: string; props: Record<string, any>; children: Node[]; parent: Node | null; value?: unknown; selected?: boolean; readonly options: Node[]; addEventListener: () => void; removeEventListener: () => void }
@@ -63,6 +64,10 @@ async function mount(component: Component, path = '/projects') {
   const router = createRouter({ history: createMemoryHistory(), routes: [
     { path: '/projects', component: ProjectListPage },
     { path: '/projects/:projectId', component: ProjectDetailPage },
+    { path: '/assets/servers', component: { render: () => null } },
+    { path: '/assets/databases', component: { render: () => null } },
+    { path: '/assets/load-balancers', component: { render: () => null } },
+    { path: '/cloud-sync', component: { render: () => null } },
     // 控制台导航需要这些真实目标，页面测试不渲染平台内容但不能留下路由警告。
     { path: '/aliyun', component: { render: () => null } },
     { path: '/aws', component: { render: () => null } },
@@ -114,7 +119,7 @@ describe('项目控制台页面', () => {
     expect(text(root)).toContain('项目不可访问')
     expect(useProjectStore().currentProjectId).toBeNull()
     expect(localStorage.getItem('cmdb.currentProjectId')).toBeNull()
-    const switcher = all(root).find(n => n.type === 'select' && n.props['aria-label'] === '当前业务项目')!
+    const switcher = all(root).find(n => n.type === 'select' && n.props['aria-label'] === '当前项目')!
     expect(switcher.props.value).toBe('')
     expect(text(switcher)).toContain('当前项目不可访问')
     app.unmount()
@@ -175,21 +180,22 @@ describe('项目控制台页面', () => {
     expect(text(root)).not.toContain('平台项目')
     app.unmount()
   })
-  it('顶部切换项目后同步上下文和详情地址，退出时清除身份与项目', async () => {
+  it('顶部切换项目后保留当前功能页，退出时清除身份与项目', async () => {
     get.mockImplementation((url: string) => Promise.resolve(url === '/projects' ? [fixture, { ...fixture, id: 3, name: '支付项目' }] : { ...fixture, id: 3, name: '支付项目' }))
-    const { root, app, router } = await mount(ConsoleLayout)
+    const { root, app, router } = await mount(ConsoleLayout, '/assets/servers')
     expect(text(root)).toContain('运维用户')
-    expect(text(root)).toContain('阿里云')
-    expect(text(root)).toContain('AWS')
-    expect(text(root)).not.toContain('权限管理')
+    expect(text(root)).toContain('资产列表')
+    expect(text(root)).not.toContain('阿里云')
+    expect(text(root)).not.toContain('AWS')
+    expect(text(root)).not.toContain('系统管理')
     expect(text(root)).not.toContain('用户管理')
     expect(text(root)).not.toContain('Kubernetes')
     expect(all(root).some(n => n.props['aria-label'] === '全局搜索')).toBe(false)
-    const switcher = all(root).find(n => n.type === 'select' && n.props['aria-label'] === '当前业务项目')!
+    const switcher = all(root).find(n => n.type === 'select' && n.props['aria-label'] === '当前项目')!
     await switcher.props.onChange({ target: { value: '3' } })
     await flush()
     expect(useProjectStore().currentProjectId).toBe(3)
-    expect(router.currentRoute.value.path).toBe('/projects/3')
+    expect(router.currentRoute.value.path).toBe('/assets/servers')
     await all(root).find(n => n.type === 'button' && text(n).includes('退出登录'))!.props.onClick()
     await flush()
     expect(useProjectStore().projects).toEqual([])
@@ -218,12 +224,34 @@ describe('项目控制台页面', () => {
     expect(text(root)).not.toContain('新建业务项目')
     app.unmount()
   })
-  it('系统管理员侧栏显示权限管理一级分组和用户管理入口', async () => {
+  it('系统管理员侧栏按工作空间和系统管理重组入口', async () => {
     useAuthStore().acceptSession('管理员会话', { id: 1, username: 'admin', globalRole: 'system_admin' })
     const { root, app } = await mount(ConsoleLayout)
-    expect(text(root)).toContain('权限管理')
+    expect(text(root)).toContain('资产列表')
+    expect(text(root)).toContain('服务器')
+    expect(text(root)).toContain('数据库')
+    expect(text(root)).toContain('负载均衡')
+    expect(text(root)).toContain('系统管理')
+    expect(text(root)).toContain('项目管理')
+    expect(text(root)).toContain('云同步管理')
     expect(text(root)).toContain('用户管理')
+    expect(text(root)).not.toContain('云平台')
+    expect(text(root)).not.toContain('阿里云AWS')
     expect(all(root).some(n => n.type === 'a' && n.props.href === '/users')).toBe(true)
+    app.unmount()
+  })
+  it('服务器资产页合并当前项目的 ECS 和 EC2', async () => {
+    const projectStore = useProjectStore()
+    projectStore.projects = [{ id: 2, code: 'platform', name: '平台项目', description: '', status: 'enabled', ownerUserId: null, createdAt: '', updatedAt: '' }]
+    projectStore.selectProject(2)
+    get.mockImplementation((_url: string, options?: { params?: { resource_type?: string } }) => Promise.resolve({ items: [{ id: options?.params?.resource_type === 'ecs' ? 11 : 12, provider: options?.params?.resource_type === 'ecs' ? 'aliyun' : 'aws', resource_type: options?.params?.resource_type, external_id: 'asset', lifecycle_status: 'active', endpoints: [] }], total: 1 }))
+    const component = { render: () => h(AssetListPage, { category: 'server' }) }
+    const { root, app } = await mount(component, '/assets/servers')
+    expect(text(root)).toContain('服务器列表')
+    expect(text(root)).toContain('阿里云')
+    expect(text(root)).toContain('AWS')
+    expect(get).toHaveBeenCalledWith('/projects/2/resources', { params: expect.objectContaining({ resource_type: 'ecs' }) })
+    expect(get).toHaveBeenCalledWith('/projects/2/resources', { params: expect.objectContaining({ resource_type: 'ec2' }) })
     app.unmount()
   })
   it('系统管理员可打开用户编辑窗口且用户名保持不可修改', async () => {

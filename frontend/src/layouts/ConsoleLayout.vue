@@ -14,7 +14,7 @@ const switcherPlaceholder = computed(() => {
   if (projects.listState === 'loading') return '正在加载项目…'
   if (projects.listState === 'error') return '项目加载失败'
   if (projects.listState === 'forbidden') return '无权访问项目'
-  if (projects.listState === 'ready') return route.params.projectId ? '当前项目不可访问' : '请选择业务项目'
+  if (projects.listState === 'ready') return route.params.projectId ? '当前项目不可访问' : '请选择项目'
   return '暂无可访问的项目'
 })
 
@@ -32,11 +32,10 @@ watch(() => [route.params.projectId, projects.listState, projects.detailState], 
   }
 }, { immediate: true })
 
-/** 切换后进入对应项目详情，使页面地址和资源归属上下文保持一致。 */
+/** 顶部项目切换只更换全局数据边界，保留当前功能页便于连续比较资产。 */
 async function switchProject(event: Event) {
   const id = Number((event.target as HTMLSelectElement).value)
-  // 平台页面切换项目时保持当前模块，项目资料页面才进入新项目详情。
-  if (projects.selectProject(id) && !['/aliyun', '/aws'].includes(route.path)) await router.push(`/projects/${id}`)
+  projects.selectProject(id)
 }
 
 /** 退出统一清理认证状态，项目状态通过会话监听同步失效。 */
@@ -50,20 +49,20 @@ async function logout() {
   <div class="cmdb-console">
     <a class="skip-link" href="#console-content">跳至主要内容</a>
     <aside class="console-sidebar">
-      <router-link class="console-brand" to="/projects" aria-label="CMDB 项目首页">
+      <router-link class="console-brand" to="/assets/servers" aria-label="CMDB 资产首页">
         <span class="brand-mark" aria-hidden="true">C</span><strong>CMDB</strong>
         <span class="brand-caption">云资源管理</span>
       </router-link>
       <nav aria-label="主导航" class="console-nav">
         <p class="nav-group-label">工作空间</p>
-        <router-link to="/projects" class="nav-item" :class="{ 'is-active': route.path === '/' || route.path.startsWith('/projects') }">
-          <span class="nav-symbol" aria-hidden="true">▦</span>业务项目
-        </router-link>
-        <p class="nav-group-label">云平台</p>
-        <router-link to="/aliyun" class="nav-item platform-nav" :class="{ 'is-active': route.path === '/aliyun' }"><span class="platform-dot aliyun" aria-hidden="true" />阿里云</router-link>
-        <router-link to="/aws" class="nav-item platform-nav" :class="{ 'is-active': route.path === '/aws' }"><span class="platform-dot aws" aria-hidden="true" />AWS</router-link>
+        <p class="nav-parent"><span class="nav-symbol" aria-hidden="true">▦</span>资产列表</p>
+        <router-link to="/assets/servers" class="nav-item nav-child" :class="{ 'is-active': route.path === '/assets/servers' }">服务器</router-link>
+        <router-link to="/assets/databases" class="nav-item nav-child" :class="{ 'is-active': route.path === '/assets/databases' }">数据库</router-link>
+        <router-link to="/assets/load-balancers" class="nav-item nav-child" :class="{ 'is-active': route.path === '/assets/load-balancers' }">负载均衡</router-link>
         <template v-if="auth.currentUser?.globalRole === 'system_admin'">
-          <p class="nav-group-label">权限管理</p>
+          <p class="nav-group-label">系统管理</p>
+          <router-link to="/projects" class="nav-item" :class="{ 'is-active': route.path.startsWith('/projects') }"><span class="nav-symbol" aria-hidden="true">▣</span>项目管理</router-link>
+          <router-link to="/cloud-sync" class="nav-item" :class="{ 'is-active': route.path === '/cloud-sync' }"><span class="nav-symbol" aria-hidden="true">↻</span>云同步管理</router-link>
           <router-link to="/users" class="nav-item" :class="{ 'is-active': route.path === '/users' }"><span class="nav-symbol" aria-hidden="true">♙</span>用户管理</router-link>
         </template>
       </nav>
@@ -73,8 +72,8 @@ async function logout() {
     <div class="console-workspace">
       <header class="console-topbar">
         <div class="project-switcher">
-          <label for="current-project">业务项目</label>
-          <select id="current-project" aria-label="当前业务项目" :value="projects.currentProjectId ?? ''" :disabled="projects.listState !== 'ready'" @change="switchProject">
+          <label for="current-project">项目</label>
+          <select id="current-project" aria-label="当前项目" :value="projects.currentProjectId ?? ''" :disabled="projects.listState !== 'ready'" @change="switchProject">
             <option v-if="projects.currentProjectId === null" value="" disabled>{{ switcherPlaceholder }}</option>
             <option v-for="project in projects.projects" :key="project.id" :value="project.id">{{ project.name }}</option>
           </select>

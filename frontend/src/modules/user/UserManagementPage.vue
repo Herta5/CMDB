@@ -67,7 +67,7 @@ function setStatus(event: Event) { form.status = (event.target as HTMLSelectElem
 
 <template>
   <section aria-labelledby="users-title">
-    <div class="page-heading"><div><p class="page-eyebrow">权限管理 / 用户管理</p><h1 id="users-title">用户管理</h1><p class="page-description">维护可登录 CMDB 的用户身份、全局角色与项目权限。</p></div><button class="console-button is-primary" @click="openCreate">创建用户</button></div>
+    <div class="page-heading"><div><p class="page-eyebrow">系统管理 / 用户管理</p><h1 id="users-title">用户管理</h1><p class="page-description">维护可登录 CMDB 的用户身份、全局角色与项目权限。</p></div><button class="console-button is-primary" @click="openCreate">创建用户</button></div>
     <p v-if="feedback" class="form-error" role="alert">{{ feedback }}</p>
     <div class="console-panel" :aria-busy="store.loadState === 'loading'">
       <div class="panel-heading"><h2>用户列表</h2><span class="muted">共 {{ store.users.length }} 个用户</span></div>

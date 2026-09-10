@@ -9,14 +9,19 @@ const routes: RouteRecordRaw[] = [
     name: 'Console',
     component: () => import('@/layouts/ConsoleLayout.vue'),
     meta: { requiresAuth: true, title: 'CMDB' },
-    // 首页和显式项目列表共享同一页面，保留登录守卫的原始目标地址。
+    // 首页进入服务器资产，系统管理页面使用独立地址和权限标记。
     children: [
-      { path: '', name: 'AuthenticatedHome', component: () => import('@/modules/project/ProjectListPage.vue'), meta: { title: '业务项目' } },
-      { path: 'projects', name: 'ProjectList', component: () => import('@/modules/project/ProjectListPage.vue'), meta: { title: '业务项目' } },
+      { path: '', name: 'AuthenticatedHome', redirect: '/assets/servers' },
+      { path: 'assets/servers', name: 'ServerAssets', component: () => import('@/modules/resource/AssetListPage.vue'), props: { category: 'server' }, meta: { title: '服务器' } },
+      { path: 'assets/databases', name: 'DatabaseAssets', component: () => import('@/modules/resource/AssetListPage.vue'), props: { category: 'database' }, meta: { title: '数据库' } },
+      { path: 'assets/load-balancers', name: 'LoadBalancerAssets', component: () => import('@/modules/resource/AssetListPage.vue'), props: { category: 'load_balancer' }, meta: { title: '负载均衡' } },
+      { path: 'projects', name: 'ProjectList', component: () => import('@/modules/project/ProjectListPage.vue'), meta: { title: '项目管理', requiresSystemAdmin: true } },
       { path: 'projects/:projectId', name: 'ProjectDetail', component: () => import('@/modules/project/ProjectDetailPage.vue'), meta: { title: '项目详情' } },
-      { path: 'users', name: 'UserManagement', component: () => import('@/modules/user/UserManagementPage.vue'), meta: { title: '用户管理' } },
-      { path: 'aliyun', name: 'AliyunResources', component: () => import('@/modules/resource/CloudPlatformPage.vue'), props: { provider: 'aliyun' }, meta: { title: '阿里云资源' } },
-      { path: 'aws', name: 'AWSResources', component: () => import('@/modules/resource/CloudPlatformPage.vue'), props: { provider: 'aws' }, meta: { title: 'AWS 资源' } },
+      { path: 'users', name: 'UserManagement', component: () => import('@/modules/user/UserManagementPage.vue'), meta: { title: '用户管理', requiresSystemAdmin: true } },
+      { path: 'cloud-sync', name: 'CloudSyncManagement', component: () => import('@/modules/resource/CloudSyncManagementPage.vue'), meta: { title: '云同步管理', requiresSystemAdmin: true } },
+      // 保留旧书签的可达性，平台入口统一迁移到云同步管理。
+      { path: 'aliyun', name: 'LegacyAliyunResources', redirect: '/cloud-sync?provider=aliyun' },
+      { path: 'aws', name: 'LegacyAWSResources', redirect: '/cloud-sync?provider=aws' },
     ],
   },
   {
@@ -54,6 +59,9 @@ router.beforeEach((to) => {
     const redirect = to.query.redirect
     return typeof redirect === 'string' && redirect.startsWith('/') && !redirect.startsWith('//') ? redirect : '/'
   }
+
+  // 系统管理页面在路由边界拒绝普通用户，不仅依赖侧栏隐藏。
+  if (to.meta.requiresSystemAdmin && auth.currentUser?.globalRole !== 'system_admin') return '/assets/servers'
 
   return true
 })
