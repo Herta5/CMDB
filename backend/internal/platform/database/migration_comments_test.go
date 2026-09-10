@@ -1,58 +1,146 @@
-// 本文件验证生产迁移完整维护数据库中文元数据，避免管理工具再次显示乱码或空注释。
+// 本文件验证 PostgreSQL 初始化脚本的结构、权限和中文元数据，防止重新引入 MySQL 方言或越权账号。
 package database
 
 import (
+	"errors"
 	"os"
 	"strings"
 	"testing"
 )
 
-// TestCommentRepairMigrationCoversSchema 验证全部业务表和字段都由修复迁移显式覆盖。
-func TestCommentRepairMigrationCoversSchema(t *testing.T) {
-	content, err := os.ReadFile("../../../migrations/006_repair_schema_comments.sql")
-	if err != nil {
-		t.Fatalf("读取注释修复迁移失败：%v", err)
+const (
+	// applicationRoleInitializationPath 是应用账号初始化脚本相对于当前测试包的固定位置。
+	applicationRoleInitializationPath = "../../../database/init/001_create_app_role.sh"
+	// schemaInitializationPath 是由 PostgreSQL 管理员执行的唯一业务结构初始化文件。
+	schemaInitializationPath = "../../../database/init/002_schema.sql"
+)
+
+// TestPostgreSQLInitializationCreatesRestrictedApplicationRole 防止应用账号取得管理员或建库权限。
+func TestPostgreSQLInitializationCreatesRestrictedApplicationRole(t *testing.T) {
+	content := readInitializationFile(t, applicationRoleInitializationPath)
+	roleScript := string(content)
+
+	for _, fragment := range []string{
+		"POSTGRES_USER",
+		"POSTGRES_DB",
+		"DB_PASSWORD",
+		"psql",
+		"--set=app_password=\"$DB_PASSWORD\"",
+		"CREATE ROLE cmdb LOGIN PASSWORD :'app_password'",
+		"NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION",
+		"REVOKE ALL ON DATABASE :\"db_name\" FROM PUBLIC",
+		"GRANT CONNECT ON DATABASE :\"db_name\" TO cmdb",
+	} {
+		if !strings.Contains(roleScript, fragment) {
+			t.Errorf("应用账号初始化脚本缺少受限账号或数据库边界：%s", fragment)
+		}
 	}
-	sql := string(content)
-	if !strings.Contains(sql, "SET NAMES utf8mb4") {
-		t.Fatal("注释迁移必须显式声明 utf8mb4 连接字符集")
+
+	if strings.Contains(roleScript, "echo \"$DB_PASSWORD\"") || strings.Contains(roleScript, "echo $DB_PASSWORD") {
+		t.Fatal("应用账号初始化脚本不得回显应用密码")
 	}
-	expected := map[string][]string{
-		"users":              {"id", "username", "password_hash", "display_name", "email", "global_role", "status", "last_login_at", "created_at", "updated_at"},
-		"projects":           {"id", "code", "name", "description", "status", "owner_user_id", "created_at", "updated_at"},
-		"project_members":    {"id", "project_id", "user_id", "role", "created_at", "updated_at"},
-		"audit_logs":         {"id", "actor_id", "project_id", "action", "resource_type", "resource_id", "detail", "request_ip", "created_at"},
-		"resource_sources":   {"id", "project_id", "provider", "name", "region", "encrypted_credential", "credential_hint", "config", "enabled", "sync_interval_minutes", "last_sync_at", "next_sync_at", "created_at", "updated_at"},
-		"resources":          {"id", "project_id", "source_id", "provider", "resource_type", "external_id", "name", "region", "zone", "cloud_status", "lifecycle_status", "raw_attributes", "first_seen_at", "last_seen_at", "missing_since", "created_at", "updated_at"},
-		"resource_endpoints": {"id", "resource_id", "kind", "address", "port", "protocol", "resolved_ips", "resolved_at"},
-		"sync_jobs":          {"id", "project_id", "source_id", "previous_job_id", "status", "trigger", "statistics", "error_summary", "started_at", "finished_at"},
+}
+
+// TestPostgreSQLSchemaDefinesBusinessStructure 验证业务结构使用 PostgreSQL 方言且完整保留领域约束。
+func TestPostgreSQLSchemaDefinesBusinessStructure(t *testing.T) {
+	schema := string(readInitializationFile(t, schemaInitializationPath))
+	expectedColumns := map[string][]string{
+		"users": {
+			"id", "username", "password_hash", "display_name", "email", "global_role", "status", "last_login_at", "created_at", "updated_at",
+		},
+		"projects": {
+			"id", "code", "name", "description", "status", "owner_user_id", "created_at", "updated_at",
+		},
+		"project_members": {
+			"id", "project_id", "user_id", "role", "created_at", "updated_at",
+		},
+		"audit_logs": {
+			"id", "actor_id", "project_id", "action", "resource_type", "resource_id", "detail", "request_ip", "created_at",
+		},
+		"resource_sources": {
+			"id", "project_id", "provider", "name", "region", "encrypted_credential", "credential_hint", "config", "enabled", "sync_interval_minutes", "last_sync_at", "next_sync_at", "created_at", "updated_at",
+		},
+		"resources_servers": {
+			"id", "project_id", "source_id", "provider", "resource_type", "external_id", "name", "region", "zone", "cloud_status", "asset_status", "private_ips", "public_ips", "raw_attributes", "first_seen_at", "last_seen_at", "missing_since", "created_at", "updated_at",
+		},
+		"resources_databases": {
+			"id", "project_id", "source_id", "provider", "resource_type", "external_id", "name", "region", "zone", "cloud_status", "asset_status", "engine", "engine_version", "endpoints", "raw_attributes", "first_seen_at", "last_seen_at", "missing_since", "created_at", "updated_at",
+		},
+		"resources_load_balancers": {
+			"id", "project_id", "source_id", "provider", "resource_type", "external_id", "name", "region", "zone", "cloud_status", "asset_status", "network_type", "endpoints", "raw_attributes", "first_seen_at", "last_seen_at", "missing_since", "created_at", "updated_at",
+		},
+		"sync_jobs": {
+			"id", "project_id", "source_id", "previous_job_id", "status", "trigger", "statistics", "error_summary", "started_at", "finished_at",
+		},
 	}
-	quote := string(rune(96))
-	for table, columns := range expected {
-		if !strings.Contains(sql, "ALTER TABLE "+quote+table+quote) {
-			t.Errorf("表 %s 缺少中文表注释", table)
+
+	for table, columns := range expectedColumns {
+		if !strings.Contains(schema, "CREATE TABLE "+table) {
+			t.Errorf("初始化结构缺少业务表：%s", table)
+		}
+		if !strings.Contains(schema, "COMMENT ON TABLE public."+table+" IS") {
+			t.Errorf("业务表 %s 缺少中文表注释", table)
 		}
 		for _, column := range columns {
-			if !strings.Contains(sql, "MODIFY COLUMN "+quote+column+quote) {
-				t.Errorf("字段 %s.%s 缺少注释修复", table, column)
+			if !strings.Contains(schema, "COMMENT ON COLUMN public."+table+"."+column+" IS") {
+				t.Errorf("业务字段 %s.%s 缺少中文字段注释", table, column)
 			}
+		}
+	}
+
+	for _, fragment := range []string{
+		"BIGINT GENERATED BY DEFAULT AS IDENTITY",
+		"JSONB",
+		"TIMESTAMPTZ(3)",
+		"CHECK (global_role IN",
+		"CHECK (asset_status IN",
+		"CHECK (status IN",
+		"FOREIGN KEY",
+		"CREATE INDEX",
+		"GRANT USAGE ON SCHEMA public TO cmdb",
+		"GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO cmdb",
+		"GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO cmdb",
+	} {
+		if !strings.Contains(schema, fragment) {
+			t.Errorf("PostgreSQL 初始化结构缺少必要定义：%s", fragment)
+		}
+	}
+
+	allInitialization := string(readInitializationFile(t, applicationRoleInitializationPath)) + schema
+	for _, forbidden := range []string{"AUTO_INCREMENT", "ENUM(", string(rune(96)), "ON UPDATE"} {
+		if strings.Contains(allInitialization, forbidden) {
+			t.Errorf("PostgreSQL 初始化文件不得包含 MySQL 方言：%s", forbidden)
 		}
 	}
 }
 
-// TestCloudResourceSchemaDefinesThreeAssetKinds 验证初始化结构只创建三类带中文说明的资产表。
-func TestCloudResourceSchemaDefinesThreeAssetKinds(t *testing.T) {
-	content, err := os.ReadFile("../../../migrations/002_cloud_resources.sql")
-	if err != nil {
-		t.Fatalf("读取云资源初始化结构失败：%v", err)
-	}
-	sql := string(content)
-	for _, fragment := range []string{"CREATE TABLE IF NOT EXISTS resources_servers", "CREATE TABLE IF NOT EXISTS resources_databases", "CREATE TABLE IF NOT EXISTS resources_load_balancers", "asset_status", "访问端点", "云服务器资产", "云数据库资产", "云负载均衡资产", "UNIQUE KEY uk_"} {
-		if !strings.Contains(sql, fragment) {
-			t.Fatalf("云资源初始化结构缺少必要结构或中文注释：%s", fragment)
+// TestPostgreSQLInitializationRemovesMySQLMigrationChain 防止容器继续加载旧 MySQL 增量迁移。
+func TestPostgreSQLInitializationRemovesMySQLMigrationChain(t *testing.T) {
+	for _, path := range []string{
+		"../../../migrations/001_schema.sql",
+		"../../../migrations/002_cloud_resources.sql",
+		"../../../migrations/003_async_sync_jobs.sql",
+		"../../../migrations/004_remove_kubernetes.sql",
+		"../../../migrations/005_remove_viewer_role.sql",
+		"../../../migrations/006_repair_schema_comments.sql",
+	} {
+		_, err := os.Stat(path)
+		if err == nil {
+			t.Errorf("旧 MySQL 初始化文件仍然存在：%s", path)
+			continue
+		}
+		if !errors.Is(err, os.ErrNotExist) {
+			t.Errorf("检查旧 MySQL 初始化文件 %s 时失败：%v", path, err)
 		}
 	}
-	if strings.Contains(sql, "CREATE TABLE IF NOT EXISTS resources (") || strings.Contains(sql, "CREATE TABLE IF NOT EXISTS resource_endpoints") {
-		t.Fatal("初始化结构不得继续创建两张旧资产表")
+}
+
+// readInitializationFile 统一读取初始化文件，并在路径错误时提供中文测试上下文。
+func readInitializationFile(t *testing.T, path string) []byte {
+	t.Helper()
+	content, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("读取初始化文件 %s 失败：%v", path, err)
 	}
+	return content
 }
