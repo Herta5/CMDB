@@ -1,7 +1,7 @@
 // 本文件封装项目边界内的接入源、统一资源和同步任务 HTTP 契约。
 import request from '@/utils/request'
 
-export type Provider = 'aliyun' | 'aws' | 'kubernetes'
+export type Provider = 'aliyun' | 'aws'
 export interface Source { id: number; projectId: number; provider: Provider; name: string; region: string; credentialHint: string; enabled: boolean; syncIntervalMinutes: number; lastSyncAt?: string; nextSyncAt?: string }
 export interface Endpoint { id: number; kind: 'private' | 'public' | 'hostname'; address: string; port: number; protocol: string; resolvedIps: string[] }
 export interface CloudResource { id: number; sourceId: number; provider: Provider; resourceType: string; externalId: string; name: string; region: string; zone: string; cloudStatus: string; lifecycleStatus: 'active' | 'lost'; endpoints: Endpoint[]; lastSeenAt: string; missingSince?: string }

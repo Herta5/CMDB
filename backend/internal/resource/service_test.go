@@ -39,6 +39,12 @@ func newResourceServiceTest(t *testing.T) (*Service, *gorm.DB, *Source, *time.Ti
 	if err != nil {
 		t.Fatal("打开资源测试数据库失败")
 	}
+	// SQLite 内存库按连接隔离；异步工作器测试固定单连接，避免读到另一份空数据库。
+	sqlDB, err := db.DB()
+	if err != nil {
+		t.Fatal("获取资源测试数据库连接失败")
+	}
+	sqlDB.SetMaxOpenConns(1)
 	if err := db.AutoMigrate(&Source{}, &Resource{}, &Endpoint{}, &SyncJob{}, &AuditLog{}); err != nil {
 		t.Fatal("创建资源测试表失败")
 	}

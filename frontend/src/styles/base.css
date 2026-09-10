@@ -17,7 +17,7 @@
 .nav-symbol { font-size: 19px; line-height: 1; }
 .platform-nav { color: #68758a; }
 .platform-dot { width: 8px; height: 8px; border-radius: 3px; flex-shrink: 0; margin: 0 3px; }
-.aliyun { background: #c7814c; }.aws { background: #b98d43; }.kubernetes { background: #5d80bb; }
+.aliyun { background: #c7814c; }.aws { background: #b98d43; }
 .nav-soon { margin-left: auto; font-size: 10px; color: #758094; white-space: nowrap; }
 .sidebar-footer { margin-top: auto; padding: 20px 22px; color: var(--cmdb-muted); font-size: 11px; border-top: 1px solid var(--cmdb-border); display: flex; align-items: center; gap: 8px; }
 .console-workspace { flex: 1; min-width: 0; display: flex; flex-direction: column; }

@@ -38,6 +38,17 @@ func TestCreateSourceEncryptsCredentialAndDefaultsInterval(t *testing.T) {
 	}
 }
 
+// TestCreateSourceRejectsRemovedKubernetesProvider 验证旧客户端不能继续创建已下线的平台接入源。
+func TestCreateSourceRejectsRemovedKubernetesProvider(t *testing.T) {
+	db, _ := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{Logger: logger.Default.LogMode(logger.Silent)})
+	_ = db.AutoMigrate(&Source{})
+	service := NewService(NewRepository(db), NewCredentialCipher("source-provider-key"))
+	_, err := service.CreateSource(context.Background(), CreateSourceInput{ProjectID: 7, Provider: "kubernetes", Name: "旧集群", Credential: json.RawMessage(`{"token":"value"}`)})
+	if err == nil {
+		t.Fatal("已移除的 Kubernetes provider 必须被拒绝")
+	}
+}
+
 // TestUpdateSourceKeepsCredentialAndDeleteCascades 验证未提交新凭证时保留密文，并可删除项目内接入源。
 func TestUpdateSourceKeepsCredentialAndDeleteCascades(t *testing.T) {
 	db, _ := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{Logger: logger.Default.LogMode(logger.Silent)})

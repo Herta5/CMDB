@@ -36,7 +36,7 @@ watch(() => [route.params.projectId, projects.listState, projects.detailState], 
 async function switchProject(event: Event) {
   const id = Number((event.target as HTMLSelectElement).value)
   // 平台页面切换项目时保持当前模块，项目资料页面才进入新项目详情。
-  if (projects.selectProject(id) && !['/aliyun', '/aws', '/kubernetes'].includes(route.path)) await router.push(`/projects/${id}`)
+  if (projects.selectProject(id) && !['/aliyun', '/aws'].includes(route.path)) await router.push(`/projects/${id}`)
 }
 
 /** 退出统一清理认证状态，项目状态通过会话监听同步失效。 */
@@ -63,7 +63,6 @@ async function logout() {
         <p class="nav-group-label">云平台</p>
         <router-link to="/aliyun" class="nav-item platform-nav" :class="{ 'is-active': route.path === '/aliyun' }"><span class="platform-dot aliyun" aria-hidden="true" />阿里云</router-link>
         <router-link to="/aws" class="nav-item platform-nav" :class="{ 'is-active': route.path === '/aws' }"><span class="platform-dot aws" aria-hidden="true" />AWS</router-link>
-        <router-link to="/kubernetes" class="nav-item platform-nav" :class="{ 'is-active': route.path === '/kubernetes' }"><span class="platform-dot kubernetes" aria-hidden="true" />Kubernetes</router-link>
       </nav>
       <div class="sidebar-footer"><span class="status-dot" />项目隔离 · 统一管理</div>
     </aside>
@@ -87,7 +86,7 @@ async function logout() {
       </header>
       <!-- 各平台页面共享顶部项目上下文，资源接口始终以该项目作为最高边界。 -->
       <main id="console-content" class="console-content" tabindex="-1"><router-view /></main>
-      <footer class="console-footer">CMDB · 公有云与 Kubernetes 资源配置管理</footer>
+      <footer class="console-footer">CMDB · 公有云资源配置管理</footer>
     </div>
   </div>
 </template>

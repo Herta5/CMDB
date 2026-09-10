@@ -62,7 +62,7 @@ async function createProject(input: CreateProjectInput) {
         </table>
       </div>
     </div>
-    <p class="page-footnote">云账号、云租户和 Kubernetes 集群归属于唯一业务项目，其资源继承相同归属。</p>
+    <p class="page-footnote">云账号和云租户归属于唯一业务项目，其资源继承相同归属。</p>
     <ProjectFormDialog v-if="showCreate" mode="create" :submitting="store.mutationState === 'submitting'" :server-error="formError" @cancel="showCreate = false" @submit="createProject" />
   </section>
 </template>

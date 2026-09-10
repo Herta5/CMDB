@@ -60,7 +60,6 @@ async function mount(component: Component, path = '/projects') {
     // 控制台导航需要这些真实目标，页面测试不渲染平台内容但不能留下路由警告。
     { path: '/aliyun', component: { render: () => null } },
     { path: '/aws', component: { render: () => null } },
-    { path: '/kubernetes', component: { render: () => null } },
     { path: '/login', component: { render: () => null } },
   ] })
   await router.push(path)
@@ -175,7 +174,7 @@ describe('项目控制台页面', () => {
     expect(text(root)).toContain('运维用户')
     expect(text(root)).toContain('阿里云')
     expect(text(root)).toContain('AWS')
-    expect(text(root)).toContain('Kubernetes')
+    expect(text(root)).not.toContain('Kubernetes')
     expect(all(root).some(n => n.props['aria-label'] === '全局搜索')).toBe(false)
     const switcher = all(root).find(n => n.type === 'select' && n.props['aria-label'] === '当前业务项目')!
     await switcher.props.onChange({ target: { value: '3' } })

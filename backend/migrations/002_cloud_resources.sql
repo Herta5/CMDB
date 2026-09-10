@@ -1,11 +1,11 @@
 -- CMDB 云资源核心迁移：建立接入源、统一资源、访问端点和同步任务。
 CREATE TABLE IF NOT EXISTS resource_sources (
- id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT, project_id BIGINT UNSIGNED NOT NULL, provider ENUM('aliyun','aws','kubernetes') NOT NULL,
+ id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT, project_id BIGINT UNSIGNED NOT NULL, provider ENUM('aliyun','aws') NOT NULL,
  name VARCHAR(128) NOT NULL, region VARCHAR(128) NOT NULL DEFAULT '', encrypted_credential TEXT NOT NULL, credential_hint VARCHAR(128) NOT NULL DEFAULT '', config JSON NULL,
  enabled BOOLEAN NOT NULL DEFAULT TRUE, sync_interval_minutes INT NOT NULL DEFAULT 60, last_sync_at DATETIME(3) NULL, next_sync_at DATETIME(3) NULL,
  created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3), updated_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
  PRIMARY KEY (id), KEY idx_sources_project_provider (project_id, provider), CONSTRAINT fk_sources_project FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='云平台与 Kubernetes 接入源';
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='公有云平台接入源';
 CREATE TABLE IF NOT EXISTS resources (
  id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT, project_id BIGINT UNSIGNED NOT NULL, source_id BIGINT UNSIGNED NOT NULL, provider VARCHAR(32) NOT NULL,
  resource_type VARCHAR(64) NOT NULL, external_id VARCHAR(255) NOT NULL, name VARCHAR(255) NOT NULL DEFAULT '', region VARCHAR(128) NOT NULL DEFAULT '', zone VARCHAR(128) NOT NULL DEFAULT '', cloud_status VARCHAR(64) NOT NULL DEFAULT '', lifecycle_status ENUM('active','lost') NOT NULL DEFAULT 'active', raw_attributes JSON NULL,

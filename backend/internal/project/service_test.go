@@ -45,7 +45,7 @@ func TestUpdateProjectPreservesCodeAndValidatesStatus(t *testing.T) {
 
 	updated, err := service.Update(context.Background(), created.ID, UpdateInput{
 		Name:        "云资源平台",
-		Description: "托管公有云和 Kubernetes 资源",
+		Description: "托管公有云资源",
 		Status:      ProjectStatusDisabled,
 		OwnerUserID: nil,
 	})

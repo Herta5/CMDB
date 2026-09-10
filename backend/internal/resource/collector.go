@@ -37,7 +37,7 @@ type CollectionResult struct {
 	Err          error
 }
 
-// Collector 由阿里云、AWS 和 Kubernetes 模块分别实现。
+// Collector 由阿里云和 AWS 模块分别实现。
 type Collector interface {
 	Collect(context.Context, Source, []byte) ([]CollectionResult, error)
 }

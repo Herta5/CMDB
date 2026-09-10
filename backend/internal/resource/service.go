@@ -186,7 +186,8 @@ func (s *Service) ListJobs(ctx context.Context, projectID, sourceID uint64, prov
 
 // validProvider 限制接入源只能属于首期三个独立平台模块。
 func validProvider(provider string) bool {
-	return provider == ProviderAliyun || provider == ProviderAWS || provider == ProviderKubernetes
+	// CMDB 当前仅开放两个公有云平台，旧客户端提交的已下线平台必须被拒绝。
+	return provider == ProviderAliyun || provider == ProviderAWS
 }
 
 // Sync 执行一次接入源同步，单类失败不会影响其他成功类型。

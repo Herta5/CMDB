@@ -1,8 +1,8 @@
 # CMDB
 
-CMDB 是面向公有云和 Kubernetes 的云资源配置管理平台，业务项目是最高级的数据归属和权限隔离边界。
+CMDB 是面向公有云的资源配置管理平台，业务项目是最高级的数据归属和权限隔离边界。
 
-当前提供用户名密码登录、用户与业务项目管理、项目成员授权，以及阿里云、AWS、Kubernetes 三个独立资源模块。平台模块共享接入源、凭证加密、同步任务、资源地址、失联恢复、三天清理和审计能力；默认每 60 分钟自动同步，并支持项目管理员手工触发。
+当前提供用户名密码登录、用户与业务项目管理、项目成员授权，以及阿里云、AWS 两个独立资源模块。平台模块共享接入源、凭证加密、同步任务、资源地址、失联恢复、三天清理和审计能力；默认每 60 分钟自动同步，并支持项目管理员手工触发。
 
 ## 技术栈
 
@@ -10,7 +10,7 @@ CMDB 是面向公有云和 Kubernetes 的云资源配置管理平台，业务项
 
 ## 从空库部署
 
-需要 Docker Engine、Docker Compose、Bash 和 OpenSSL。部署使用独立的 `cmdb-mysql-data` 数据卷，并按顺序执行 `backend/migrations/001_schema.sql` 和 `backend/migrations/002_cloud_resources.sql`，不创建默认账号、业务项目或云接入源。
+需要 Docker Engine、Docker Compose、Bash 和 OpenSSL。部署使用独立的 `cmdb-mysql-data` 数据卷，并按编号顺序执行 `backend/migrations` 下的 SQL，不创建默认账号、业务项目或云接入源。
 
 先在当前终端设置部署环境，数据库密码由操作者提供，两个应用密钥独立随机生成。以下命令不会回显输入或生成值：
 
@@ -96,7 +96,7 @@ corepack pnpm dev
 [开发控制台](http://localhost:3000) 将 `/api` 请求代理至本机后端 `8080` 端口。
 
 ```bash
-# 后端测试使用隔离 SQLite 数据库，需要本机 C 编译器，不依赖真实云账号或集群。
+# 后端测试使用隔离 SQLite 数据库，需要本机 C 编译器，不依赖真实云账号。
 cd backend
 go test ./...
 
@@ -107,4 +107,4 @@ corepack pnpm exec vue-tsc --noEmit
 corepack pnpm build
 ```
 
-后端入口为 `backend/cmd/server`，一次性初始化入口为 `backend/cmd/init-admin`；共享资源核心位于 `backend/internal/resource`，平台采集器分别位于 `backend/internal/aliyun`、`aws`、`kubernetes`。前端共享资源模块位于 `frontend/src/modules/resource`。
+后端入口为 `backend/cmd/server`，一次性初始化入口为 `backend/cmd/init-admin`；共享资源核心位于 `backend/internal/resource`，平台采集器分别位于 `backend/internal/aliyun`、`aws`。前端共享资源模块位于 `frontend/src/modules/resource`。

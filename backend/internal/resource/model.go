@@ -11,8 +11,6 @@ const (
 	ProviderAliyun = "aliyun"
 	// ProviderAWS 表示 AWS 接入模块。
 	ProviderAWS = "aws"
-	// ProviderKubernetes 表示 Kubernetes 接入模块。
-	ProviderKubernetes = "kubernetes"
 	// LifecycleActive 表示资源在最近一次成功采集中存在。
 	LifecycleActive = "active"
 	// LifecycleLost 表示资源在最近一次成功采集中缺失但仍处于保留期。
