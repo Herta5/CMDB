@@ -12,6 +12,7 @@ import ProjectDetailPage from './ProjectDetailPage.vue'
 import ConsoleLayout from '@/layouts/ConsoleLayout.vue'
 import UserManagementPage from '@/modules/user/UserManagementPage.vue'
 import AssetListPage from '@/modules/resource/AssetListPage.vue'
+import CloudSyncManagementPage from '@/modules/resource/CloudSyncManagementPage.vue'
 
 // 节点模型只承担宿主操作，页面逻辑、路由和项目状态均执行生产代码。
 type Node = { type: string; text: string; props: Record<string, any>; children: Node[]; parent: Node | null; value?: unknown; selected?: boolean; readonly options: Node[]; addEventListener: () => void; removeEventListener: () => void }
@@ -296,6 +297,23 @@ describe('项目控制台页面', () => {
     expect(text(root)).toContain('AWS')
     expect(get).toHaveBeenCalledWith('/projects/2/resources', { params: expect.objectContaining({ resource_type: 'ecs' }) })
     expect(get).toHaveBeenCalledWith('/projects/2/resources', { params: expect.objectContaining({ resource_type: 'ec2' }) })
+    app.unmount()
+  })
+  it('云同步管理移除平台页签并在创建时选择云平台', async () => {
+    const projectStore = useProjectStore()
+    projectStore.projects = [{ id: 2, code: 'platform', name: '平台项目', description: '', status: 'enabled', ownerUserId: null, currentRole: 'project_admin', createdAt: '', updatedAt: '' }]
+    projectStore.listState = 'ready'
+    projectStore.selectProject(2)
+    get.mockImplementation((url: string) => Promise.resolve(url.endsWith('/sources') ? [] : { items: [], total: 0 }))
+    const { root, app } = await mount(CloudSyncManagementPage, '/cloud-sync')
+    expect(all(root).some(n => n.props.role === 'tablist')).toBe(false)
+    expect(text(root)).not.toContain('接入源共')
+    await all(root).find(n => n.type === 'button' && text(n) === '创建云同步')!.props.onClick()
+    await flush()
+    expect(text(root)).toContain('选择云平台')
+    expect(all(root).some(n => n.props.name === 'provider')).toBe(true)
+    expect(text(root)).toContain('阿里云')
+    expect(text(root)).toContain('AWS')
     app.unmount()
   })
   it('系统管理员可打开用户编辑窗口且用户名保持不可修改', async () => {

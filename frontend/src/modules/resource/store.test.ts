@@ -26,6 +26,20 @@ describe('云资源状态层', () => {
     expect(store.jobs[0].sourceId).toBe(1)
   })
 
+  it('云同步管理同时汇总阿里云和 AWS 的接入源与任务', async () => {
+    get.mockImplementation((url: string, options?: { params?: { provider?: string } }) => {
+      const provider = options?.params?.provider
+      if (url.endsWith('/sources')) return Promise.resolve([{ id: provider === 'aliyun' ? 1 : 2, project_id: 7, provider, name: `${provider}-账号`, enabled: true, sync_interval_minutes: 60 }])
+      return Promise.resolve({ items: [{ id: provider === 'aliyun' ? 11 : 12, source_id: provider === 'aliyun' ? 1 : 2, status: 'success', trigger: 'manual' }], total: 1 })
+    })
+    const store = useResourceStore()
+    await store.loadSyncManagement(7)
+    expect(store.sources.map(source => source.provider)).toEqual(['aliyun', 'aws'])
+    expect(store.jobs.map(job => job.provider)).toEqual(['aliyun', 'aws'])
+    expect(get).toHaveBeenCalledWith('/projects/7/sources', { params: { provider: 'aliyun' } })
+    expect(get).toHaveBeenCalledWith('/projects/7/sources', { params: { provider: 'aws' } })
+  })
+
   it('手工同步完成后刷新资源和任务', async () => {
     get.mockResolvedValue({ items: [], total: 0 }); post.mockResolvedValue({ id: 5, status: 'success' })
     const store = useResourceStore()

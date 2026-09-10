@@ -5,7 +5,8 @@ export type Provider = 'aliyun' | 'aws'
 export interface Source { id: number; projectId: number; provider: Provider; name: string; region: string; credentialHint: string; enabled: boolean; syncIntervalMinutes: number; lastSyncAt?: string; nextSyncAt?: string }
 export interface Endpoint { id: number; kind: 'private' | 'public' | 'hostname'; address: string; port: number; protocol: string; resolvedIps: string[] }
 export interface CloudResource { id: number; sourceId: number; provider: Provider; resourceType: string; externalId: string; name: string; region: string; zone: string; cloudStatus: string; lifecycleStatus: 'active' | 'lost'; endpoints: Endpoint[]; lastSeenAt: string; missingSince?: string }
-export interface SyncJob { id: number; sourceId: number; status: 'queued' | 'running' | 'success' | 'partial_success' | 'failed'; trigger: 'manual' | 'scheduled'; statistics: Record<string, Record<string, number>>; errorSummary: string; startedAt: string; finishedAt?: string }
+// 云平台由双平台管理视图补充，单平台接口模型无需重复携带该字段。
+export interface SyncJob { id: number; sourceId: number; provider?: Provider; status: 'queued' | 'running' | 'success' | 'partial_success' | 'failed'; trigger: 'manual' | 'scheduled'; statistics: Record<string, Record<string, number>>; errorSummary: string; startedAt: string; finishedAt?: string }
 export interface SourceInput { provider: Provider; name: string; region: string; credential?: Record<string, unknown>; config: Record<string, unknown>; enabled?: boolean; syncIntervalMinutes: number }
 
 interface PageDTO<T> { items: T[] | null; total: number; page: number; page_size: number }
