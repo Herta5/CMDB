@@ -1,6 +1,15 @@
 -- 本文件在 PostgreSQL 管理员连接下创建 CMDB 全部业务结构；应用账号仅在授权范围内执行 CRUD。
 \set ON_ERROR_STOP on
 
+-- Docker 初始化约束与本保护同时确保业务表和序列由 postgres 管理员拥有。
+DO $$
+BEGIN
+    IF current_user <> 'postgres' THEN
+        RAISE EXCEPTION 'CMDB 初始化结构必须由 postgres 管理员执行';
+    END IF;
+END
+$$;
+
 BEGIN;
 
 CREATE TABLE users (
