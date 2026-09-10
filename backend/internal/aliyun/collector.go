@@ -26,6 +26,21 @@ type credential struct {
 	AccessKeySecret string `json:"access_key_secret"`
 }
 
+// ecsProbeAPI 约束连接测试只调用 ECS 列表首页，便于使用模拟响应验证轻量行为。
+type ecsProbeAPI interface {
+	DescribeInstances(*ecs.DescribeInstancesRequest) (*ecs.DescribeInstancesResponse, error)
+}
+
+// rdsProbeAPI 约束连接测试只调用 RDS 列表首页。
+type rdsProbeAPI interface {
+	DescribeDBInstances(*rds.DescribeDBInstancesRequest) (*rds.DescribeDBInstancesResponse, error)
+}
+
+// slbProbeAPI 约束连接测试只调用负载均衡列表首页。
+type slbProbeAPI interface {
+	DescribeLoadBalancers(*slb.DescribeLoadBalancersRequest) (*slb.DescribeLoadBalancersResponse, error)
+}
+
 // Collect 创建三个产品客户端并按资源类型隔离采集失败。
 func (c *Collector) Collect(ctx context.Context, source resource.Source, plain []byte) ([]resource.CollectionResult, error) {
 	var auth credential
@@ -60,6 +75,64 @@ func (c *Collector) Collect(ctx context.Context, source resource.Source, plain [
 	for resultIndex := range results {
 		for snapshotIndex := range results[resultIndex].Snapshots {
 			resolveEndpoints(ctx, &results[resultIndex].Snapshots[snapshotIndex])
+		}
+	}
+	return results, nil
+}
+
+// Probe 通过三类资源的最小分页请求验证认证、权限和网络，不读取详情或解析动态地址。
+func (c *Collector) Probe(ctx context.Context, source resource.Source, plain []byte) ([]resource.CollectionResult, error) {
+	var auth credential
+	if json.Unmarshal(plain, &auth) != nil || auth.AccessKeyID == "" || auth.AccessKeySecret == "" || source.Region == "" {
+		return nil, resource.ErrAuthenticationFailed
+	}
+	ecsClient, err := ecs.NewClientWithAccessKey(source.Region, auth.AccessKeyID, auth.AccessKeySecret)
+	if err != nil {
+		return nil, resource.ErrAuthenticationFailed
+	}
+	rdsClient, err := rds.NewClientWithAccessKey(source.Region, auth.AccessKeyID, auth.AccessKeySecret)
+	if err != nil {
+		return nil, resource.ErrAuthenticationFailed
+	}
+	slbClient, err := slb.NewClientWithAccessKey(source.Region, auth.AccessKeyID, auth.AccessKeySecret)
+	if err != nil {
+		return nil, resource.ErrAuthenticationFailed
+	}
+	return probeAliyunAccess(ctx, ecsClient, rdsClient, slbClient, source.Region)
+}
+
+// probeAliyunAccess 每类资源只取一条数据；返回内容仅表达 API 是否可达，不携带云端资源。
+func probeAliyunAccess(ctx context.Context, ecsClient ecsProbeAPI, rdsClient rdsProbeAPI, slbClient slbProbeAPI, region string) ([]resource.CollectionResult, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	ecsRequest := ecs.CreateDescribeInstancesRequest()
+	ecsRequest.RegionId = region
+	ecsRequest.PageNumber = "1"
+	ecsRequest.PageSize = "1"
+	_, ecsErr := ecsClient.DescribeInstances(ecsRequest)
+
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	rdsRequest := rds.CreateDescribeDBInstancesRequest()
+	rdsRequest.PageNumber = "1"
+	rdsRequest.PageSize = "1"
+	_, rdsErr := rdsClient.DescribeDBInstances(rdsRequest)
+
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	slbRequest := slb.CreateDescribeLoadBalancersRequest()
+	slbRequest.RegionId = region
+	slbRequest.PageNumber = "1"
+	slbRequest.PageSize = "1"
+	_, slbErr := slbClient.DescribeLoadBalancers(slbRequest)
+
+	results := []resource.CollectionResult{{ResourceType: "ecs", Err: ecsErr}, {ResourceType: "rds", Err: rdsErr}, {ResourceType: "slb", Err: slbErr}}
+	for _, result := range results {
+		if accessErr := classifyAliyunAccessError(result.Err); accessErr != nil {
+			return nil, accessErr
 		}
 	}
 	return results, nil

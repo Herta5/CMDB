@@ -2,6 +2,8 @@
 package aws
 
 import (
+	"context"
+	"errors"
 	"testing"
 
 	"cmdb/internal/resource"
@@ -12,7 +14,31 @@ import (
 	elbtypes "github.com/aws/aws-sdk-go-v2/service/elasticloadbalancingv2/types"
 	"github.com/aws/aws-sdk-go-v2/service/rds"
 	rdstypes "github.com/aws/aws-sdk-go-v2/service/rds/types"
+	"github.com/aws/smithy-go"
 )
+
+type ec2ProbeStub struct{ input *ec2.DescribeInstancesInput }
+
+func (s *ec2ProbeStub) DescribeInstances(_ context.Context, input *ec2.DescribeInstancesInput, _ ...func(*ec2.Options)) (*ec2.DescribeInstancesOutput, error) {
+	s.input = input
+	return &ec2.DescribeInstancesOutput{}, nil
+}
+
+type rdsProbeStub struct{ input *rds.DescribeDBInstancesInput }
+
+func (s *rdsProbeStub) DescribeDBInstances(_ context.Context, input *rds.DescribeDBInstancesInput, _ ...func(*rds.Options)) (*rds.DescribeDBInstancesOutput, error) {
+	s.input = input
+	return &rds.DescribeDBInstancesOutput{}, nil
+}
+
+type elbProbeStub struct {
+	input *elasticloadbalancingv2.DescribeLoadBalancersInput
+}
+
+func (s *elbProbeStub) DescribeLoadBalancers(_ context.Context, input *elasticloadbalancingv2.DescribeLoadBalancersInput, _ ...func(*elasticloadbalancingv2.Options)) (*elasticloadbalancingv2.DescribeLoadBalancersOutput, error) {
+	s.input = input
+	return &elasticloadbalancingv2.DescribeLoadBalancersOutput{}, nil
+}
 
 // TestEC2SnapshotsKeepNetworkInterfaceAddresses 验证 EC2 保存网卡上的全部内外网 IP。
 func TestEC2SnapshotsKeepNetworkInterfaceAddresses(t *testing.T) {
@@ -35,6 +61,28 @@ func TestRDSAndELBSnapshotsKeepHostnamesAndPorts(t *testing.T) {
 	}
 	if elbValues[0].Endpoints[0].Kind != "public" || elbValues[0].Endpoints[0].Address != "lb.example.invalid" || elbValues[0].Endpoints[0].Port != 443 || elbValues[0].Endpoints[0].Protocol != "https" {
 		t.Fatal("公网 ELB 必须保存公网域名及监听端口")
+	}
+}
+
+// TestAWSConnectionProbeRequestsOnePagePerType 验证连接测试只请求三类 API 的最小页面，不遍历实例和监听器。
+func TestAWSConnectionProbeRequestsOnePagePerType(t *testing.T) {
+	ec2Client, rdsClient, elbClient := &ec2ProbeStub{}, &rdsProbeStub{}, &elbProbeStub{}
+	results, err := probeAWSAccess(context.Background(), ec2Client, rdsClient, elbClient)
+	if err != nil || len(results) != 3 || results[0].ResourceType != "ec2" || results[1].ResourceType != "rds" || results[2].ResourceType != "elb" {
+		t.Fatalf("AWS 连接探测必须返回三类资源结果：%v，错误：%v", results, err)
+	}
+	if ec2Client.input == nil || awssdk.ToInt32(ec2Client.input.MaxResults) != 5 || rdsClient.input == nil || awssdk.ToInt32(rdsClient.input.MaxRecords) != 20 || elbClient.input == nil || awssdk.ToInt32(elbClient.input.PageSize) != 1 {
+		t.Fatal("AWS 连接探测必须使用各 API 允许的最小分页，且不得执行完整采集")
+	}
+}
+
+// TestAWSAccessErrorClassification 防止权限不足被误报为 AccessKey 无效。
+func TestAWSAccessErrorClassification(t *testing.T) {
+	if !errors.Is(classifyAWSAccessError(&smithy.GenericAPIError{Code: "AccessDeniedException", Message: "denied"}), resource.ErrPermissionDenied) {
+		t.Fatal("AWS AccessDenied 响应必须归类为 IAM 权限不足")
+	}
+	if !errors.Is(classifyAWSAccessError(&smithy.GenericAPIError{Code: "InvalidClientTokenId", Message: "invalid"}), resource.ErrAuthenticationFailed) {
+		t.Fatal("AWS 无效凭证必须归类为认证失败")
 	}
 }
 

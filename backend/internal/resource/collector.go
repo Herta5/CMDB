@@ -46,4 +46,6 @@ type CollectionResult struct {
 // Collector 由阿里云和 AWS 模块分别实现。
 type Collector interface {
 	Collect(context.Context, Source, []byte) ([]CollectionResult, error)
+	// Probe 只验证各资源 API 的认证、权限和网络可达性，不得遍历或返回完整资产。
+	Probe(context.Context, Source, []byte) ([]CollectionResult, error)
 }

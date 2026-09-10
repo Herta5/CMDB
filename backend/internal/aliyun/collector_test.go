@@ -2,6 +2,7 @@
 package aliyun
 
 import (
+	"context"
 	"errors"
 	"testing"
 
@@ -10,6 +11,31 @@ import (
 	"github.com/aliyun/alibaba-cloud-sdk-go/services/rds"
 	"github.com/aliyun/alibaba-cloud-sdk-go/services/slb"
 )
+
+type ecsProbeStub struct{ request *ecs.DescribeInstancesRequest }
+
+func (s *ecsProbeStub) DescribeInstances(request *ecs.DescribeInstancesRequest) (*ecs.DescribeInstancesResponse, error) {
+	s.request = request
+	return ecs.CreateDescribeInstancesResponse(), nil
+}
+
+type rdsProbeStub struct {
+	request *rds.DescribeDBInstancesRequest
+}
+
+func (s *rdsProbeStub) DescribeDBInstances(request *rds.DescribeDBInstancesRequest) (*rds.DescribeDBInstancesResponse, error) {
+	s.request = request
+	return rds.CreateDescribeDBInstancesResponse(), nil
+}
+
+type slbProbeStub struct {
+	request *slb.DescribeLoadBalancersRequest
+}
+
+func (s *slbProbeStub) DescribeLoadBalancers(request *slb.DescribeLoadBalancersRequest) (*slb.DescribeLoadBalancersResponse, error) {
+	s.request = request
+	return slb.CreateDescribeLoadBalancersResponse(), nil
+}
 
 // TestECSSnapshotsKeepPrivateAndPublicAddresses 验证 ECS 保存实例返回的全部内外网 IP。
 func TestECSSnapshotsKeepPrivateAndPublicAddresses(t *testing.T) {
@@ -27,6 +53,18 @@ func TestAliyunAccessErrorClassification(t *testing.T) {
 	}
 	if !errors.Is(classifyAliyunAccessError(errors.New("InvalidAccessKeyId.NotFound")), resource.ErrAuthenticationFailed) {
 		t.Fatal("无效 AccessKey 必须归类为认证失败")
+	}
+}
+
+// TestAliyunConnectionProbeRequestsOnlyOneItemPerType 验证连接测试只探测三类 API，不遍历资源详情或域名。
+func TestAliyunConnectionProbeRequestsOnlyOneItemPerType(t *testing.T) {
+	ecsClient, rdsClient, slbClient := &ecsProbeStub{}, &rdsProbeStub{}, &slbProbeStub{}
+	results, err := probeAliyunAccess(context.Background(), ecsClient, rdsClient, slbClient, "cn-hangzhou")
+	if err != nil || len(results) != 3 || results[0].ResourceType != "ecs" || results[1].ResourceType != "rds" || results[2].ResourceType != "slb" {
+		t.Fatalf("阿里云连接探测必须返回三类资源结果：%v，错误：%v", results, err)
+	}
+	if ecsClient.request == nil || string(ecsClient.request.PageSize) != "1" || rdsClient.request == nil || string(rdsClient.request.PageSize) != "1" || slbClient.request == nil || string(slbClient.request.PageSize) != "1" {
+		t.Fatal("阿里云连接探测每类资源只能请求一条数据")
 	}
 }
 

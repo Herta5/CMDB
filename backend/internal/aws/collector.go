@@ -32,6 +32,21 @@ type credential struct {
 	SessionToken    string `json:"session_token"`
 }
 
+// ec2ProbeAPI 约束连接测试只调用 EC2 列表首页。
+type ec2ProbeAPI interface {
+	DescribeInstances(context.Context, *ec2.DescribeInstancesInput, ...func(*ec2.Options)) (*ec2.DescribeInstancesOutput, error)
+}
+
+// rdsProbeAPI 约束连接测试只调用 RDS 列表首页。
+type rdsProbeAPI interface {
+	DescribeDBInstances(context.Context, *rds.DescribeDBInstancesInput, ...func(*rds.Options)) (*rds.DescribeDBInstancesOutput, error)
+}
+
+// elbProbeAPI 约束连接测试只调用 ELB 列表首页。
+type elbProbeAPI interface {
+	DescribeLoadBalancers(context.Context, *elasticloadbalancingv2.DescribeLoadBalancersInput, ...func(*elasticloadbalancingv2.Options)) (*elasticloadbalancingv2.DescribeLoadBalancersOutput, error)
+}
+
 // Collect 使用接入源区域和静态凭证采集三类 AWS 资源。
 func (c *Collector) Collect(ctx context.Context, source resource.Source, plain []byte) ([]resource.CollectionResult, error) {
 	var auth credential
@@ -44,23 +59,50 @@ func (c *Collector) Collect(ctx context.Context, source resource.Source, plain [
 	}
 	results := []resource.CollectionResult{}
 	ec2Output, err := collectEC2(ctx, ec2.NewFromConfig(configuration))
-	if authenticationError(err) {
-		return nil, resource.ErrAuthenticationFailed
+	if accessErr := classifyAWSAccessError(err); accessErr != nil {
+		return nil, accessErr
 	}
 	results = append(results, resource.CollectionResult{ResourceType: "ec2", Snapshots: ec2Snapshots(ec2Output, source.Region), Err: err})
 	rdsOutput, err := collectRDS(ctx, rds.NewFromConfig(configuration))
-	if authenticationError(err) {
-		return nil, resource.ErrAuthenticationFailed
+	if accessErr := classifyAWSAccessError(err); accessErr != nil {
+		return nil, accessErr
 	}
 	results = append(results, resource.CollectionResult{ResourceType: "rds", Snapshots: rdsSnapshots(rdsOutput, source.Region), Err: err})
 	elbOutput, listeners, err := collectELB(ctx, elasticloadbalancingv2.NewFromConfig(configuration))
-	if authenticationError(err) {
-		return nil, resource.ErrAuthenticationFailed
+	if accessErr := classifyAWSAccessError(err); accessErr != nil {
+		return nil, accessErr
 	}
 	results = append(results, resource.CollectionResult{ResourceType: "elb", Snapshots: elbSnapshots(elbOutput, listeners, source.Region), Err: err})
 	for resultIndex := range results {
 		for snapshotIndex := range results[resultIndex].Snapshots {
 			resolveEndpoints(ctx, &results[resultIndex].Snapshots[snapshotIndex])
+		}
+	}
+	return results, nil
+}
+
+// Probe 通过三类资源的最小分页请求验证认证、权限和网络，不读取监听器或解析动态地址。
+func (c *Collector) Probe(ctx context.Context, source resource.Source, plain []byte) ([]resource.CollectionResult, error) {
+	var auth credential
+	if json.Unmarshal(plain, &auth) != nil || auth.AccessKeyID == "" || auth.SecretAccessKey == "" || source.Region == "" {
+		return nil, resource.ErrAuthenticationFailed
+	}
+	configuration, err := config.LoadDefaultConfig(ctx, config.WithRegion(source.Region), config.WithCredentialsProvider(credentials.NewStaticCredentialsProvider(auth.AccessKeyID, auth.SecretAccessKey, auth.SessionToken)))
+	if err != nil {
+		return nil, resource.ErrAuthenticationFailed
+	}
+	return probeAWSAccess(ctx, ec2.NewFromConfig(configuration), rds.NewFromConfig(configuration), elasticloadbalancingv2.NewFromConfig(configuration))
+}
+
+// probeAWSAccess 使用各 API 允许的最小分页，仅返回资源类型可达性。
+func probeAWSAccess(ctx context.Context, ec2Client ec2ProbeAPI, rdsClient rdsProbeAPI, elbClient elbProbeAPI) ([]resource.CollectionResult, error) {
+	_, ec2Err := ec2Client.DescribeInstances(ctx, &ec2.DescribeInstancesInput{MaxResults: awssdk.Int32(5)})
+	_, rdsErr := rdsClient.DescribeDBInstances(ctx, &rds.DescribeDBInstancesInput{MaxRecords: awssdk.Int32(20)})
+	_, elbErr := elbClient.DescribeLoadBalancers(ctx, &elasticloadbalancingv2.DescribeLoadBalancersInput{PageSize: awssdk.Int32(1)})
+	results := []resource.CollectionResult{{ResourceType: "ec2", Err: ec2Err}, {ResourceType: "rds", Err: rdsErr}, {ResourceType: "elb", Err: elbErr}}
+	for _, result := range results {
+		if accessErr := classifyAWSAccessError(result.Err); accessErr != nil {
+			return nil, accessErr
 		}
 	}
 	return results, nil
@@ -231,14 +273,21 @@ func resolveEndpoints(ctx context.Context, snapshot *resource.Snapshot) {
 		}
 	}
 }
-func authenticationError(err error) bool {
+
+// classifyAWSAccessError 将 AWS API 错误映射为稳定的认证或权限领域错误。
+func classifyAWSAccessError(err error) error {
 	if err == nil {
-		return false
+		return nil
 	}
 	var apiError smithy.APIError
 	if errors.As(err, &apiError) {
 		code := strings.ToLower(apiError.ErrorCode())
-		return strings.Contains(code, "auth") || strings.Contains(code, "accessdenied") || strings.Contains(code, "invalidclienttoken") || strings.Contains(code, "signature")
+		if strings.Contains(code, "accessdenied") || strings.Contains(code, "unauthorizedoperation") || strings.Contains(code, "notauthorized") {
+			return resource.ErrPermissionDenied
+		}
+		if strings.Contains(code, "auth") || strings.Contains(code, "invalidclienttoken") || strings.Contains(code, "signature") || strings.Contains(code, "expiredtoken") || strings.Contains(code, "unrecognizedclient") {
+			return resource.ErrAuthenticationFailed
+		}
 	}
-	return false
+	return nil
 }

@@ -265,7 +265,7 @@ func (s *Service) TestConnection(ctx context.Context, projectID, sourceID uint64
 			credential[index] = 0
 		}
 	}()
-	results, err := collector.Collect(ctx, *source, credential)
+	results, err := collector.Probe(ctx, *source, credential)
 	if err != nil {
 		return nil, err
 	}

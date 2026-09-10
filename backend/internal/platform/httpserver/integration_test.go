@@ -258,6 +258,11 @@ func (integrationCollector) Collect(context.Context, cloudresource.Source, []byt
 	return []cloudresource.CollectionResult{{ResourceType: "ec2", Snapshots: []cloudresource.Snapshot{{ResourceType: "ec2", ExternalID: "i-integration", Name: "集成计算节点", CloudStatus: "running", Endpoints: []cloudresource.EndpointSnapshot{{Kind: "private", Address: "10.0.0.8"}}}}}}, nil
 }
 
+// Probe 为集成测试提供不含快照的轻量连接结果，避免连接测试与同步行为混淆。
+func (integrationCollector) Probe(context.Context, cloudresource.Source, []byte) ([]cloudresource.CollectionResult, error) {
+	return []cloudresource.CollectionResult{{ResourceType: "ec2"}}, nil
+}
+
 // TestIssuedAdminSessionUsesCurrentAccount 验证旧管理员 JWT 不能绕过数据库中的实时停用、删除或降权。
 func TestIssuedAdminSessionUsesCurrentAccount(t *testing.T) {
 	for _, scenario := range []struct {

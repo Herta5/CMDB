@@ -25,13 +25,33 @@ func (c blockingCollector) Collect(context.Context, Source, []byte) ([]Collectio
 	return []CollectionResult{}, nil
 }
 
+// Probe 让阻塞采集器满足统一接口；并发同步测试不应进入连接探测路径。
+func (c blockingCollector) Probe(context.Context, Source, []byte) ([]CollectionResult, error) {
+	return nil, errors.New("并发同步测试不应执行连接探测")
+}
+
 type collectorStub struct {
-	results []CollectionResult
-	err     error
+	results      []CollectionResult
+	err          error
+	probeResults []CollectionResult
+	probeErr     error
+	collectCalls *int
+	probeCalls   *int
 }
 
 func (c collectorStub) Collect(context.Context, Source, []byte) ([]CollectionResult, error) {
+	if c.collectCalls != nil {
+		*c.collectCalls++
+	}
 	return c.results, c.err
+}
+
+// Probe 返回不含资源快照的轻量探测结果，用于区分连接测试与完整同步。
+func (c collectorStub) Probe(context.Context, Source, []byte) ([]CollectionResult, error) {
+	if c.probeCalls != nil {
+		*c.probeCalls++
+	}
+	return c.probeResults, c.probeErr
 }
 
 func newResourceServiceTest(t *testing.T) (*Service, *gorm.DB, *Source, *time.Time) {
@@ -228,7 +248,7 @@ func TestEnqueueSyncReturnsBeforeCollectorCompletes(t *testing.T) {
 // TestConnectionDoesNotPersistSnapshots 验证连接测试不会把探测结果写入资源表。
 func TestConnectionDoesNotPersistSnapshots(t *testing.T) {
 	service, db, source, _ := newResourceServiceTest(t)
-	result, err := service.TestConnection(context.Background(), source.ProjectID, source.ID, collectorStub{results: []CollectionResult{{ResourceType: "ec2", Snapshots: []Snapshot{{ExternalID: "probe-only"}}}}})
+	result, err := service.TestConnection(context.Background(), source.ProjectID, source.ID, collectorStub{probeResults: []CollectionResult{{ResourceType: "ec2", Snapshots: []Snapshot{{ExternalID: "probe-only"}}}}})
 	if err != nil || len(result.ReachableTypes) != 1 || result.ReachableTypes[0] != "ec2" {
 		t.Fatal("连接测试必须只返回可达资源类型")
 	}
@@ -236,6 +256,26 @@ func TestConnectionDoesNotPersistSnapshots(t *testing.T) {
 	_ = db.Model(&Server{}).Count(&count).Error
 	if count != 0 {
 		t.Fatal("连接测试不得持久化探测快照")
+	}
+}
+
+// TestConnectionUsesLightweightProbe 防止连接测试再次执行完整资源采集并超过页面请求超时。
+func TestConnectionUsesLightweightProbe(t *testing.T) {
+	service, _, source, _ := newResourceServiceTest(t)
+	collectCalls, probeCalls := 0, 0
+	collector := collectorStub{
+		results:      []CollectionResult{{ResourceType: "ec2", Err: errors.New("完整采集不应执行")}},
+		probeResults: []CollectionResult{{ResourceType: "ec2"}, {ResourceType: "rds"}, {ResourceType: "elb"}},
+		collectCalls: &collectCalls,
+		probeCalls:   &probeCalls,
+	}
+
+	result, err := service.TestConnection(context.Background(), source.ProjectID, source.ID, collector)
+	if err != nil || len(result.ReachableTypes) != 3 || len(result.FailedTypes) != 0 {
+		t.Fatalf("连接测试必须返回轻量探测结果：%v，错误：%v", result, err)
+	}
+	if collectCalls != 0 || probeCalls != 1 {
+		t.Fatalf("连接测试不得执行完整采集，完整采集 %d 次，轻量探测 %d 次", collectCalls, probeCalls)
 	}
 }
 
