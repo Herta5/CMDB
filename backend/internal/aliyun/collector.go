@@ -45,16 +45,16 @@ func (c *Collector) Collect(ctx context.Context, source resource.Source, plain [
 		return nil, resource.ErrAuthenticationFailed
 	}
 	ecsItems, ecsErr := collectECS(ecsClient, source.Region)
-	if aliyunAuthenticationError(ecsErr) {
-		return nil, resource.ErrAuthenticationFailed
+	if accessErr := classifyAliyunAccessError(ecsErr); accessErr != nil {
+		return nil, accessErr
 	}
 	rdsItems, networks, rdsErr := collectRDS(rdsClient)
-	if aliyunAuthenticationError(rdsErr) {
-		return nil, resource.ErrAuthenticationFailed
+	if accessErr := classifyAliyunAccessError(rdsErr); accessErr != nil {
+		return nil, accessErr
 	}
 	slbItems, ports, slbErr := collectSLB(slbClient, source.Region)
-	if aliyunAuthenticationError(slbErr) {
-		return nil, resource.ErrAuthenticationFailed
+	if accessErr := classifyAliyunAccessError(slbErr); accessErr != nil {
+		return nil, accessErr
 	}
 	results := []resource.CollectionResult{{ResourceType: "ecs", Snapshots: ecsSnapshots(ecsItems), Err: ecsErr}, {ResourceType: "rds", Snapshots: rdsSnapshots(rdsItems, networks), Err: rdsErr}, {ResourceType: "slb", Snapshots: slbSnapshots(slbItems, ports), Err: slbErr}}
 	for resultIndex := range results {
@@ -222,10 +222,18 @@ func resolveEndpoints(ctx context.Context, snapshot *resource.Snapshot) {
 		}
 	}
 }
-func aliyunAuthenticationError(err error) bool {
+
+// classifyAliyunAccessError 将阿里云原始错误收敛为可安全展示的认证或权限分类。
+func classifyAliyunAccessError(err error) error {
 	if err == nil {
-		return false
+		return nil
 	}
 	value := strings.ToLower(err.Error())
-	return strings.Contains(value, "invalidaccesskey") || strings.Contains(value, "signature") || strings.Contains(value, "forbidden") || strings.Contains(value, "unauthorized")
+	if strings.Contains(value, "forbidden") || strings.Contains(value, "not authorized") || strings.Contains(value, "permission") {
+		return resource.ErrPermissionDenied
+	}
+	if strings.Contains(value, "invalidaccesskey") || strings.Contains(value, "signature") || strings.Contains(value, "unauthorized") {
+		return resource.ErrAuthenticationFailed
+	}
+	return nil
 }

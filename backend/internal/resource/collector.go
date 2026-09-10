@@ -9,6 +9,9 @@ import (
 // ErrAuthenticationFailed 表示接入凭证无效，公共同步服务据此保护现有资源状态。
 var ErrAuthenticationFailed = errors.New("接入源认证失败")
 
+// ErrPermissionDenied 表示凭证有效但缺少云资源只读权限，不携带云厂商原始响应。
+var ErrPermissionDenied = errors.New("云账号权限不足")
+
 // Snapshot 是平台采集器输出的单个云端资源事实。
 type Snapshot struct {
 	ResourceType  string

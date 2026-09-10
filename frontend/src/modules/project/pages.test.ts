@@ -13,6 +13,7 @@ import ConsoleLayout from '@/layouts/ConsoleLayout.vue'
 import UserManagementPage from '@/modules/user/UserManagementPage.vue'
 import AssetListPage from '@/modules/resource/AssetListPage.vue'
 import CloudSyncManagementPage from '@/modules/resource/CloudSyncManagementPage.vue'
+import { useResourceStore } from '@/modules/resource/store'
 
 // 节点模型只承担宿主操作，页面逻辑、路由和项目状态均执行生产代码。
 type Node = { type: string; text: string; props: Record<string, any>; children: Node[]; parent: Node | null; value?: unknown; selected?: boolean; readonly options: Node[]; addEventListener: () => void; removeEventListener: () => void }
@@ -342,6 +343,18 @@ describe('项目控制台页面', () => {
     expect(all(root).some(n => n.props.name === 'provider')).toBe(true)
     expect(text(root)).toContain('阿里云')
     expect(text(root)).toContain('AWS')
+    app.unmount()
+  })
+  it('同步成功任务在结果列展示资源统计', async () => {
+    const projectStore = useProjectStore()
+    projectStore.projects = [{ id: 2, code: 'platform', name: '平台项目', description: '', status: 'enabled', ownerUserId: null, currentRole: 'project_admin', createdAt: '', updatedAt: '' }]
+    projectStore.listState = 'ready'
+    projectStore.selectProject(2)
+    get.mockImplementation((url: string) => Promise.resolve(url.endsWith('/sources') ? [] : { items: [], total: 0 }))
+    const { root, app } = await mount(CloudSyncManagementPage, '/cloud-sync')
+    useResourceStore().jobs = [{ id: 9, sourceId: 2, provider: 'aliyun', status: 'success', trigger: 'manual', statistics: { ecs: { added: 2, updated: 1, restored: 0, lost: 0, deleted: 0, failed: 0 } }, errorSummary: '', startedAt: '' }]
+    await flush()
+    expect(text(root)).toContain('ECS：新增 2、更新 1')
     app.unmount()
   })
   it('系统管理员可打开用户编辑窗口且用户名保持不可修改', async () => {

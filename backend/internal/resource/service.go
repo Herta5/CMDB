@@ -319,7 +319,13 @@ func (s *Service) executeSync(ctx context.Context, sourceID uint64, trigger stri
 		credential[index] = 0
 	}
 	if collectErr != nil {
-		return s.finishFailed(ctx, job, "接入源认证或采集失败", collectErr)
+		summary := "接入源认证或采集失败"
+		if errors.Is(collectErr, ErrAuthenticationFailed) {
+			summary = "AccessKey 无效或签名校验失败"
+		} else if errors.Is(collectErr, ErrPermissionDenied) {
+			summary = "云账号权限不足，请授予资源只读权限"
+		}
+		return s.finishFailed(ctx, job, summary, collectErr)
 	}
 	statistics := map[string]map[string]int{}
 	failed := 0
@@ -364,7 +370,7 @@ func (s *Service) finishFailed(ctx context.Context, job *SyncJob, summary string
 	if err := s.repository.SaveJob(ctx, job); err != nil {
 		return nil, err
 	}
-	if errors.Is(cause, ErrAuthenticationFailed) {
+	if errors.Is(cause, ErrAuthenticationFailed) || errors.Is(cause, ErrPermissionDenied) {
 		return job, nil
 	}
 	return job, cause

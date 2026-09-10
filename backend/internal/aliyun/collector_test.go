@@ -2,6 +2,7 @@
 package aliyun
 
 import (
+	"errors"
 	"testing"
 
 	"cmdb/internal/resource"
@@ -16,6 +17,16 @@ func TestECSSnapshotsKeepPrivateAndPublicAddresses(t *testing.T) {
 	values := ecsSnapshots([]ecs.Instance{instance})
 	if countKind(values[0].Endpoints, "private") != 2 || countKind(values[0].Endpoints, "public") != 1 {
 		t.Fatal("ECS 必须保留全部内外网 IP")
+	}
+}
+
+// TestAliyunAccessErrorClassification 验证安全分类不会把权限不足误报为 AccessKey 无效。
+func TestAliyunAccessErrorClassification(t *testing.T) {
+	if !errors.Is(classifyAliyunAccessError(errors.New("Forbidden.RAM: User not authorized")), resource.ErrPermissionDenied) {
+		t.Fatal("阿里云 Forbidden 响应必须归类为 RAM 权限不足")
+	}
+	if !errors.Is(classifyAliyunAccessError(errors.New("InvalidAccessKeyId.NotFound")), resource.ErrAuthenticationFailed) {
+		t.Fatal("无效 AccessKey 必须归类为认证失败")
 	}
 }
 

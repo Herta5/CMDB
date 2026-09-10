@@ -11,7 +11,7 @@ function errorState(error: unknown): ResourceLoadState { const status = (error a
 export const useResourceStore = defineStore('cmdb-resource', () => {
   const sources = ref<Source[]>([]); const resources = ref<CloudResource[]>([]); const jobs = ref<SyncJob[]>([])
   const state = ref<ResourceLoadState>('idle'); const mutationError = ref(''); const syncingSourceId = ref<number | null>(null)
-  const testingSourceId = ref<number | null>(null); const retryingJobId = ref<number | null>(null); const connectionMessage = ref('')
+  const testingSourceId = ref<number | null>(null); const retryingJobId = ref<number | null>(null); const connectionMessage = ref(''); const connectionError = ref('')
   const resourceType = ref(''); const lifecycleStatus = ref(''); const page = ref(1); const pageSize = ref(20); const total = ref(0)
 
   /** 并行加载页面三块数据，任一失败都显示明确故障状态。 */
@@ -56,8 +56,9 @@ export const useResourceStore = defineStore('cmdb-resource', () => {
   async function remove(projectId: number, provider: Provider, sourceId: number, syncManagement = false) { await deleteSourceRequest(projectId, sourceId); await reload(projectId, provider, syncManagement) }
   /** 使用现有凭证执行无副作用连接测试。 */
   async function testConnection(projectId: number, sourceId: number) {
-    testingSourceId.value = sourceId; connectionMessage.value = ''
+    testingSourceId.value = sourceId; connectionMessage.value = ''; connectionError.value = ''
     try { const result = await testSourceConnection(projectId, sourceId); connectionMessage.value = result.failed_types.length ? `部分可用：${result.reachable_types.map(value => value.toUpperCase()).join('、')}；失败：${result.failed_types.map(value => value.toUpperCase()).join('、')}` : `连接成功：${result.reachable_types.map(value => value.toUpperCase()).join('、')}` }
+    catch (error) { connectionError.value = (error as { response?: { data?: { message?: string } } })?.response?.data?.message || '连接测试失败，请检查配置后重试'; throw error }
     finally { testingSourceId.value = null }
   }
   /** 启停操作复用更新接口，并明确不传新凭证。 */
@@ -71,5 +72,5 @@ export const useResourceStore = defineStore('cmdb-resource', () => {
     catch (error) { mutationError.value = (error as { response?: { status?: number } })?.response?.status === 409 ? '该接入源正在同步，请稍后刷新' : '同步失败，请检查接入配置'; throw error }
     finally { syncingSourceId.value = null }
   }
-  return { sources, resources, jobs, state, mutationError, syncingSourceId, testingSourceId, retryingJobId, connectionMessage, resourceType, lifecycleStatus, page, pageSize, total, load, loadSyncManagement, create, update, remove, testConnection, toggle, retry, sync }
+  return { sources, resources, jobs, state, mutationError, syncingSourceId, testingSourceId, retryingJobId, connectionMessage, connectionError, resourceType, lifecycleStatus, page, pageSize, total, load, loadSyncManagement, create, update, remove, testConnection, toggle, retry, sync }
 })

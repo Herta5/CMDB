@@ -64,4 +64,12 @@ describe('云资源状态层', () => {
     await store.retry(7, 'aws', 12)
     expect(post).toHaveBeenCalledWith('/projects/7/sync-jobs/12/retry')
   })
+
+  it('连接测试失败时保留服务端安全提示供页面展示', async () => {
+    post.mockRejectedValue({ response: { data: { message: '阿里云 RAM 权限不足，请授权资源只读权限' } } })
+    const store = useResourceStore()
+    await expect(store.testConnection(7, 4)).rejects.toBeTruthy()
+    expect(store.connectionError).toBe('阿里云 RAM 权限不足，请授权资源只读权限')
+    expect(store.connectionMessage).toBe('')
+  })
 })

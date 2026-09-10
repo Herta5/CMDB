@@ -128,6 +128,17 @@ func TestSyncFailureDoesNotMarkResourcesMissing(t *testing.T) {
 	}
 }
 
+// TestPermissionFailureKeepsSafeJobSummary 验证权限错误只保存可操作的安全摘要，不落库云端原文。
+func TestPermissionFailureKeepsSafeJobSummary(t *testing.T) {
+	service, db, source, _ := newResourceServiceTest(t)
+	job, _ := service.Sync(context.Background(), source.ID, "manual", collectorStub{err: ErrPermissionDenied})
+	var persisted SyncJob
+	_ = db.First(&persisted, job.ID).Error
+	if persisted.Status != "failed" || persisted.ErrorSummary != "云账号权限不足，请授予资源只读权限" {
+		t.Fatalf("权限失败摘要不正确：status=%s summary=%s", persisted.Status, persisted.ErrorSummary)
+	}
+}
+
 // TestPurgeLostResourcesAfterThreeDays 验证仅物理删除连续失联满 72 小时的资源。
 func TestPurgeLostResourcesAfterThreeDays(t *testing.T) {
 	service, db, source, now := newResourceServiceTest(t)

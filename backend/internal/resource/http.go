@@ -164,7 +164,15 @@ func (h *HTTPHandler) TestSourceConnection(c *gin.Context) {
 	}
 	result, err := h.service.TestConnection(c.Request.Context(), projectID, sourceID, collector)
 	if err != nil {
-		c.JSON(http.StatusBadGateway, gin.H{"code": "SOURCE_CONNECTION_FAILED", "message": "连接测试失败，请检查凭证和网络"})
+		if errors.Is(err, ErrPermissionDenied) {
+			c.JSON(http.StatusForbidden, gin.H{"code": "SOURCE_PERMISSION_DENIED", "message": "云账号权限不足，请授予 ECS、RDS 和负载均衡只读权限"})
+			return
+		}
+		if errors.Is(err, ErrAuthenticationFailed) {
+			c.JSON(http.StatusBadGateway, gin.H{"code": "SOURCE_AUTHENTICATION_FAILED", "message": "AccessKey 无效或签名校验失败，请检查凭证"})
+			return
+		}
+		c.JSON(http.StatusBadGateway, gin.H{"code": "SOURCE_CONNECTION_FAILED", "message": "连接测试失败，请检查区域和网络"})
 		return
 	}
 	c.JSON(http.StatusOK, result)
