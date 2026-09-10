@@ -18,7 +18,7 @@ const showDelete = ref(false)
 const formError = ref('')
 const memberError = ref('')
 const newMemberUserId = ref('')
-const newMemberRole = ref<'project_admin' | 'member' | 'viewer'>('member')
+const newMemberRole = ref<'project_admin' | 'member'>('member')
 const canManageMembers = computed(() => auth.currentUser?.globalRole === 'system_admin' || store.members.some(member => member.userId === auth.currentUser?.id && member.role === 'project_admin'))
 const availableCandidates = computed(() => store.memberCandidates.filter(candidate => !store.members.some(member => member.userId === candidate.id)))
 
@@ -69,7 +69,7 @@ async function addProjectMember() {
   try { await store.addMember(store.detail.id, Number(newMemberUserId.value), newMemberRole.value); newMemberUserId.value = '' } catch { memberError.value = '添加项目成员失败' }
 }
 /** 修改角色或移除成员时统一显示稳定中文反馈。 */
-async function changeMemberRole(userId: number, role: 'project_admin' | 'member' | 'viewer') {
+async function changeMemberRole(userId: number, role: 'project_admin' | 'member') {
   if (!store.detail) return
   try { await store.updateMemberRole(store.detail.id, userId, role) } catch { memberError.value = '修改成员角色失败' }
 }
@@ -98,10 +98,10 @@ async function removeProjectMember(userId: number) {
     </div>
     <div v-if="store.detail" class="console-panel member-panel">
       <div class="panel-heading"><h2>项目成员</h2><span class="muted">共 {{ store.members.length }} 人</span></div>
-      <form v-if="canManageMembers" class="member-toolbar" @submit.prevent="addProjectMember"><select :value="newMemberUserId" aria-label="选择待添加用户" required @change="newMemberUserId = ($event.target as HTMLSelectElement).value"><option value="" disabled>选择用户</option><option v-for="candidate in availableCandidates" :key="candidate.id" :value="candidate.id">{{ candidate.displayName }}（{{ candidate.username }}）</option></select><select :value="newMemberRole" aria-label="选择项目角色" @change="newMemberRole = ($event.target as HTMLSelectElement).value as typeof newMemberRole"><option value="project_admin">项目管理员</option><option value="member">项目成员</option><option value="viewer">只读成员</option></select><button class="console-button is-primary">添加成员</button></form>
+      <form v-if="canManageMembers" class="member-toolbar" @submit.prevent="addProjectMember"><select :value="newMemberUserId" aria-label="选择待添加用户" required @change="newMemberUserId = ($event.target as HTMLSelectElement).value"><option value="" disabled>选择用户</option><option v-for="candidate in availableCandidates" :key="candidate.id" :value="candidate.id">{{ candidate.displayName }}（{{ candidate.username }}）</option></select><select :value="newMemberRole" aria-label="选择项目角色" @change="newMemberRole = ($event.target as HTMLSelectElement).value as typeof newMemberRole"><option value="project_admin">项目管理员</option><option value="member">项目成员</option></select><button class="console-button is-primary">添加成员</button></form>
       <p v-if="memberError" class="form-error member-feedback">{{ memberError }}</p>
       <div v-if="store.membersState === 'loading'" class="page-state"><span class="loading-spinner" /><h3>正在加载项目成员…</h3></div>
-      <div v-else class="table-scroll"><table class="console-table"><thead><tr><th>用户</th><th>项目角色</th><th v-if="canManageMembers">操作</th></tr></thead><tbody><tr v-for="member in store.members" :key="member.userId"><td><strong>{{ member.displayName || member.username }}</strong><span class="project-code">{{ member.username }} · ID {{ member.userId }}</span></td><td><select v-if="canManageMembers" :value="member.role" @change="changeMemberRole(member.userId, ($event.target as HTMLSelectElement).value as typeof member.role)"><option value="project_admin">项目管理员</option><option value="member">项目成员</option><option value="viewer">只读成员</option></select><span v-else>{{ member.role === 'project_admin' ? '项目管理员' : member.role === 'member' ? '项目成员' : '只读成员' }}</span></td><td v-if="canManageMembers"><button class="button-link" @click="removeProjectMember(member.userId)">移除</button></td></tr></tbody></table></div>
+      <div v-else class="table-scroll"><table class="console-table"><thead><tr><th>用户</th><th>项目角色</th><th v-if="canManageMembers">操作</th></tr></thead><tbody><tr v-for="member in store.members" :key="member.userId"><td><strong>{{ member.displayName || member.username }}</strong><span class="project-code">{{ member.username }} · ID {{ member.userId }}</span></td><td><select v-if="canManageMembers" :value="member.role" @change="changeMemberRole(member.userId, ($event.target as HTMLSelectElement).value as typeof member.role)"><option value="project_admin">项目管理员</option><option value="member">项目成员</option></select><span v-else>{{ member.role === 'project_admin' ? '项目管理员' : '项目成员' }}</span></td><td v-if="canManageMembers"><button class="button-link" @click="removeProjectMember(member.userId)">移除</button></td></tr></tbody></table></div>
     </div>
     <p v-if="store.detail" class="page-footnote">项目编码是稳定的资源归属标识。项目内云资源的访问权限由项目成员身份与角色共同决定。</p>
     <ProjectFormDialog v-if="showEdit && store.detail" mode="edit" :project="store.detail" :submitting="store.mutationState === 'submitting'" :server-error="formError" @cancel="showEdit = false" @submit="updateProject" />

@@ -276,5 +276,5 @@ func validProjectStatus(status string) bool {
 
 // validMemberRole 集中维护首期项目内角色，避免成员接口写入无法被权限中间件识别的值。
 func validMemberRole(role string) bool {
-	return role == MemberRoleProjectAdmin || role == MemberRoleMember || role == MemberRoleViewer
+	return role == MemberRoleProjectAdmin || role == MemberRoleMember
 }

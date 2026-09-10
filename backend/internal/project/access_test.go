@@ -48,7 +48,7 @@ func TestProjectAdminManagesMembers(t *testing.T) {
 	admin := createProjectMember(t, db, managedProject.ID, 7, project.MemberRoleProjectAdmin)
 	createProjectUser(t, db, 8)
 
-	created := requestProjectMember(t, server, http.MethodPost, managedProject.ID, "", `{"user_id":8,"role":"viewer"}`, admin.ID, identity.GlobalRoleUser)
+	created := requestProjectMember(t, server, http.MethodPost, managedProject.ID, "", `{"user_id":8,"role":"member"}`, admin.ID, identity.GlobalRoleUser)
 	if created.Code != http.StatusCreated || created.Body.String() == "" {
 		t.Fatalf("项目管理员新增成员失败：status=%d body=%s", created.Code, created.Body.String())
 	}
@@ -73,24 +73,20 @@ func TestProjectAdminManagesMembers(t *testing.T) {
 	}
 }
 
-// TestReadOnlyRolesCannotManageMembers 防止普通成员或只读成员利用成员接口修改项目权限边界。
-func TestReadOnlyRolesCannotManageMembers(t *testing.T) {
-	for _, memberRole := range []string{project.MemberRoleMember, project.MemberRoleViewer} {
-		t.Run(memberRole, func(t *testing.T) {
-			server, db := newProjectHTTPServerWithDatabase(t)
-			managedProject := createProjectThroughHTTP(t, server, `{"code":"platform","name":"平台项目"}`)
-			member := createProjectMember(t, db, managedProject.ID, 7, memberRole)
-			createProjectUser(t, db, 8)
+// TestProjectMemberCannotManageMembers 防止项目成员利用成员接口修改项目权限边界。
+func TestProjectMemberCannotManageMembers(t *testing.T) {
+	server, db := newProjectHTTPServerWithDatabase(t)
+	managedProject := createProjectThroughHTTP(t, server, `{"code":"platform","name":"平台项目"}`)
+	member := createProjectMember(t, db, managedProject.ID, 7, project.MemberRoleMember)
+	createProjectUser(t, db, 8)
 
-			response := requestProjectMember(t, server, http.MethodPost, managedProject.ID, "", `{"user_id":8,"role":"member"}`, member.ID, identity.GlobalRoleUser)
-			if response.Code != http.StatusNotFound || response.Body.String() != `{"code":"PROJECT_NOT_FOUND","message":"项目不存在"}` {
-				t.Fatalf("只读角色管理权限必须隐藏项目存在性：status=%d body=%s", response.Code, response.Body.String())
-			}
-			var created int64
-			if err := db.Model(&project.MemberRole{}).Where("project_id = ? AND user_id = ?", managedProject.ID, 8).Count(&created).Error; err != nil || created != 0 {
-				t.Fatalf("未授权成员管理不得写入成员关系：count=%d err=%v", created, err)
-			}
-		})
+	response := requestProjectMember(t, server, http.MethodPost, managedProject.ID, "", `{"user_id":8,"role":"member"}`, member.ID, identity.GlobalRoleUser)
+	if response.Code != http.StatusNotFound || response.Body.String() != `{"code":"PROJECT_NOT_FOUND","message":"项目不存在"}` {
+		t.Fatalf("项目成员管理权限必须隐藏项目存在性：status=%d body=%s", response.Code, response.Body.String())
+	}
+	var created int64
+	if err := db.Model(&project.MemberRole{}).Where("project_id = ? AND user_id = ?", managedProject.ID, 8).Count(&created).Error; err != nil || created != 0 {
+		t.Fatalf("未授权成员管理不得写入成员关系：count=%d err=%v", created, err)
 	}
 }
 
@@ -138,7 +134,7 @@ func TestProjectAdminRejectsInvalidMemberRole(t *testing.T) {
 	admin := createProjectMember(t, db, managedProject.ID, 7, project.MemberRoleProjectAdmin)
 	createProjectUser(t, db, 8)
 
-	response := requestProjectMember(t, server, http.MethodPost, managedProject.ID, "", `{"user_id":8,"role":"owner"}`, admin.ID, identity.GlobalRoleUser)
+	response := requestProjectMember(t, server, http.MethodPost, managedProject.ID, "", `{"user_id":8,"role":"viewer"}`, admin.ID, identity.GlobalRoleUser)
 	if response.Code != http.StatusBadRequest || response.Body.String() != `{"code":"PROJECT_MEMBER_INVALID_INPUT","message":"项目成员参数无效"}` {
 		t.Fatalf("非法成员角色必须被稳定拒绝：status=%d body=%s", response.Code, response.Body.String())
 	}

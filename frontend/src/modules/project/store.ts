@@ -161,7 +161,7 @@ export const useProjectStore = defineStore('cmdb-project', () => {
     membersState.value = 'loading'
     try {
       members.value = await listMembers(projectId)
-      // 只读成员无权读取候选目录，但仍应正常看到现有成员列表。
+      // 项目成员无权读取候选目录，但仍应正常看到现有成员列表。
       try { memberCandidates.value = await listMemberCandidates(projectId) } catch { memberCandidates.value = [] }
       membersState.value = 'ready'
     } catch (error) { membersState.value = failureState(error) }

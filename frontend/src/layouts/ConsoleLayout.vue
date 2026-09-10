@@ -63,6 +63,7 @@ async function logout() {
           <p class="nav-group-label">系统管理</p>
           <router-link to="/projects" class="nav-item" :class="{ 'is-active': route.path.startsWith('/projects') }"><span class="nav-symbol" aria-hidden="true">▣</span>项目管理</router-link>
           <router-link to="/cloud-sync" class="nav-item" :class="{ 'is-active': route.path === '/cloud-sync' }"><span class="nav-symbol" aria-hidden="true">↻</span>云同步管理</router-link>
+          <router-link to="/roles" class="nav-item" :class="{ 'is-active': route.path === '/roles' }"><span class="nav-symbol" aria-hidden="true">◇</span>角色权限</router-link>
           <router-link to="/users" class="nav-item" :class="{ 'is-active': route.path === '/users' }"><span class="nav-symbol" aria-hidden="true">♙</span>用户管理</router-link>
         </template>
       </nav>

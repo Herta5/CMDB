@@ -42,7 +42,7 @@ export interface UpdateProjectInput {
 }
 
 /** ProjectMember 是成员列表所需的项目角色与最小公开身份。 */
-export interface ProjectMember { id: number; userId: number; role: 'project_admin' | 'member' | 'viewer'; username: string; displayName: string }
+export interface ProjectMember { id: number; userId: number; role: 'project_admin' | 'member'; username: string; displayName: string }
 /** MemberCandidate 是添加成员选择器可读取的最小用户资料。 */
 export interface MemberCandidate { id: number; username: string; displayName: string }
 interface MemberDTO { id: number; user_id: number; role: ProjectMember['role']; username?: string; display_name?: string }

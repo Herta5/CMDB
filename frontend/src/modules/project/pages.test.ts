@@ -11,6 +11,7 @@ import ProjectListPage from './ProjectListPage.vue'
 import ProjectDetailPage from './ProjectDetailPage.vue'
 import ConsoleLayout from '@/layouts/ConsoleLayout.vue'
 import UserManagementPage from '@/modules/user/UserManagementPage.vue'
+import RolePermissionsPage from '@/modules/user/RolePermissionsPage.vue'
 import AssetListPage from '@/modules/resource/AssetListPage.vue'
 
 // 节点模型只承担宿主操作，页面逻辑、路由和项目状态均执行生产代码。
@@ -68,9 +69,10 @@ async function mount(component: Component, path = '/projects') {
     { path: '/assets/databases', component: { render: () => null } },
     { path: '/assets/load-balancers', component: { render: () => null } },
     { path: '/cloud-sync', component: { render: () => null } },
-    // 控制台导航需要这些真实目标，页面测试不渲染平台内容但不能留下路由警告。
+    // 控制台导航需要这些真实目标，页面测试不渲染对应内容但不能留下路由警告。
     { path: '/aliyun', component: { render: () => null } },
     { path: '/aws', component: { render: () => null } },
+    { path: '/roles', component: { render: () => null } },
     { path: '/users', component: { render: () => null } },
     { path: '/login', component: { render: () => null } },
   ] })
@@ -104,7 +106,7 @@ describe('项目控制台页面', () => {
     get.mockReturnValueOnce(new Promise(resolve => { resolvePrevious = resolve })).mockResolvedValueOnce({ ...fixture, name: '新会话项目资料' })
     const { root, app } = await mount(ProjectDetailPage, '/projects/2')
     expect(useProjectStore().detailState).toBe('loading')
-    useAuthStore().acceptSession('新会话', { id: 4, username: 'viewer', globalRole: 'user' })
+    useAuthStore().acceptSession('新会话', { id: 4, username: 'member-user', globalRole: 'user' })
     await flush()
     resolvePrevious(fixture)
     await flush()
@@ -234,10 +236,24 @@ describe('项目控制台页面', () => {
     expect(text(root)).toContain('系统管理')
     expect(text(root)).toContain('项目管理')
     expect(text(root)).toContain('云同步管理')
+    expect(text(root)).toContain('角色权限')
     expect(text(root)).toContain('用户管理')
     expect(text(root)).not.toContain('云平台')
     expect(text(root)).not.toContain('阿里云AWS')
     expect(all(root).some(n => n.type === 'a' && n.props.href === '/users')).toBe(true)
+    app.unmount()
+  })
+  it('角色权限页展示全局与项目角色的能力边界', async () => {
+    const { root, app } = await mount(RolePermissionsPage, '/roles')
+    expect(text(root)).toContain('系统管理员')
+    expect(text(root)).toContain('访问所有项目')
+    expect(text(root)).toContain('普通用户')
+    expect(text(root)).toContain('具体能力由项目角色决定')
+    expect(text(root)).toContain('项目管理员')
+    expect(text(root)).toContain('管理本项目成员')
+    expect(text(root)).toContain('项目成员')
+    expect(text(root)).toContain('查看服务器、数据库和负载均衡资产')
+    expect(text(root)).not.toContain('只读成员')
     app.unmount()
   })
   it('服务器资产页合并当前项目的 ECS 和 EC2', async () => {
@@ -256,7 +272,7 @@ describe('项目控制台页面', () => {
   })
   it('系统管理员可打开用户编辑窗口且用户名保持不可修改', async () => {
     useAuthStore().acceptSession('管理员会话', { id: 1, username: 'admin', globalRole: 'system_admin' })
-    get.mockImplementation((url: string) => Promise.resolve(url === '/users' ? [{ id: 2, username: 'cloud-user', display_name: '云资源用户', email: 'cloud@example.invalid', global_role: 'user', status: 'active', project_permissions: [{ project_id: 2, project_name: '平台项目', role: 'viewer' }] }] : [fixture]))
+    get.mockImplementation((url: string) => Promise.resolve(url === '/users' ? [{ id: 2, username: 'cloud-user', display_name: '云资源用户', email: 'cloud@example.invalid', global_role: 'user', status: 'active', project_permissions: [{ project_id: 2, project_name: '平台项目', role: 'member' }] }] : [fixture]))
     const { root, app } = await mount(UserManagementPage, '/users')
     await all(root).find(n => n.type === 'button' && text(n) === '编辑')!.props.onClick()
     await flush()

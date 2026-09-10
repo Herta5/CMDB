@@ -17,8 +17,6 @@ const (
 	MemberRoleProjectAdmin = "project_admin"
 	// MemberRoleMember 表示项目普通成员可按后续授权访问项目资源。
 	MemberRoleMember = "member"
-	// MemberRoleViewer 表示项目只读成员不得变更项目资源。
-	MemberRoleViewer = "viewer"
 )
 
 // Project 表示业务项目；Code 是创建后永久稳定的归属标识，禁止通过更新接口变更。

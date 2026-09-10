@@ -16,6 +16,7 @@ services:
       - ./backend/migrations/002_cloud_resources.sql:/docker-entrypoint-initdb.d/002_cloud_resources.sql:ro
       - ./backend/migrations/003_async_sync_jobs.sql:/docker-entrypoint-initdb.d/003_async_sync_jobs.sql:ro
       - ./backend/migrations/004_remove_kubernetes.sql:/docker-entrypoint-initdb.d/004_remove_kubernetes.sql:ro
+      - ./backend/migrations/005_remove_viewer_role.sql:/docker-entrypoint-initdb.d/005_remove_viewer_role.sql:ro
     command:
       - --character-set-server=utf8mb4
       - --collation-server=utf8mb4_0900_ai_ci

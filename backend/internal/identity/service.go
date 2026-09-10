@@ -234,7 +234,7 @@ func validRoleAndStatus(role, status string) bool {
 func validProjectPermissions(values []ProjectPermission) bool {
 	seen := make(map[uint64]struct{}, len(values))
 	for _, value := range values {
-		if value.ProjectID == 0 || (value.Role != "project_admin" && value.Role != "member" && value.Role != "viewer") {
+		if value.ProjectID == 0 || (value.Role != "project_admin" && value.Role != "member") {
 			return false
 		}
 		if _, exists := seen[value.ProjectID]; exists {

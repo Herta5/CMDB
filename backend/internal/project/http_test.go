@@ -132,10 +132,10 @@ func TestProjectHTTPUpdateKeepsCodeImmutable(t *testing.T) {
 func TestProjectHTTPListsOnlyCurrentUserMembership(t *testing.T) {
 	server, db := newProjectHTTPServerWithDatabase(t)
 	first := createProjectThroughHTTP(t, server, `{"code":"cloud","name":"云平台"}`)
-	if err := db.Create(&identity.User{ID: 7, Username: "http-viewer", PasswordHash: "test-hash", DisplayName: "接口查看者", GlobalRole: identity.GlobalRoleUser, Status: "active"}).Error; err != nil {
+	if err := db.Create(&identity.User{ID: 7, Username: "http-member", PasswordHash: "test-hash", DisplayName: "接口成员", GlobalRole: identity.GlobalRoleUser, Status: "active"}).Error; err != nil {
 		t.Fatalf("准备项目列表用户失败：%v", err)
 	}
-	if err := db.Create(&project.MemberRole{ProjectID: first.ID, UserID: 7, Role: project.MemberRoleViewer}).Error; err != nil {
+	if err := db.Create(&project.MemberRole{ProjectID: first.ID, UserID: 7, Role: project.MemberRoleMember}).Error; err != nil {
 		t.Fatalf("准备项目列表成员关系失败：%v", err)
 	}
 	if response := createProjectResponse(t, server, `{"code":"data","name":"数据平台"}`); response.Code != http.StatusCreated {

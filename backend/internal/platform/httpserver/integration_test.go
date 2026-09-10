@@ -35,7 +35,7 @@ func TestProjectBoundaryEndToEnd(t *testing.T) {
 	decodeIntegration(t, second, &secondProject)
 	firstPath := "/api/v1/projects/" + strconv.FormatUint(firstProject.ID, 10)
 	secondPath := "/api/v1/projects/" + strconv.FormatUint(secondProject.ID, 10)
-	integrationRequest(t, server, admin, "POST", firstPath+"/members", map[string]any{"user_id": 2, "role": "viewer"}, 201)
+	integrationRequest(t, server, admin, "POST", firstPath+"/members", map[string]any{"user_id": 2, "role": "member"}, 201)
 
 	var me map[string]any
 	decodeIntegration(t, integrationRequest(t, server, member, "GET", "/api/v1/me", nil, 200), &me)
@@ -93,7 +93,7 @@ func TestSystemAdministratorManagesUsers(t *testing.T) {
 	decodeIntegration(t, integrationRequest(t, server, admin, http.MethodPost, "/api/v1/projects", map[string]any{"code": "user-auth-b", "name": "用户授权乙"}, http.StatusCreated), &secondProject)
 	created := integrationRequest(t, server, admin, http.MethodPost, "/api/v1/users", map[string]any{
 		"username": "cloud-user", "password": "secure-user-password", "display_name": "云资源用户", "email": "cloud@example.invalid", "global_role": "user", "status": "active",
-		"project_permissions": []map[string]any{{"project_id": firstProject.ID, "role": "project_admin"}, {"project_id": secondProject.ID, "role": "viewer"}},
+		"project_permissions": []map[string]any{{"project_id": firstProject.ID, "role": "project_admin"}, {"project_id": secondProject.ID, "role": "member"}},
 	}, http.StatusCreated)
 	if strings.Contains(created.Body.String(), "password") {
 		t.Fatal("创建用户响应不得包含密码或密码哈希")
@@ -125,7 +125,7 @@ func TestSystemAdministratorEditsUserAndCannotLockSelfOut(t *testing.T) {
 	decodeIntegration(t, integrationRequest(t, server, admin, http.MethodPost, "/api/v1/projects", map[string]any{"code": "replace-a", "name": "替换前项目"}, http.StatusCreated), &firstProject)
 	decodeIntegration(t, integrationRequest(t, server, admin, http.MethodPost, "/api/v1/projects", map[string]any{"code": "replace-b", "name": "替换后项目"}, http.StatusCreated), &secondProject)
 	created := integrationRequest(t, server, admin, http.MethodPost, "/api/v1/users", map[string]any{
-		"username": "editable-user", "password": "initial-user-password", "display_name": "待编辑用户", "email": "old@example.invalid", "global_role": "user", "status": "active", "project_permissions": []map[string]any{{"project_id": firstProject.ID, "role": "viewer"}},
+		"username": "editable-user", "password": "initial-user-password", "display_name": "待编辑用户", "email": "old@example.invalid", "global_role": "user", "status": "active", "project_permissions": []map[string]any{{"project_id": firstProject.ID, "role": "member"}},
 	}, http.StatusCreated)
 	var user identity.User
 	decodeIntegration(t, created, &user)
@@ -153,7 +153,7 @@ func TestCreatingUserWithMissingProjectRollsBack(t *testing.T) {
 	admin := loginUser(t, server, "operator", password)
 	integrationRequest(t, server, admin, http.MethodPost, "/api/v1/users", map[string]any{
 		"username": "rollback-user", "password": "rollback-user-password", "display_name": "回滚用户", "global_role": "user", "status": "active",
-		"project_permissions": []map[string]any{{"project_id": 999999, "role": "viewer"}},
+		"project_permissions": []map[string]any{{"project_id": 999999, "role": "member"}},
 	}, http.StatusBadRequest)
 	var users, memberships int64
 	if err := db.Table("users").Where("username = ?", "rollback-user").Count(&users).Error; err != nil {
@@ -202,7 +202,7 @@ func TestProjectSourceAPINeverReturnsCredentials(t *testing.T) {
 	var created project.Project
 	decodeIntegration(t, integrationRequest(t, server, admin, http.MethodPost, "/api/v1/projects", map[string]any{"code": "sources", "name": "接入项目"}, http.StatusCreated), &created)
 	path := "/api/v1/projects/" + strconv.FormatUint(created.ID, 10)
-	integrationRequest(t, server, admin, http.MethodPost, path+"/members", map[string]any{"user_id": 2, "role": "viewer"}, http.StatusCreated)
+	integrationRequest(t, server, admin, http.MethodPost, path+"/members", map[string]any{"user_id": 2, "role": "member"}, http.StatusCreated)
 	response := integrationRequest(t, server, admin, http.MethodPost, path+"/sources", map[string]any{"provider": "aws", "name": "AWS 生产账号", "region": "cn-north-1", "credential": map[string]any{"access_key_id": "example-id", "secret_access_key": "example-secret"}}, http.StatusCreated)
 	if strings.Contains(response.Body.String(), "example") || strings.Contains(response.Body.String(), "encrypted") {
 		t.Fatal("接入源响应不得暴露凭证明文或密文字段")

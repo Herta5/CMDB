@@ -18,6 +18,7 @@ const routes: RouteRecordRaw[] = [
       { path: 'projects', name: 'ProjectList', component: () => import('@/modules/project/ProjectListPage.vue'), meta: { title: '项目管理', requiresSystemAdmin: true } },
       { path: 'projects/:projectId', name: 'ProjectDetail', component: () => import('@/modules/project/ProjectDetailPage.vue'), meta: { title: '项目详情' } },
       { path: 'users', name: 'UserManagement', component: () => import('@/modules/user/UserManagementPage.vue'), meta: { title: '用户管理', requiresSystemAdmin: true } },
+      { path: 'roles', name: 'RolePermissions', component: () => import('@/modules/user/RolePermissionsPage.vue'), meta: { title: '角色权限', requiresSystemAdmin: true } },
       { path: 'cloud-sync', name: 'CloudSyncManagement', component: () => import('@/modules/resource/CloudSyncManagementPage.vue'), meta: { title: '云同步管理', requiresSystemAdmin: true } },
       // 保留旧书签的可达性，平台入口统一迁移到云同步管理。
       { path: 'aliyun', name: 'LegacyAliyunResources', redirect: '/cloud-sync?provider=aliyun' },

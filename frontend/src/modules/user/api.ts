@@ -13,7 +13,7 @@ export interface User {
 }
 
 /** ProjectPermission 是用户在单个项目中的角色，同一用户可属于多个项目。 */
-export interface ProjectPermission { projectId: number; projectName?: string; role: 'project_admin' | 'member' | 'viewer' }
+export interface ProjectPermission { projectId: number; projectName?: string; role: 'project_admin' | 'member' }
 
 /** CreateUserInput 的密码不得被状态层保存或回显。 */
 export interface CreateUserInput {
