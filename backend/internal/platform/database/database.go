@@ -3,6 +3,7 @@ package database
 
 import (
 	"fmt"
+	"strings"
 
 	"cmdb/internal/platform/config"
 	"gorm.io/driver/postgres"
@@ -20,10 +21,18 @@ func Open(databaseConfig config.Database) (*gorm.DB, error) {
 func dsn(databaseConfig config.Database) string {
 	return fmt.Sprintf(
 		"host=%s port=%s user=%s password=%s dbname=%s sslmode=disable TimeZone=UTC",
-		databaseConfig.Host,
-		databaseConfig.Port,
-		databaseConfig.User,
-		databaseConfig.Password,
-		databaseConfig.Name,
+		dsnValue(databaseConfig.Host),
+		dsnValue(databaseConfig.Port),
+		dsnValue(databaseConfig.User),
+		dsnValue(databaseConfig.Password),
+		dsnValue(databaseConfig.Name),
 	)
+}
+
+// dsnValue 使用 PostgreSQL 键值 DSN 的单引号字面量，并转义会改变字面量边界的字符。
+// 所有动态配置都必须经过该函数，避免环境变量中的空白或参数片段改变实际连接配置。
+func dsnValue(value string) string {
+	escapedValue := strings.ReplaceAll(value, `\`, `\\`)
+	escapedValue = strings.ReplaceAll(escapedValue, `'`, `\'`)
+	return "'" + escapedValue + "'"
 }
