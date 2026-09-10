@@ -10,6 +10,10 @@ const projects = useProjectStore()
 const route = useRoute()
 const router = useRouter()
 const userName = computed(() => auth.currentUser?.displayName || auth.currentUser?.username || '当前用户')
+const isSystemAdmin = computed(() => auth.currentUser?.globalRole === 'system_admin')
+// 项目管理员权限随顶部当前项目切换，不能因其他项目的角色扩大当前边界。
+const isCurrentProjectAdmin = computed(() => projects.currentProject?.currentRole === 'project_admin')
+const canSeeManagement = computed(() => isSystemAdmin.value || isCurrentProjectAdmin.value)
 const switcherPlaceholder = computed(() => {
   if (projects.listState === 'loading') return '正在加载项目…'
   if (projects.listState === 'error') return '项目加载失败'
@@ -36,6 +40,9 @@ watch(() => [route.params.projectId, projects.listState, projects.detailState], 
 async function switchProject(event: Event) {
   const id = Number((event.target as HTMLSelectElement).value)
   projects.selectProject(id)
+  if (route.meta.requiresProjectAdmin && !isSystemAdmin.value && !isCurrentProjectAdmin.value) {
+    await router.replace('/assets/servers')
+  }
 }
 
 /** 退出统一清理认证状态，项目状态通过会话监听同步失效。 */
@@ -54,17 +61,16 @@ async function logout() {
         <span class="brand-caption">云资源管理</span>
       </router-link>
       <nav aria-label="主导航" class="console-nav">
-        <p class="nav-group-label">工作空间</p>
         <p class="nav-parent"><span class="nav-symbol" aria-hidden="true">▦</span>资产列表</p>
         <router-link to="/assets/servers" class="nav-item nav-child" :class="{ 'is-active': route.path === '/assets/servers' }">服务器</router-link>
         <router-link to="/assets/databases" class="nav-item nav-child" :class="{ 'is-active': route.path === '/assets/databases' }">数据库</router-link>
         <router-link to="/assets/load-balancers" class="nav-item nav-child" :class="{ 'is-active': route.path === '/assets/load-balancers' }">负载均衡</router-link>
-        <template v-if="auth.currentUser?.globalRole === 'system_admin'">
-          <p class="nav-group-label">系统管理</p>
+        <template v-if="canSeeManagement">
+          <p class="nav-group-label">管理</p>
           <router-link to="/projects" class="nav-item" :class="{ 'is-active': route.path.startsWith('/projects') }"><span class="nav-symbol" aria-hidden="true">▣</span>项目管理</router-link>
           <router-link to="/cloud-sync" class="nav-item" :class="{ 'is-active': route.path === '/cloud-sync' }"><span class="nav-symbol" aria-hidden="true">↻</span>云同步管理</router-link>
-          <router-link to="/roles" class="nav-item" :class="{ 'is-active': route.path === '/roles' }"><span class="nav-symbol" aria-hidden="true">◇</span>角色权限</router-link>
-          <router-link to="/users" class="nav-item" :class="{ 'is-active': route.path === '/users' }"><span class="nav-symbol" aria-hidden="true">♙</span>用户管理</router-link>
+          <router-link v-if="isSystemAdmin" to="/roles" class="nav-item" :class="{ 'is-active': route.path === '/roles' }"><span class="nav-symbol" aria-hidden="true">◇</span>角色权限</router-link>
+          <router-link v-if="isSystemAdmin" to="/users" class="nav-item" :class="{ 'is-active': route.path === '/users' }"><span class="nav-symbol" aria-hidden="true">♙</span>用户管理</router-link>
         </template>
       </nav>
       <div class="sidebar-footer"><span class="status-dot" />项目隔离 · 统一管理</div>

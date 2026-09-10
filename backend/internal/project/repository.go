@@ -97,6 +97,7 @@ func (r *gormRepository) List(ctx context.Context) ([]Project, error) {
 func (r *gormRepository) ListForUser(ctx context.Context, userID uint64) ([]Project, error) {
 	var projects []Project
 	if err := r.db.WithContext(ctx).
+		Select("projects.*, project_members.role AS current_role").
 		Joins("JOIN project_members ON project_members.project_id = projects.id").
 		Where("project_members.user_id = ?", userID).
 		Order("projects.id ASC").

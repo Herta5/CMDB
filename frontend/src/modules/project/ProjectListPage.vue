@@ -33,7 +33,7 @@ async function createProject(input: CreateProjectInput) {
 <template>
   <section aria-labelledby="projects-title">
     <div class="page-heading">
-      <div><p class="page-eyebrow">系统管理 / 项目管理</p><h1 id="projects-title">项目管理</h1><p class="page-description">以项目组织云资源，统一管理数据归属与访问边界。</p></div>
+      <div><p class="page-eyebrow">管理 / 项目管理</p><h1 id="projects-title">项目管理</h1><p class="page-description">以项目组织云资源，统一管理数据归属与访问边界。</p></div>
       <div class="heading-actions"><button class="console-button" :disabled="store.listState === 'loading'" @click="store.loadProjects()">刷新列表</button><button v-if="canManage" class="console-button is-primary" @click="showCreate = true">创建项目</button></div>
     </div>
     <div v-if="store.listState === 'ready'" class="project-summary">

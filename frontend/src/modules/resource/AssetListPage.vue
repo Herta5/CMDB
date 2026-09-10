@@ -44,7 +44,7 @@ const display = (value?: string | number) => value === undefined || value === nu
 
 <template>
   <section>
-    <header class="page-heading"><div><p class="page-eyebrow">工作空间 / 资产列表</p><h1>{{ category.title }}</h1><p class="page-description">{{ category.description }}</p></div><button class="console-button" :disabled="!projects.currentProjectId || loading" @click="loadAssets">刷新列表</button></header>
+    <header class="page-heading"><div><p class="page-eyebrow">资产列表</p><h1>{{ category.title }}</h1><p class="page-description">{{ category.description }}</p></div><button class="console-button" :disabled="!projects.currentProjectId || loading" @click="loadAssets">刷新列表</button></header>
     <div v-if="!projects.currentProjectId" class="console-panel page-state"><span class="state-symbol">▦</span><h3>请先选择项目</h3><p>资产必须在明确的项目边界内查看。</p></div>
     <section v-else class="console-panel">
       <div class="panel-heading resource-toolbar"><h2>{{ category.title }}列表</h2><div><select v-model="lifecycleStatus" aria-label="生命周期" @change="loadAssets"><option value="">全部状态</option><option value="active">正常</option><option value="lost">已失联</option></select><span class="muted">共 {{ resources.length }} 项</span></div></div>

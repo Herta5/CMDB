@@ -85,6 +85,9 @@ func TestListForUserRestrictsRegularUserToMembership(t *testing.T) {
 	if len(regularProjects) != 1 || regularProjects[0].Code != "cloud" {
 		t.Fatalf("普通用户只能看到自己的成员项目：got=%+v", regularProjects)
 	}
+	if regularProjects[0].CurrentRole != MemberRoleMember {
+		t.Fatalf("项目列表必须返回当前用户角色，实际为 %q", regularProjects[0].CurrentRole)
+	}
 
 	administratorProjects, err := service.ListForUser(context.Background(), 7, identity.GlobalRoleSystemAdmin)
 	if err != nil {

@@ -68,7 +68,7 @@ async function mount(component: Component, path = '/projects') {
     { path: '/assets/servers', component: { render: () => null } },
     { path: '/assets/databases', component: { render: () => null } },
     { path: '/assets/load-balancers', component: { render: () => null } },
-    { path: '/cloud-sync', component: { render: () => null } },
+    { path: '/cloud-sync', component: { render: () => null }, meta: { requiresProjectAdmin: true } },
     // 控制台导航需要这些真实目标，页面测试不渲染对应内容但不能留下路由警告。
     { path: '/aliyun', component: { render: () => null } },
     { path: '/aws', component: { render: () => null } },
@@ -226,14 +226,16 @@ describe('项目控制台页面', () => {
     expect(text(root)).not.toContain('新建业务项目')
     app.unmount()
   })
-  it('系统管理员侧栏按工作空间和系统管理重组入口', async () => {
+  it('系统管理员侧栏按资产列表和管理重组入口', async () => {
     useAuthStore().acceptSession('管理员会话', { id: 1, username: 'admin', globalRole: 'system_admin' })
     const { root, app } = await mount(ConsoleLayout)
     expect(text(root)).toContain('资产列表')
     expect(text(root)).toContain('服务器')
     expect(text(root)).toContain('数据库')
     expect(text(root)).toContain('负载均衡')
-    expect(text(root)).toContain('系统管理')
+    expect(text(root)).toContain('管理')
+    const navigationGroups = all(root).filter(n => n.props.class === 'nav-group-label').map(text)
+    expect(navigationGroups).toEqual(['管理'])
     expect(text(root)).toContain('项目管理')
     expect(text(root)).toContain('云同步管理')
     expect(text(root)).toContain('角色权限')
@@ -241,6 +243,39 @@ describe('项目控制台页面', () => {
     expect(text(root)).not.toContain('云平台')
     expect(text(root)).not.toContain('阿里云AWS')
     expect(all(root).some(n => n.type === 'a' && n.props.href === '/users')).toBe(true)
+    app.unmount()
+  })
+  it('项目管理员看到当前项目的管理入口，项目成员只看到资产列表', async () => {
+    get.mockResolvedValue([{ ...fixture, current_role: 'project_admin' }])
+    const administrator = await mount(ConsoleLayout, '/assets/servers')
+    expect(text(administrator.root)).toContain('管理')
+    expect(text(administrator.root)).toContain('项目管理')
+    expect(text(administrator.root)).toContain('云同步管理')
+    expect(text(administrator.root)).not.toContain('用户管理')
+    administrator.app.unmount()
+
+    get.mockResolvedValue([{ ...fixture, current_role: 'member' }])
+    const member = await mount(ConsoleLayout, '/assets/servers')
+    expect(text(member.root)).not.toContain('项目管理')
+    expect(text(member.root)).not.toContain('云同步管理')
+    member.app.unmount()
+  })
+  it('从管理员项目切换到成员项目时退出云同步管理', async () => {
+    get.mockResolvedValue([
+      { ...fixture, current_role: 'project_admin' },
+      { ...fixture, id: 3, code: 'member-project', name: '成员项目', current_role: 'member' },
+    ])
+    const { root, app, router } = await mount(ConsoleLayout, '/cloud-sync')
+    const switcher = all(root).find(n => n.type === 'select' && n.props['aria-label'] === '当前项目')!
+    const redirected = new Promise<void>(resolve => {
+      const remove = router.afterEach(() => { remove(); resolve() })
+    })
+    await switcher.props.onChange({ target: { value: '3' } })
+    await redirected
+    await flush()
+    expect(useProjectStore().currentProjectId).toBe(3)
+    expect(useProjectStore().currentProject?.currentRole).toBe('member')
+    expect(router.currentRoute.value.path).toBe('/assets/servers')
     app.unmount()
   })
   it('角色权限页展示全局与项目角色的能力边界', async () => {

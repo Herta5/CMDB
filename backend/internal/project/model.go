@@ -30,6 +30,8 @@ type Project struct {
 	OwnerUser   *identity.User `gorm:"foreignKey:OwnerUserID;constraint:OnDelete:SET NULL" json:"-"`
 	CreatedAt   time.Time      `gorm:"column:created_at;not null" json:"created_at"`
 	UpdatedAt   time.Time      `gorm:"column:updated_at;not null" json:"updated_at"`
+	// CurrentRole 是项目列表针对当前普通用户附加的角色，不属于项目持久化字段。
+	CurrentRole string `gorm:"column:current_role;->;-:migration" json:"current_role,omitempty"`
 }
 
 // TableName 将业务项目明确映射到 CMDB 的 projects 表。

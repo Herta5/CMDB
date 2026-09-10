@@ -1,5 +1,5 @@
 <script setup lang="ts">
-// 本页面将阿里云和 AWS 接入源及同步任务收口到同一系统管理模块。
+// 本页面将阿里云和 AWS 接入源及同步任务收口到同一管理模块。
 import { ref } from 'vue'
 import { useRoute } from 'vue-router'
 import CloudPlatformPage from './CloudPlatformPage.vue'
@@ -11,7 +11,7 @@ const provider = ref<Provider>(route.query.provider === 'aws' ? 'aws' : 'aliyun'
 
 <template>
   <section>
-    <header class="page-heading"><div><p class="page-eyebrow">系统管理 / 云同步管理</p><h1>云同步管理</h1><p class="page-description">统一维护阿里云和 AWS 接入源，执行连接测试、定时同步和失败重试。</p></div></header>
+    <header class="page-heading"><div><p class="page-eyebrow">管理 / 云同步管理</p><h1>云同步管理</h1><p class="page-description">统一维护阿里云和 AWS 接入源，执行连接测试、定时同步和失败重试。</p></div></header>
     <div class="provider-tabs" role="tablist" aria-label="云平台"><button role="tab" :aria-selected="provider === 'aliyun'" :class="{ 'is-active': provider === 'aliyun' }" @click="provider = 'aliyun'">阿里云</button><button role="tab" :aria-selected="provider === 'aws'" :class="{ 'is-active': provider === 'aws' }" @click="provider = 'aws'">AWS</button></div>
     <CloudPlatformPage :key="provider" :provider="provider" sync-only />
   </section>

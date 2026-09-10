@@ -11,6 +11,8 @@ export interface Project {
   ownerUserId: number | null
   createdAt: string
   updatedAt: string
+  /** currentRole 只表示当前普通用户在该项目中的权限，系统管理员无需项目角色。 */
+  currentRole?: 'project_admin' | 'member'
 }
 
 /** 后端字段命名保持原始契约，仅在接口层存在。 */
@@ -23,6 +25,7 @@ interface ProjectDTO {
   owner_user_id: number | null
   created_at: string
   updated_at: string
+  current_role?: 'project_admin' | 'member'
 }
 
 /** 创建项目输入使用页面友好的字段名，负责人允许暂不设置。 */
@@ -53,7 +56,7 @@ function toProject(value: ProjectDTO): Project {
   return {
     id: value.id, code: value.code, name: value.name, description: value.description,
     status: value.status, ownerUserId: value.owner_user_id,
-    createdAt: value.created_at, updatedAt: value.updated_at,
+    createdAt: value.created_at, updatedAt: value.updated_at, currentRole: value.current_role,
   }
 }
 

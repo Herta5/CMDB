@@ -9,7 +9,7 @@ const roles = [
 </script>
 
 <template>
-  <section><header class="page-heading"><div><p class="page-eyebrow">系统管理 / 角色权限</p><h1>角色权限</h1><p class="page-description">查看全局角色与项目角色的实际能力边界。</p></div></header><div class="role-grid"><article v-for="role in roles" :key="role.name" class="console-panel role-card"><span>{{ role.scope }}</span><h2>{{ role.name }}</h2><ul><li v-for="permission in role.permissions" :key="permission">{{ permission }}</li></ul></article></div></section>
+  <section><header class="page-heading"><div><p class="page-eyebrow">管理 / 角色权限</p><h1>角色权限</h1><p class="page-description">查看全局角色与项目角色的实际能力边界。</p></div></header><div class="role-grid"><article v-for="role in roles" :key="role.name" class="console-panel role-card"><span>{{ role.scope }}</span><h2>{{ role.name }}</h2><ul><li v-for="permission in role.permissions" :key="permission">{{ permission }}</li></ul></article></div></section>
 </template>
 
 <style scoped>
