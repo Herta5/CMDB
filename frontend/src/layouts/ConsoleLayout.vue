@@ -40,7 +40,8 @@ watch(() => [route.params.projectId, projects.listState, projects.detailState], 
 /** 顶部项目切换只更换全局数据边界，保留当前功能页便于连续比较资产。 */
 async function switchProject(event: Event) {
   const id = Number((event.target as HTMLSelectElement).value)
-  projects.selectProject(id)
+  if (id === 0) projects.selectAllProjects()
+  else projects.selectProject(id)
   if (route.meta.requiresProjectAdmin && !isSystemAdmin.value && !isCurrentProjectAdmin.value) {
     await router.replace('/assets/servers')
   }
@@ -81,6 +82,7 @@ async function logout() {
           <label for="current-project">项目</label>
           <select id="current-project" aria-label="当前项目" :value="projects.currentProjectId ?? ''" :disabled="projects.listState !== 'ready'" @change="switchProject">
             <option v-if="projects.currentProjectId === null" value="" disabled>{{ switcherPlaceholder }}</option>
+            <option v-if="isSystemAdmin" :value="0">所有项目</option>
             <option v-for="project in projects.projects" :key="project.id" :value="project.id">{{ project.name }}</option>
           </select>
         </div>

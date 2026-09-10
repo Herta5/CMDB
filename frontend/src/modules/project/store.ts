@@ -63,13 +63,22 @@ export const useProjectStore = defineStore('cmdb-project', () => {
     return true
   }
 
+  /** 仅系统管理员可使用零值表示跨全部项目查看资产，普通用户不能构造该上下文。 */
+  function selectAllProjects(): boolean {
+    if (auth.currentUser?.globalRole !== 'system_admin') return false
+    saveSelection(0)
+    return true
+  }
+
   /** 当前详情无法访问时清空上下文和持久化，避免继续暗示另一个项目是页面归属。 */
   function clearSelection() { saveSelection(null) }
 
   /** 恢复有效选择，并用请求版本阻止旧会话或旧刷新的响应覆盖新状态。 */
   async function loadProjects() {
     const version = ++listVersion
-    const previous = currentProjectId.value ?? Number(localStorage.getItem(selectionKey))
+    const storedSelection = localStorage.getItem(selectionKey)
+    // 空存储不能用 Number(null) 解析，否则会与“所有项目”的零值哨兵混淆。
+    const previous = currentProjectId.value ?? (storedSelection === null ? Number.NaN : Number(storedSelection))
     projects.value = []
     currentProjectId.value = null
     listState.value = 'loading'
@@ -77,7 +86,8 @@ export const useProjectStore = defineStore('cmdb-project', () => {
       const values = await listProjects()
       if (version !== listVersion) return
       projects.value = values
-      saveSelection(values.some(project => project.id === previous) ? previous : values[0]?.id ?? null)
+      const canRestoreAll = previous === 0 && auth.currentUser?.globalRole === 'system_admin'
+      saveSelection(canRestoreAll || values.some(project => project.id === previous) ? previous : values[0]?.id ?? null)
       listState.value = values.length ? 'ready' : 'empty'
     } catch (error) {
       if (version !== listVersion) return
@@ -195,6 +205,6 @@ export const useProjectStore = defineStore('cmdb-project', () => {
   }, { flush: 'sync' })
   return {
     projects, currentProjectId, currentProject, listState, detail, detailState, mutationState, mutationError, members, memberCandidates, membersState,
-    loadProjects, selectProject, clearSelection, loadProject, createProject, updateProject, deleteProject, loadMembers, addMember, updateMemberRole, removeMember,
+    loadProjects, selectProject, selectAllProjects, clearSelection, loadProject, createProject, updateProject, deleteProject, loadMembers, addMember, updateMemberRole, removeMember,
   }
 })

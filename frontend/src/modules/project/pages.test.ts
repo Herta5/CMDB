@@ -251,6 +251,17 @@ describe('项目控制台页面', () => {
     expect(all(root).some(n => n.type === 'a' && n.props.href === '/users')).toBe(true)
     app.unmount()
   })
+  it('系统管理员可在顶部选择所有项目', async () => {
+    useAuthStore().acceptSession('管理员会话', { id: 1, username: 'admin', globalRole: 'system_admin' })
+    get.mockResolvedValue([fixture, { ...fixture, id: 3, name: '支付项目' }])
+    const { root, app } = await mount(ConsoleLayout, '/assets/servers')
+    const switcher = all(root).find(n => n.type === 'select' && n.props['aria-label'] === '当前项目')!
+    expect(text(switcher)).toContain('所有项目')
+    await switcher.props.onChange({ target: { value: '0' } })
+    await flush()
+    expect(useProjectStore().currentProjectId).toBe(0)
+    app.unmount()
+  })
   it('项目管理员看到当前项目的管理入口，项目成员只看到资产列表', async () => {
     get.mockResolvedValue([{ ...fixture, current_role: 'project_admin' }])
     const administrator = await mount(ConsoleLayout, '/assets/servers')
@@ -297,6 +308,23 @@ describe('项目控制台页面', () => {
     expect(text(root)).toContain('AWS')
     expect(get).toHaveBeenCalledWith('/projects/2/resources', { params: expect.objectContaining({ resource_type: 'ecs' }) })
     expect(get).toHaveBeenCalledWith('/projects/2/resources', { params: expect.objectContaining({ resource_type: 'ec2' }) })
+    app.unmount()
+  })
+  it('系统管理员选择所有项目后汇总资产并显示项目归属', async () => {
+    useAuthStore().acceptSession('管理员会话', { id: 1, username: 'admin', globalRole: 'system_admin' })
+    const projectStore = useProjectStore()
+    projectStore.projects = [
+      { id: 2, code: 'platform', name: '平台项目', description: '', status: 'enabled', ownerUserId: null, createdAt: '', updatedAt: '' },
+      { id: 3, code: 'payment', name: '支付项目', description: '', status: 'enabled', ownerUserId: null, createdAt: '', updatedAt: '' },
+    ]
+    projectStore.selectAllProjects()
+    get.mockImplementation((url: string, options?: { params?: { resource_type?: string } }) => Promise.resolve({ items: [{ id: Number(url.split('/')[2]) * 10 + (options?.params?.resource_type === 'ecs' ? 1 : 2), provider: options?.params?.resource_type === 'ecs' ? 'aliyun' : 'aws', resource_type: options?.params?.resource_type, external_id: 'asset', lifecycle_status: 'active', endpoints: [] }], total: 1 }))
+    const component = { render: () => h(AssetListPage, { category: 'server' }) }
+    const { root, app } = await mount(component, '/assets/servers')
+    expect(text(root)).toContain('平台项目')
+    expect(text(root)).toContain('支付项目')
+    expect(get).toHaveBeenCalledWith('/projects/2/resources', { params: expect.objectContaining({ resource_type: 'ecs' }) })
+    expect(get).toHaveBeenCalledWith('/projects/3/resources', { params: expect.objectContaining({ resource_type: 'ec2' }) })
     app.unmount()
   })
   it('云同步管理移除平台页签并在创建时选择云平台', async () => {
