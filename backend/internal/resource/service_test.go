@@ -279,6 +279,19 @@ func TestConnectionUsesLightweightProbe(t *testing.T) {
 	}
 }
 
+// TestConnectionReturnsEmptyJSONArrays 防止成功响应把空类型集合编码为 null 并导致前端读取 length 失败。
+func TestConnectionReturnsEmptyJSONArrays(t *testing.T) {
+	service, _, source, _ := newResourceServiceTest(t)
+	result, err := service.TestConnection(context.Background(), source.ProjectID, source.ID, collectorStub{probeResults: []CollectionResult{{ResourceType: "ec2"}, {ResourceType: "rds"}, {ResourceType: "elb"}}})
+	if err != nil {
+		t.Fatalf("连接探测失败：%v", err)
+	}
+	encoded, err := json.Marshal(result)
+	if err != nil || !strings.Contains(string(encoded), `"reachable_types":["ec2","rds","elb"]`) || !strings.Contains(string(encoded), `"failed_types":[]`) {
+		t.Fatalf("连接结果必须使用 JSON 数组：%s，错误：%v", encoded, err)
+	}
+}
+
 // TestSyncDueSourcesOnlyRunsEnabledDueSources 验证调度只处理已启用且到期的接入源。
 func TestSyncDueSourcesOnlyRunsEnabledDueSources(t *testing.T) {
 	service, db, source, now := newResourceServiceTest(t)

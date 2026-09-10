@@ -269,7 +269,8 @@ func (s *Service) TestConnection(ctx context.Context, projectID, sourceID uint64
 	if err != nil {
 		return nil, err
 	}
-	value := &ConnectionTestResult{}
+	// 空集合也必须编码为 JSON 数组，避免前端把 null 当作数组读取时误报连接失败。
+	value := &ConnectionTestResult{ReachableTypes: []string{}, FailedTypes: []string{}}
 	for _, result := range results {
 		if result.Err == nil {
 			value.ReachableTypes = append(value.ReachableTypes, result.ResourceType)
