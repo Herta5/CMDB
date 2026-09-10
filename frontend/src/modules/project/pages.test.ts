@@ -323,6 +323,22 @@ describe('项目控制台页面', () => {
     expect(text(detail.root)).not.toContain('删除项目')
     detail.app.unmount()
   })
+  it('项目管理员不能在成员列表移除自己', async () => {
+    useAuthStore().acceptSession('项目管理员会话', { id: 7, username: 'project-admin', displayName: '项目管理员甲', globalRole: 'user' })
+    get.mockImplementation((url: string) => {
+      if (url === '/projects/2') return Promise.resolve(fixture)
+      if (url === '/projects/2/members') return Promise.resolve([
+        { id: 1, user_id: 7, username: 'project-admin', display_name: '项目管理员甲', role: 'project_admin' },
+        { id: 2, user_id: 8, username: 'member-user', display_name: '项目成员乙', role: 'member' },
+      ])
+      if (url === '/projects/2/member-candidates') return Promise.resolve([])
+      return Promise.resolve([fixture])
+    })
+    const { root, app } = await mount(ProjectDetailPage, '/projects/2')
+    expect(text(root)).toContain('当前用户')
+    expect(all(root).filter(n => n.type === 'button' && text(n) === '移除')).toHaveLength(1)
+    app.unmount()
+  })
   it('系统管理员更新项目资料后可确认删除并返回列表', async () => {
     useAuthStore().acceptSession('管理员会话', { id: 1, username: 'admin', globalRole: 'system_admin' })
     get.mockResolvedValue(fixture)

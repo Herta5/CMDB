@@ -145,6 +145,16 @@ func (h *HTTPHandler) RemoveMember(c *gin.Context) {
 		writeProjectError(c, http.StatusBadRequest, "PROJECT_MEMBER_INVALID_INPUT", "项目成员参数无效")
 		return
 	}
+	claims, authenticated := currentUserClaims(c)
+	if !authenticated {
+		writeProjectError(c, http.StatusUnauthorized, "AUTH_UNAUTHORIZED", "身份认证已失效")
+		return
+	}
+	// 项目管理员不能删除自己的成员关系；系统管理员仍可执行全局纠正操作。
+	if !isSystemAdmin(claims) && claims.UserID == userID {
+		writeProjectError(c, http.StatusConflict, "PROJECT_MEMBER_SELF_REMOVE", "项目管理员不能移除自己")
+		return
+	}
 	if err := h.service.RemoveMember(c.Request.Context(), projectID, userID); errors.Is(err, ErrInvalidMemberInput) {
 		writeProjectError(c, http.StatusBadRequest, "PROJECT_MEMBER_INVALID_INPUT", "项目成员参数无效")
 		return

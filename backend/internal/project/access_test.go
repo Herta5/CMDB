@@ -73,6 +73,22 @@ func TestProjectAdminManagesMembers(t *testing.T) {
 	}
 }
 
+// TestProjectAdminCannotRemoveSelf 防止项目管理员通过成员接口移除自己的项目权限。
+func TestProjectAdminCannotRemoveSelf(t *testing.T) {
+	server, db := newProjectHTTPServerWithDatabase(t)
+	managedProject := createProjectThroughHTTP(t, server, `{"code":"platform","name":"平台项目"}`)
+	admin := createProjectMember(t, db, managedProject.ID, 7, project.MemberRoleProjectAdmin)
+
+	response := requestProjectMember(t, server, http.MethodDelete, managedProject.ID, "/7", "", admin.ID, identity.GlobalRoleUser)
+	if response.Code != http.StatusConflict || response.Body.String() != `{"code":"PROJECT_MEMBER_SELF_REMOVE","message":"项目管理员不能移除自己"}` {
+		t.Fatalf("项目管理员自我移除必须被拒绝：status=%d body=%s", response.Code, response.Body.String())
+	}
+	var remaining int64
+	if err := db.Model(&project.MemberRole{}).Where("project_id = ? AND user_id = ?", managedProject.ID, admin.ID).Count(&remaining).Error; err != nil || remaining != 1 {
+		t.Fatalf("自我移除失败后必须保留成员关系：count=%d err=%v", remaining, err)
+	}
+}
+
 // TestProjectMemberCannotManageMembers 防止项目成员利用成员接口修改项目权限边界。
 func TestProjectMemberCannotManageMembers(t *testing.T) {
 	server, db := newProjectHTTPServerWithDatabase(t)
