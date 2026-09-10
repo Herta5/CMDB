@@ -15,6 +15,8 @@ services:
       DB_PASSWORD: ${DB_PASSWORD:?请设置 DB_PASSWORD}
     # 校验在官方入口执行 initdb 前完成，避免错误凭证留下不会自动重跑初始化脚本的数据卷。
     entrypoint: ["/bin/sh", "/usr/local/bin/cmdb-postgresql-entrypoint.sh"]
+    # 显式保留数据库主进程命令，避免部分 Compose 实现覆盖入口时同时清空镜像默认命令。
+    command: ["postgres"]
     volumes:
       # 数据库使用独立持久卷，停止应用容器不会丢失业务数据。
       - cmdb-postgresql-data:/var/lib/postgresql/data

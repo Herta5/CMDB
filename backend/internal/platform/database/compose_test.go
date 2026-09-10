@@ -24,6 +24,7 @@ func TestPostgreSQLComposeDefinesIsolatedDeployment(t *testing.T) {
 		"POSTGRES_PASSWORD: ${POSTGRES_ADMIN_PASSWORD:?请设置 POSTGRES_ADMIN_PASSWORD}",
 		"POSTGRES_DB: cmdb\n      DB_PASSWORD: ${DB_PASSWORD:?请设置 DB_PASSWORD}",
 		`entrypoint: ["/bin/sh", "/usr/local/bin/cmdb-postgresql-entrypoint.sh"]`,
+		`command: ["postgres"]`,
 		"./backend/database/entrypoint/validate_before_init.sh:/usr/local/bin/cmdb-postgresql-entrypoint.sh:ro",
 		"cmdb-postgresql-data:/var/lib/postgresql/data",
 		`test: ["CMD-SHELL", "pg_isready -U postgres -d cmdb"]`,
