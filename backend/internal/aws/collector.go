@@ -159,7 +159,7 @@ func rdsSnapshots(output *rds.DescribeDBInstancesOutput, region string) []resour
 	}
 	for _, instance := range output.DBInstances {
 		raw, _ := json.Marshal(instance)
-		value := resource.Snapshot{ResourceType: "rds", ExternalID: awssdk.ToString(instance.DBInstanceIdentifier), Name: awssdk.ToString(instance.DBInstanceIdentifier), Region: region, Zone: awssdk.ToString(instance.AvailabilityZone), CloudStatus: awssdk.ToString(instance.DBInstanceStatus), RawAttributes: raw}
+		value := resource.Snapshot{ResourceType: "rds", ExternalID: awssdk.ToString(instance.DBInstanceIdentifier), Name: awssdk.ToString(instance.DBInstanceIdentifier), Region: region, Zone: awssdk.ToString(instance.AvailabilityZone), CloudStatus: awssdk.ToString(instance.DBInstanceStatus), Engine: awssdk.ToString(instance.Engine), EngineVersion: awssdk.ToString(instance.EngineVersion), RawAttributes: raw}
 		if instance.Endpoint != nil {
 			kind := "private"
 			if awssdk.ToBool(instance.PubliclyAccessible) {
@@ -193,7 +193,7 @@ func elbSnapshots(output *elasticloadbalancingv2.DescribeLoadBalancersOutput, li
 		if len(endpoints) == 0 {
 			endpoints = append(endpoints, resource.EndpointSnapshot{Kind: kind, Address: awssdk.ToString(loadBalancer.DNSName), Protocol: "tcp"})
 		}
-		values = append(values, resource.Snapshot{ResourceType: "elb", ExternalID: awssdk.ToString(loadBalancer.LoadBalancerArn), Name: awssdk.ToString(loadBalancer.LoadBalancerName), Region: region, Zone: firstELBZone(loadBalancer.AvailabilityZones), CloudStatus: status, RawAttributes: raw, Endpoints: endpoints})
+		values = append(values, resource.Snapshot{ResourceType: "elb", ExternalID: awssdk.ToString(loadBalancer.LoadBalancerArn), Name: awssdk.ToString(loadBalancer.LoadBalancerName), Region: region, Zone: firstELBZone(loadBalancer.AvailabilityZones), CloudStatus: status, NetworkType: string(loadBalancer.Scheme), RawAttributes: raw, Endpoints: endpoints})
 	}
 	return values
 }

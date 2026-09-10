@@ -20,17 +20,20 @@ type Snapshot struct {
 	Region        string
 	Zone          string
 	CloudStatus   string
+	Engine        string
+	EngineVersion string
+	NetworkType   string
 	RawAttributes []byte
 	Endpoints     []EndpointSnapshot
 }
 
 // EndpointSnapshot 表示采集时观察到的原始地址和动态解析结果。
 type EndpointSnapshot struct {
-	Kind        string
-	Address     string
-	Port        int
-	Protocol    string
-	ResolvedIPs []string
+	Kind        string   `json:"kind"`
+	Address     string   `json:"address"`
+	Port        int      `json:"port"`
+	Protocol    string   `json:"protocol"`
+	ResolvedIPs []string `json:"resolved_ips"`
 }
 
 // CollectionResult 按资源类型隔离成功与失败，失败类型不得触发失联判断。

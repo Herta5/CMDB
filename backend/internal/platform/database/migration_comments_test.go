@@ -39,3 +39,20 @@ func TestCommentRepairMigrationCoversSchema(t *testing.T) {
 		}
 	}
 }
+
+// TestCloudResourceSchemaDefinesThreeAssetKinds 验证初始化结构只创建三类带中文说明的资产表。
+func TestCloudResourceSchemaDefinesThreeAssetKinds(t *testing.T) {
+	content, err := os.ReadFile("../../../migrations/002_cloud_resources.sql")
+	if err != nil {
+		t.Fatalf("读取云资源初始化结构失败：%v", err)
+	}
+	sql := string(content)
+	for _, fragment := range []string{"CREATE TABLE IF NOT EXISTS resources_servers", "CREATE TABLE IF NOT EXISTS resources_databases", "CREATE TABLE IF NOT EXISTS resources_load_balancers", "asset_status", "访问端点", "云服务器资产", "云数据库资产", "云负载均衡资产", "UNIQUE KEY uk_"} {
+		if !strings.Contains(sql, fragment) {
+			t.Fatalf("云资源初始化结构缺少必要结构或中文注释：%s", fragment)
+		}
+	}
+	if strings.Contains(sql, "CREATE TABLE IF NOT EXISTS resources (") || strings.Contains(sql, "CREATE TABLE IF NOT EXISTS resource_endpoints") {
+		t.Fatal("初始化结构不得继续创建两张旧资产表")
+	}
+}

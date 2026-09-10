@@ -12,7 +12,7 @@ export const useResourceStore = defineStore('cmdb-resource', () => {
   const sources = ref<Source[]>([]); const resources = ref<CloudResource[]>([]); const jobs = ref<SyncJob[]>([])
   const state = ref<ResourceLoadState>('idle'); const mutationError = ref(''); const syncingSourceId = ref<number | null>(null)
   const testingSourceId = ref<number | null>(null); const retryingJobId = ref<number | null>(null); const connectionMessage = ref(''); const connectionError = ref('')
-  const resourceType = ref(''); const lifecycleStatus = ref(''); const page = ref(1); const pageSize = ref(20); const total = ref(0)
+  const resourceType = ref(''); const assetStatus = ref(''); const page = ref(1); const pageSize = ref(20); const total = ref(0)
 
   /** 并行加载页面三块数据，任一失败都显示明确故障状态。 */
   async function load(projectId: number, provider: Provider) {
@@ -20,7 +20,7 @@ export const useResourceStore = defineStore('cmdb-resource', () => {
     try {
       const [sourcePage, resourcePage, jobPage] = await Promise.all([
         listSources(projectId, provider),
-        listResources(projectId, { provider, resource_type: resourceType.value, lifecycle_status: lifecycleStatus.value, page: page.value, page_size: pageSize.value }),
+        listResources(projectId, { provider, resource_type: resourceType.value, asset_status: assetStatus.value, page: page.value, page_size: pageSize.value }),
         listJobs(projectId, provider),
       ])
       const sourceIds = new Set(sourcePage.map(source => source.id))
@@ -72,5 +72,5 @@ export const useResourceStore = defineStore('cmdb-resource', () => {
     catch (error) { mutationError.value = (error as { response?: { status?: number } })?.response?.status === 409 ? '该接入源正在同步，请稍后刷新' : '同步失败，请检查接入配置'; throw error }
     finally { syncingSourceId.value = null }
   }
-  return { sources, resources, jobs, state, mutationError, syncingSourceId, testingSourceId, retryingJobId, connectionMessage, connectionError, resourceType, lifecycleStatus, page, pageSize, total, load, loadSyncManagement, create, update, remove, testConnection, toggle, retry, sync }
+  return { sources, resources, jobs, state, mutationError, syncingSourceId, testingSourceId, retryingJobId, connectionMessage, connectionError, resourceType, assetStatus, page, pageSize, total, load, loadSyncManagement, create, update, remove, testConnection, toggle, retry, sync }
 })

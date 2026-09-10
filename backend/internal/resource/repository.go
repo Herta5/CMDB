@@ -4,6 +4,7 @@ package resource
 import (
 	"context"
 	"encoding/json"
+	"sort"
 	"strconv"
 	"time"
 
@@ -71,27 +72,46 @@ func (r *Repository) ListSources(ctx context.Context, projectID uint64, provider
 	return values, nil
 }
 
-// ListResources 按项目及可选条件分页查询资源，并加载访问端点。
+// ListResources 跨三张资产表合并查询，并在项目边界内统一分页。
 func (r *Repository) ListResources(ctx context.Context, projectID uint64, provider, resourceType, lifecycle string, offset, limit int) ([]Resource, int64, error) {
-	query := r.db.WithContext(ctx).Model(&Resource{}).Where("project_id = ?", projectID)
-	if provider != "" {
-		query = query.Where("provider = ?", provider)
-	}
+	tables := []string{"resources_servers", "resources_databases", "resources_load_balancers"}
 	if resourceType != "" {
-		query = query.Where("resource_type = ?", resourceType)
+		table, err := assetTableForType(resourceType)
+		if err != nil {
+			return nil, 0, err
+		}
+		tables = []string{table}
 	}
-	if lifecycle != "" {
-		query = query.Where("lifecycle_status = ?", lifecycle)
+	values := make([]Resource, 0)
+	for _, table := range tables {
+		query := r.db.WithContext(ctx).Table(table).Where("project_id = ?", projectID)
+		if provider != "" {
+			query = query.Where("provider = ?", provider)
+		}
+		if resourceType != "" {
+			query = query.Where("resource_type = ?", resourceType)
+		}
+		if lifecycle != "" {
+			query = query.Where("asset_status = ?", lifecycle)
+		}
+		var rows []assetRow
+		if err := query.Find(&rows).Error; err != nil {
+			return nil, 0, err
+		}
+		for _, row := range rows {
+			values = append(values, resourceFromRow(row, table))
+		}
 	}
-	var total int64
-	if err := query.Count(&total).Error; err != nil {
-		return nil, 0, err
+	sort.SliceStable(values, func(i, j int) bool { return values[i].UpdatedAt.After(values[j].UpdatedAt) })
+	total := int64(len(values))
+	if offset >= len(values) {
+		return []Resource{}, total, nil
 	}
-	var values []Resource
-	if err := query.Preload("Endpoints").Order("id DESC").Offset(offset).Limit(limit).Find(&values).Error; err != nil {
-		return nil, 0, err
+	end := offset + limit
+	if end > len(values) {
+		end = len(values)
 	}
-	return values, total, nil
+	return values[offset:end], total, nil
 }
 
 // Repository 是统一资源核心的持久化实现。
@@ -150,28 +170,35 @@ func (r *Repository) UpdateSourceSchedule(ctx context.Context, source *Source) e
 	return r.db.WithContext(ctx).Model(&Source{}).Where("id = ?", source.ID).Updates(map[string]any{"last_sync_at": source.LastSyncAt, "next_sync_at": source.NextSyncAt}).Error
 }
 
-// PurgeLostBefore 删除截止时间前持续失联的资源，端点由外键级联删除。
+// PurgeLostBefore 跨三表删除截止时间前持续失联的资产，并先写入独立审计。
 func (r *Repository) PurgeLostBefore(ctx context.Context, cutoff time.Time) (int64, error) {
 	var deleted int64
 	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		var resources []Resource
-		if err := tx.Where("lifecycle_status = ? AND missing_since <= ?", LifecycleLost, cutoff).Find(&resources).Error; err != nil {
-			return err
-		}
-		for _, value := range resources {
-			projectID := value.ProjectID
-			detail, _ := json.Marshal(map[string]any{"source_id": value.SourceID, "provider": value.Provider, "resource_type": value.ResourceType})
-			if err := tx.Create(&AuditLog{ProjectID: &projectID, Action: "resource.deleted", ResourceType: value.ResourceType, ResourceID: value.ExternalID, Detail: detail}).Error; err != nil {
+		for _, table := range []string{"resources_servers", "resources_databases", "resources_load_balancers"} {
+			var resources []assetRow
+			if err := tx.Table(table).Where("asset_status = ? AND missing_since <= ?", AssetStatusLost, cutoff).Find(&resources).Error; err != nil {
 				return err
 			}
+			for _, value := range resources {
+				projectID := value.ProjectID
+				detail, _ := json.Marshal(map[string]any{"source_id": value.SourceID, "provider": value.Provider, "resource_type": value.ResourceType})
+				if err := tx.Create(&AuditLog{ProjectID: &projectID, Action: "resource.deleted", ResourceType: value.ResourceType, ResourceID: value.ExternalID, Detail: detail}).Error; err != nil {
+					return err
+				}
+			}
+			if len(resources) > 0 {
+				ids := make([]uint64, 0, len(resources))
+				for _, value := range resources {
+					ids = append(ids, value.ID)
+				}
+				result := tx.Table(table).Where("id IN ?", ids).Delete(&assetRow{})
+				if result.Error != nil {
+					return result.Error
+				}
+				deleted += result.RowsAffected
+			}
 		}
-		ids := make([]uint64, 0, len(resources))
-		for _, value := range resources {
-			ids = append(ids, value.ID)
-		}
-		result := tx.Where("id IN ?", ids).Delete(&Resource{})
-		deleted = result.RowsAffected
-		return result.Error
+		return nil
 	})
 	return deleted, err
 }

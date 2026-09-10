@@ -224,7 +224,7 @@ func (h *HTTPHandler) ListJobs(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"items": values, "total": total, "page": page, "page_size": pageSize})
 }
 
-// ListResources 按项目与筛选条件分页返回资源和端点。
+// ListResources 按项目与筛选条件分页返回三类资产的统一视图。
 func (h *HTTPHandler) ListResources(c *gin.Context) {
 	projectID, ok := projectID(c)
 	if !ok {
@@ -233,7 +233,7 @@ func (h *HTTPHandler) ListResources(c *gin.Context) {
 	}
 	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
 	pageSize, _ := strconv.Atoi(c.DefaultQuery("page_size", "50"))
-	values, total, err := h.service.ListResources(c.Request.Context(), projectID, c.Query("provider"), c.Query("resource_type"), c.Query("lifecycle_status"), page, pageSize)
+	values, total, err := h.service.ListResources(c.Request.Context(), projectID, c.Query("provider"), c.Query("resource_type"), c.Query("asset_status"), page, pageSize)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"code": "RESOURCE_SERVICE_UNAVAILABLE", "message": "资源服务暂不可用"})
 		return

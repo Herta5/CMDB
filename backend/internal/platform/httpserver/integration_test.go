@@ -216,7 +216,7 @@ func TestProjectSourceAPINeverReturnsCredentials(t *testing.T) {
 	decodeIntegration(t, response, &source)
 	integrationRequest(t, server, admin, http.MethodPost, path+"/sources/"+strconv.FormatUint(source.ID, 10)+"/test", nil, http.StatusOK)
 	var probeCount int64
-	_ = db.Model(&cloudresource.Resource{}).Count(&probeCount).Error
+	_ = db.Model(&cloudresource.Server{}).Count(&probeCount).Error
 	if probeCount != 0 {
 		t.Fatal("连接测试不得写入资源")
 	}
@@ -342,7 +342,7 @@ func integrationServerWithDatabase(t *testing.T) (http.Handler, string, *gorm.DB
 	}
 	sqlDB.SetMaxOpenConns(1)
 	t.Cleanup(func() { _ = sqlDB.Close() })
-	if err := db.AutoMigrate(&identity.User{}, &project.Project{}, &project.MemberRole{}, &cloudresource.Source{}, &cloudresource.Resource{}, &cloudresource.Endpoint{}, &cloudresource.SyncJob{}, &cloudresource.AuditLog{}); err != nil {
+	if err := db.AutoMigrate(&identity.User{}, &project.Project{}, &project.MemberRole{}, &cloudresource.Source{}, &cloudresource.Server{}, &cloudresource.Database{}, &cloudresource.LoadBalancer{}, &cloudresource.SyncJob{}, &cloudresource.AuditLog{}); err != nil {
 		t.Fatalf("创建验收表失败：%v", err)
 	}
 	secret := make([]byte, 32)

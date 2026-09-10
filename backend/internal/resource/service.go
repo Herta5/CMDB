@@ -1,4 +1,4 @@
-// 本文件集中实现跨平台同步、恢复、失联和三天清理规则。
+// 本文件集中实现跨平台同步、恢复、失联和 24 小时清理规则。
 package resource
 
 import (
@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"gorm.io/gorm"
-	"gorm.io/gorm/clause"
 )
 
 // Service 协调采集快照与统一资源仓储。
@@ -152,7 +151,7 @@ func (s *Service) FindSourceForProject(ctx context.Context, projectID, sourceID 
 }
 
 // ListResources 提供受项目边界限制的分页资源查询。
-func (s *Service) ListResources(ctx context.Context, projectID uint64, provider, resourceType, lifecycle string, page, pageSize int) ([]Resource, int64, error) {
+func (s *Service) ListResources(ctx context.Context, projectID uint64, provider, resourceType, assetStatus string, page, pageSize int) ([]Resource, int64, error) {
 	if projectID == 0 {
 		return nil, 0, errors.New("项目参数无效")
 	}
@@ -162,7 +161,7 @@ func (s *Service) ListResources(ctx context.Context, projectID uint64, provider,
 	if pageSize < 1 || pageSize > 200 {
 		pageSize = 50
 	}
-	return s.repository.ListResources(ctx, projectID, provider, resourceType, lifecycle, (page-1)*pageSize, pageSize)
+	return s.repository.ListResources(ctx, projectID, provider, resourceType, assetStatus, (page-1)*pageSize, pageSize)
 }
 
 // ListJobs 返回当前项目及可选接入源的同步历史。
@@ -379,31 +378,46 @@ func (s *Service) finishFailed(ctx context.Context, job *SyncJob, summary string
 // applyType 原子写入一个成功资源类型，并只对该类型执行缺失判定。
 func (s *Service) applyType(ctx context.Context, source Source, resourceType string, snapshots []Snapshot, now time.Time) (map[string]int, error) {
 	counts := map[string]int{"added": 0, "updated": 0, "restored": 0, "lost": 0, "deleted": 0, "failed": 0}
+	table, err := assetTableForType(resourceType)
+	if err != nil {
+		return counts, err
+	}
 	seen := make([]string, 0, len(snapshots))
-	err := s.repository.Transaction(ctx, func(tx *gorm.DB) error {
+	err = s.repository.Transaction(ctx, func(tx *gorm.DB) error {
 		for _, snapshot := range snapshots {
 			seen = append(seen, snapshot.ExternalID)
-			var existing Resource
-			lookupErr := tx.Where("source_id = ? AND resource_type = ? AND external_id = ?", source.ID, resourceType, snapshot.ExternalID).First(&existing).Error
+			var existing assetRow
+			lookupErr := tx.Table(table).Where("source_id = ? AND resource_type = ? AND external_id = ?", source.ID, resourceType, snapshot.ExternalID).First(&existing).Error
 			action := "resource.updated"
 			if errors.Is(lookupErr, gorm.ErrRecordNotFound) {
 				counts["added"]++
 				action = "resource.created"
 			} else if lookupErr != nil {
 				return lookupErr
-			} else if existing.LifecycleStatus == LifecycleLost {
+			} else if existing.AssetStatus == AssetStatusLost {
 				counts["restored"]++
 				action = "resource.restored"
 			} else {
 				counts["updated"]++
 			}
-			value := Resource{ProjectID: source.ProjectID, SourceID: source.ID, Provider: source.Provider, ResourceType: resourceType, ExternalID: snapshot.ExternalID, Name: snapshot.Name, Region: snapshot.Region, Zone: snapshot.Zone, CloudStatus: snapshot.CloudStatus, LifecycleStatus: LifecycleActive, RawAttributes: snapshot.RawAttributes, FirstSeenAt: now, LastSeenAt: now}
-			updates := map[string]any{"name": value.Name, "region": value.Region, "zone": value.Zone, "cloud_status": value.CloudStatus, "lifecycle_status": LifecycleActive, "raw_attributes": value.RawAttributes, "last_seen_at": now, "missing_since": nil}
-			if err := tx.Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "source_id"}, {Name: "resource_type"}, {Name: "external_id"}}, DoUpdates: clause.Assignments(updates)}).Create(&value).Error; err != nil {
-				return err
+			updates := map[string]any{"project_id": source.ProjectID, "source_id": source.ID, "provider": source.Provider, "resource_type": resourceType, "external_id": snapshot.ExternalID, "name": snapshot.Name, "region": snapshot.Region, "zone": snapshot.Zone, "cloud_status": snapshot.CloudStatus, "asset_status": AssetStatusActive, "raw_attributes": snapshot.RawAttributes, "last_seen_at": now, "missing_since": nil}
+			for key, value := range endpointColumns(table, snapshot.Endpoints) {
+				updates[key] = value
 			}
-			var persisted Resource
-			if err := tx.Where("source_id = ? AND resource_type = ? AND external_id = ?", source.ID, resourceType, snapshot.ExternalID).First(&persisted).Error; err != nil {
+			if table == "resources_databases" {
+				updates["engine"] = snapshot.Engine
+				updates["engine_version"] = snapshot.EngineVersion
+			}
+			if table == "resources_load_balancers" {
+				updates["network_type"] = snapshot.NetworkType
+			}
+			if errors.Is(lookupErr, gorm.ErrRecordNotFound) {
+				updates["first_seen_at"] = now
+				updates["created_at"] = now
+				if err := tx.Table(table).Create(updates).Error; err != nil {
+					return err
+				}
+			} else if err := tx.Table(table).Where("id = ?", existing.ID).Updates(updates).Error; err != nil {
 				return err
 			}
 			projectID := source.ProjectID
@@ -411,21 +425,12 @@ func (s *Service) applyType(ctx context.Context, source Source, resourceType str
 			if err := tx.Create(&AuditLog{ProjectID: &projectID, Action: action, ResourceType: resourceType, ResourceID: snapshot.ExternalID, Detail: detail}).Error; err != nil {
 				return err
 			}
-			if err := tx.Where("resource_id = ?", persisted.ID).Delete(&Endpoint{}).Error; err != nil {
-				return err
-			}
-			for _, endpoint := range snapshot.Endpoints {
-				ips, _ := json.Marshal(endpoint.ResolvedIPs)
-				if err := tx.Create(&Endpoint{ResourceID: persisted.ID, Kind: endpoint.Kind, Address: endpoint.Address, Port: endpoint.Port, Protocol: endpoint.Protocol, ResolvedIPs: ips}).Error; err != nil {
-					return err
-				}
-			}
 		}
-		query := tx.Model(&Resource{}).Where("resources.source_id = ? AND resources.resource_type = ? AND resources.lifecycle_status = ?", source.ID, resourceType, LifecycleActive)
+		query := tx.Table(table).Where("source_id = ? AND resource_type = ? AND asset_status = ?", source.ID, resourceType, AssetStatusActive)
 		if len(seen) > 0 {
-			query = query.Where("resources.external_id NOT IN ?", seen)
+			query = query.Where("external_id NOT IN ?", seen)
 		}
-		var missing []Resource
+		var missing []assetRow
 		if err := query.Find(&missing).Error; err != nil {
 			return err
 		}
@@ -433,7 +438,7 @@ func (s *Service) applyType(ctx context.Context, source Source, resourceType str
 		for _, value := range missing {
 			ids = append(ids, value.ID)
 		}
-		result := tx.Model(&Resource{}).Where("id IN ?", ids).Updates(map[string]any{"lifecycle_status": LifecycleLost, "missing_since": now})
+		result := tx.Table(table).Where("id IN ?", ids).Updates(map[string]any{"asset_status": AssetStatusLost, "missing_since": now})
 		counts["lost"] = int(result.RowsAffected)
 		if result.Error != nil {
 			return result.Error
@@ -450,9 +455,9 @@ func (s *Service) applyType(ctx context.Context, source Source, resourceType str
 	return counts, err
 }
 
-// PurgeLostResources 物理删除连续失联满 72 小时的资源。
+// PurgeLostResources 物理删除连续失联满 24 小时的资源。
 func (s *Service) PurgeLostResources(ctx context.Context) (int64, error) {
-	return s.repository.PurgeLostBefore(ctx, s.now().Add(-72*time.Hour))
+	return s.repository.PurgeLostBefore(ctx, s.now().Add(-24*time.Hour))
 }
 
 // SyncDueSources 并行执行所有已到期接入源；同源互斥仍由 Sync 统一保证。

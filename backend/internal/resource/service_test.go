@@ -45,7 +45,7 @@ func newResourceServiceTest(t *testing.T) (*Service, *gorm.DB, *Source, *time.Ti
 		t.Fatal("获取资源测试数据库连接失败")
 	}
 	sqlDB.SetMaxOpenConns(1)
-	if err := db.AutoMigrate(&Source{}, &Resource{}, &Endpoint{}, &SyncJob{}, &AuditLog{}); err != nil {
+	if err := db.AutoMigrate(&Source{}, &Server{}, &Database{}, &LoadBalancer{}, &SyncJob{}, &AuditLog{}); err != nil {
 		t.Fatal("创建资源测试表失败")
 	}
 	cipher := NewCredentialCipher("resource-service-test-key")
@@ -78,7 +78,7 @@ func TestSyncAuditContainsChangesButNeverCredential(t *testing.T) {
 // TestSyncIsIdempotentMarksMissingAndRestores 验证同步不重复建档、缺失后失联及重新出现恢复原记录。
 func TestSyncIsIdempotentMarksMissingAndRestores(t *testing.T) {
 	service, db, source, now := newResourceServiceTest(t)
-	snapshot := Snapshot{ResourceType: "ec2", ExternalID: "i-1", Name: "计算节点", CloudStatus: "running"}
+	snapshot := Snapshot{ResourceType: "ec2", ExternalID: "i-1", Name: "计算节点", CloudStatus: "running", Endpoints: []EndpointSnapshot{{Kind: "private", Address: "10.0.0.8"}}}
 	collector := collectorStub{results: []CollectionResult{{ResourceType: "ec2", Snapshots: []Snapshot{snapshot}}}}
 	firstJob, err := service.Sync(context.Background(), source.ID, "manual", collector)
 	if err != nil {
@@ -91,39 +91,64 @@ func TestSyncIsIdempotentMarksMissingAndRestores(t *testing.T) {
 	if _, err := service.Sync(context.Background(), source.ID, "manual", collector); err != nil {
 		t.Fatal("重复同步失败")
 	}
-	var resources []Resource
+	var resources []Server
 	_ = db.Find(&resources).Error
 	if len(resources) != 1 {
 		t.Fatalf("重复同步生成了 %d 条资源", len(resources))
 	}
+	if !strings.Contains(string(resources[0].PrivateIPs), "10.0.0.8") {
+		t.Fatal("资源访问端点必须随资源快照写入同一行")
+	}
 	*now = now.Add(time.Hour)
 	service.Sync(context.Background(), source.ID, "manual", collectorStub{results: []CollectionResult{{ResourceType: "ec2"}}})
 	_ = db.First(&resources[0], resources[0].ID).Error
-	if resources[0].LifecycleStatus != LifecycleLost || resources[0].MissingSince == nil {
+	if resources[0].AssetStatus != AssetStatusLost || resources[0].MissingSince == nil {
 		t.Fatal("成功采集中的缺失资源必须标记失联")
 	}
 	*now = now.Add(time.Hour)
 	service.Sync(context.Background(), source.ID, "manual", collector)
-	var restored Resource
+	var restored Server
 	_ = db.First(&restored, resources[0].ID).Error
-	if restored.LifecycleStatus != LifecycleActive || restored.MissingSince != nil {
+	if restored.AssetStatus != AssetStatusActive || restored.MissingSince != nil {
 		t.Fatal("重新出现的资源必须恢复原记录")
+	}
+}
+
+// TestSyncRoutesAssetsIntoThreeTables 验证服务器、数据库和负载均衡分别持久化专属字段。
+func TestSyncRoutesAssetsIntoThreeTables(t *testing.T) {
+	service, db, source, _ := newResourceServiceTest(t)
+	results := []CollectionResult{
+		{ResourceType: "ec2", Snapshots: []Snapshot{{ExternalID: "i-1", Endpoints: []EndpointSnapshot{{Kind: "private", Address: "10.0.0.8"}}}}},
+		{ResourceType: "rds", Snapshots: []Snapshot{{ExternalID: "db-1", Engine: "mysql", EngineVersion: "8.0", Endpoints: []EndpointSnapshot{{Kind: "hostname", Address: "db.example", Port: 3306}}}}},
+		{ResourceType: "elb", Snapshots: []Snapshot{{ExternalID: "lb-1", NetworkType: "internet-facing", Endpoints: []EndpointSnapshot{{Kind: "public", Address: "lb.example", Port: 443}}}}},
+	}
+	if _, err := service.Sync(context.Background(), source.ID, "manual", collectorStub{results: results}); err != nil {
+		t.Fatalf("三类资产同步失败：%v", err)
+	}
+	var server Server
+	var database Database
+	var loadBalancer LoadBalancer
+	if db.First(&server).Error != nil || db.First(&database).Error != nil || db.First(&loadBalancer).Error != nil {
+		t.Fatal("三类资产必须分别写入独立表")
+	}
+	if !strings.Contains(string(server.PrivateIPs), "10.0.0.8") || database.Engine != "mysql" || !strings.Contains(string(database.Endpoints), "db.example") || loadBalancer.NetworkType != "internet-facing" || !strings.Contains(string(loadBalancer.Endpoints), "lb.example") {
+		t.Fatal("三类资产的专属字段未完整保存")
 	}
 }
 
 // TestSyncFailureDoesNotMarkResourcesMissing 验证单类失败和认证失败都不能错误更新失联状态。
 func TestSyncFailureDoesNotMarkResourcesMissing(t *testing.T) {
 	service, db, source, _ := newResourceServiceTest(t)
-	active := Resource{ProjectID: 1, SourceID: source.ID, Provider: ProviderAWS, ResourceType: "ec2", ExternalID: "i-1", LifecycleStatus: LifecycleActive, FirstSeenAt: time.Now(), LastSeenAt: time.Now()}
+	active := Server{AssetBase: AssetBase{ProjectID: 1, SourceID: source.ID, Provider: ProviderAWS, ResourceType: "ec2", ExternalID: "i-1", AssetStatus: AssetStatusActive, FirstSeenAt: time.Now(), LastSeenAt: time.Now()}, PrivateIPs: json.RawMessage("[]"), PublicIPs: json.RawMessage("[]")}
 	_ = db.Create(&active).Error
 	service.Sync(context.Background(), source.ID, "manual", collectorStub{results: []CollectionResult{{ResourceType: "ec2", Err: errors.New("采集失败")}}})
 	_ = db.First(&active, active.ID).Error
-	if active.LifecycleStatus != LifecycleActive {
+	if active.AssetStatus != AssetStatusActive {
 		t.Fatal("单类采集失败不得标记失联")
 	}
 	service.Sync(context.Background(), source.ID, "manual", collectorStub{err: ErrAuthenticationFailed})
 	_ = db.First(&active, active.ID).Error
-	if active.LifecycleStatus != LifecycleActive {
+	if active.AssetStatus != AssetStatusActive {
 		t.Fatal("认证失败不得标记失联")
 	}
 }
@@ -139,17 +164,17 @@ func TestPermissionFailureKeepsSafeJobSummary(t *testing.T) {
 	}
 }
 
-// TestPurgeLostResourcesAfterThreeDays 验证仅物理删除连续失联满 72 小时的资源。
-func TestPurgeLostResourcesAfterThreeDays(t *testing.T) {
+// TestPurgeLostResourcesAfterOneDay 验证仅物理删除连续失联满 24 小时的资源。
+func TestPurgeLostResourcesAfterOneDay(t *testing.T) {
 	service, db, source, now := newResourceServiceTest(t)
-	old := now.Add(-72 * time.Hour)
-	recent := now.Add(-71 * time.Hour)
+	old := now.Add(-24 * time.Hour)
+	recent := now.Add(-23 * time.Hour)
 	for index, missing := range []*time.Time{&old, &recent} {
-		_ = db.Create(&Resource{ProjectID: 1, SourceID: source.ID, Provider: ProviderAWS, ResourceType: "ec2", ExternalID: string(rune('a' + index)), LifecycleStatus: LifecycleLost, MissingSince: missing, FirstSeenAt: old, LastSeenAt: old}).Error
+		_ = db.Create(&Server{AssetBase: AssetBase{ProjectID: 1, SourceID: source.ID, Provider: ProviderAWS, ResourceType: "ec2", ExternalID: string(rune('a' + index)), AssetStatus: AssetStatusLost, MissingSince: missing, FirstSeenAt: old, LastSeenAt: old}, PrivateIPs: json.RawMessage("[]"), PublicIPs: json.RawMessage("[]")}).Error
 	}
 	deleted, err := service.PurgeLostResources(context.Background())
 	if err != nil || deleted != 1 {
-		t.Fatalf("三天清理数量错误：deleted=%d err=%v", deleted, err)
+		t.Fatalf("一天清理数量错误：deleted=%d err=%v", deleted, err)
 	}
 	var audit AuditLog
 	if err := db.Where("action = ? AND resource_id = ?", "resource.deleted", "a").First(&audit).Error; err != nil {
@@ -208,7 +233,7 @@ func TestConnectionDoesNotPersistSnapshots(t *testing.T) {
 		t.Fatal("连接测试必须只返回可达资源类型")
 	}
 	var count int64
-	_ = db.Model(&Resource{}).Count(&count).Error
+	_ = db.Model(&Server{}).Count(&count).Error
 	if count != 0 {
 		t.Fatal("连接测试不得持久化探测快照")
 	}

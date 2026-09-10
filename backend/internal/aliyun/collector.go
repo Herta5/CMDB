@@ -166,7 +166,7 @@ func rdsSnapshots(instances []rds.DBInstance, networks map[string][]rds.DBInstan
 	values := []resource.Snapshot{}
 	for _, instance := range instances {
 		raw, _ := json.Marshal(instance)
-		value := resource.Snapshot{ResourceType: "rds", ExternalID: instance.DBInstanceId, Name: instance.DBInstanceDescription, Region: instance.RegionId, Zone: instance.ZoneId, CloudStatus: instance.DBInstanceStatus, RawAttributes: raw}
+		value := resource.Snapshot{ResourceType: "rds", ExternalID: instance.DBInstanceId, Name: instance.DBInstanceDescription, Region: instance.RegionId, Zone: instance.ZoneId, CloudStatus: instance.DBInstanceStatus, Engine: instance.Engine, EngineVersion: instance.EngineVersion, RawAttributes: raw}
 		for _, network := range networks[instance.DBInstanceId] {
 			port, _ := strconv.Atoi(network.Port)
 			kind := "private"
@@ -199,7 +199,7 @@ func slbSnapshots(loadBalancers []slb.LoadBalancer, portMaps ...map[string][]slb
 				endpoints = append(endpoints, resource.EndpointSnapshot{Kind: kind, Address: item.Address, Port: listener.ListenerPort, Protocol: listener.ListenerProtocol})
 			}
 		}
-		values = append(values, resource.Snapshot{ResourceType: "slb", ExternalID: item.LoadBalancerId, Name: item.LoadBalancerName, Region: item.RegionId, Zone: item.MasterZoneId, CloudStatus: item.LoadBalancerStatus, RawAttributes: raw, Endpoints: endpoints})
+		values = append(values, resource.Snapshot{ResourceType: "slb", ExternalID: item.LoadBalancerId, Name: item.LoadBalancerName, Region: item.RegionId, Zone: item.MasterZoneId, CloudStatus: item.LoadBalancerStatus, NetworkType: item.AddressType, RawAttributes: raw, Endpoints: endpoints})
 	}
 	return values
 }

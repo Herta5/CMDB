@@ -53,7 +53,7 @@ func TestCreateSourceRejectsRemovedKubernetesProvider(t *testing.T) {
 func TestUpdateSourceKeepsCredentialAndDeleteCascades(t *testing.T) {
 	db, _ := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{Logger: logger.Default.LogMode(logger.Silent)})
 	_ = db.Exec("PRAGMA foreign_keys = ON").Error
-	_ = db.AutoMigrate(&Source{}, &Resource{}, &Endpoint{}, &SyncJob{}, &AuditLog{})
+	_ = db.AutoMigrate(&Source{}, &Server{}, &Database{}, &LoadBalancer{}, &SyncJob{}, &AuditLog{})
 	service := NewService(NewRepository(db), NewCredentialCipher("source-update-key"))
 	created, err := service.CreateSource(context.Background(), CreateSourceInput{ProjectID: 3, Provider: ProviderAWS, Name: "旧名称", Credential: json.RawMessage(`{"token":"old"}`)})
 	if err != nil {

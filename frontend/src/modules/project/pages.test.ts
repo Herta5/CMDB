@@ -300,13 +300,15 @@ describe('项目控制台页面', () => {
     const projectStore = useProjectStore()
     projectStore.projects = [{ id: 2, code: 'platform', name: '平台项目', description: '', status: 'enabled', ownerUserId: null, createdAt: '', updatedAt: '' }]
     projectStore.selectProject(2)
-    get.mockImplementation((_url: string, options?: { params?: { resource_type?: string } }) => Promise.resolve({ items: [{ id: options?.params?.resource_type === 'ecs' ? 11 : 12, provider: options?.params?.resource_type === 'ecs' ? 'aliyun' : 'aws', resource_type: options?.params?.resource_type, external_id: 'asset', lifecycle_status: 'active', endpoints: [] }], total: 1 }))
+    get.mockImplementation((_url: string, options?: { params?: { resource_type?: string } }) => Promise.resolve({ items: [{ id: options?.params?.resource_type === 'ecs' ? 11 : 12, provider: options?.params?.resource_type === 'ecs' ? 'aliyun' : 'aws', resource_type: options?.params?.resource_type, external_id: 'asset', asset_status: 'active', endpoints: [] }], total: 1 }))
     const component = { render: () => h(AssetListPage, { category: 'server' }) }
     const { root, app } = await mount(component, '/assets/servers')
     expect(text(root)).toContain('服务器列表')
     expect(text(root)).not.toContain('统一查看阿里云 ECS 和 AWS EC2 实例。')
     expect(text(root)).toContain('阿里云')
     expect(text(root)).toContain('AWS')
+    expect(text(root)).toContain('资产状态')
+    expect(text(root)).not.toContain('生命周期')
     expect(get).toHaveBeenCalledWith('/projects/2/resources', { params: expect.objectContaining({ resource_type: 'ecs' }) })
     expect(get).toHaveBeenCalledWith('/projects/2/resources', { params: expect.objectContaining({ resource_type: 'ec2' }) })
     app.unmount()
@@ -319,7 +321,7 @@ describe('项目控制台页面', () => {
       { id: 3, code: 'payment', name: '支付项目', description: '', status: 'enabled', ownerUserId: null, createdAt: '', updatedAt: '' },
     ]
     projectStore.selectAllProjects()
-    get.mockImplementation((url: string, options?: { params?: { resource_type?: string } }) => Promise.resolve({ items: [{ id: Number(url.split('/')[2]) * 10 + (options?.params?.resource_type === 'ecs' ? 1 : 2), provider: options?.params?.resource_type === 'ecs' ? 'aliyun' : 'aws', resource_type: options?.params?.resource_type, external_id: 'asset', lifecycle_status: 'active', endpoints: [] }], total: 1 }))
+    get.mockImplementation((url: string, options?: { params?: { resource_type?: string } }) => Promise.resolve({ items: [{ id: Number(url.split('/')[2]) * 10 + (options?.params?.resource_type === 'ecs' ? 1 : 2), provider: options?.params?.resource_type === 'ecs' ? 'aliyun' : 'aws', resource_type: options?.params?.resource_type, external_id: 'asset', asset_status: 'active', endpoints: [] }], total: 1 }))
     const component = { render: () => h(AssetListPage, { category: 'server' }) }
     const { root, app } = await mount(component, '/assets/servers')
     expect(text(root)).toContain('平台项目')
