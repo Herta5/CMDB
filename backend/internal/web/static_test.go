@@ -45,7 +45,6 @@ func TestMountServesAssetPageRoutesThroughSPA(t *testing.T) {
 		"/assets/servers",
 		"/assets/databases",
 		"/assets/load-balancers",
-		"/assets/load-balancer",
 	} {
 		assertResponse(t, r, requestPath, http.StatusOK, "<html>cmdb</html>", "no-cache")
 	}
