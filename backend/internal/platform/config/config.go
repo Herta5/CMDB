@@ -14,7 +14,7 @@ type Config struct {
 	Server        Server
 }
 
-// Database 描述连接 MySQL 所需的环境配置。
+// Database 描述连接 PostgreSQL 所需的环境配置。
 type Database struct {
 	Host     string
 	Port     string

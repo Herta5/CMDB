@@ -47,7 +47,7 @@ func TestLoadReturnsRequiredConfiguration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("期望有效配置加载成功，实际为 %v", err)
 	}
-	if config.Database.Host != "127.0.0.1" || config.Database.Port != "3306" || config.Database.Name != "cmdb_test" {
+	if config.Database.Host != "127.0.0.1" || config.Database.Port != "5432" || config.Database.Name != "cmdb_test" {
 		// 失败诊断仅输出非敏感数据库定位信息，避免测试日志泄露密码。
 		t.Fatalf("数据库配置未按预期加载：host=%q, port=%q, name=%q", config.Database.Host, config.Database.Port, config.Database.Name)
 	}
@@ -60,7 +60,7 @@ func TestLoadReturnsRequiredConfiguration(t *testing.T) {
 func setRequiredEnvironment(t *testing.T) {
 	t.Helper()
 	t.Setenv("DB_HOST", "127.0.0.1")
-	t.Setenv("DB_PORT", "3306")
+	t.Setenv("DB_PORT", "5432")
 	t.Setenv("DB_USER", "cmdb_test")
 	t.Setenv("DB_PASSWORD", "test-password")
 	t.Setenv("DB_NAME", "cmdb_test")

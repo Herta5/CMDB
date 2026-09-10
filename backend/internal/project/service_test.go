@@ -1,4 +1,4 @@
-// 本文件通过真实的内存数据库验证项目领域规则，不依赖外部 MySQL 服务。
+// 本文件通过真实的内存数据库验证项目领域规则，不依赖外部 PostgreSQL 服务。
 package project
 
 import (
@@ -8,7 +8,7 @@ import (
 	"testing"
 
 	"cmdb/internal/identity"
-	"github.com/go-sql-driver/mysql"
+	"github.com/jackc/pgx/v5/pgconn"
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
@@ -148,13 +148,13 @@ func TestUpdateDoesNotResurrectProjectDeletedAfterRead(t *testing.T) {
 	}
 }
 
-// TestCreateConvertsMySQLDuplicateKeyWhenPrecheckMisses 防止并发创建绕过预查询后将 MySQL 1062 误报为内部错误。
-func TestCreateConvertsMySQLDuplicateKeyWhenPrecheckMisses(t *testing.T) {
+// TestCreateConvertsPostgreSQLDuplicateKeyWhenPrecheckMisses 防止并发创建绕过预查询后将 PostgreSQL 23505 误报为内部错误。
+func TestCreateConvertsPostgreSQLDuplicateKeyWhenPrecheckMisses(t *testing.T) {
 	service := NewService(&duplicateOnCreateRepository{})
 
 	_, err := service.Create(context.Background(), CreateInput{Name: "云平台", Code: "cloud"})
 	if !errors.Is(err, ErrDuplicateCode) {
-		t.Fatalf("MySQL 重复键必须转换为领域错误，实际为 %v", err)
+		t.Fatalf("PostgreSQL 重复键必须转换为领域错误，实际为 %v", err)
 	}
 }
 
@@ -198,7 +198,7 @@ func (r *deleteProjectAfterReadRepository) FindByID(ctx context.Context, id uint
 	return project, nil
 }
 
-// duplicateOnCreateRepository 模拟预查询未命中后 MySQL 在写入阶段返回 1062 的并发冲突。
+// duplicateOnCreateRepository 模拟预查询未命中后 PostgreSQL 在写入阶段返回 23505 的并发冲突。
 type duplicateOnCreateRepository struct {
 	Repository
 }
@@ -208,9 +208,9 @@ func (r *duplicateOnCreateRepository) FindByCode(context.Context, string) (*Proj
 	return nil, gorm.ErrRecordNotFound
 }
 
-// Create 返回未由 GORM TranslateError 转换的原始 MySQL 唯一键错误。
+// Create 返回未由 GORM TranslateError 转换的原始 PostgreSQL 唯一键错误。
 func (r *duplicateOnCreateRepository) Create(context.Context, *Project) error {
-	return &mysql.MySQLError{Number: 1062, Message: "Duplicate entry"}
+	return &pgconn.PgError{Code: "23505", Message: "duplicate key value violates unique constraint"}
 }
 
 // findProjectFailureRepository 模拟项目读取阶段的基础设施错误，其他方法不应在这些测试中被调用。

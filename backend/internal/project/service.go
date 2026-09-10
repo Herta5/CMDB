@@ -7,7 +7,7 @@ import (
 	"strings"
 
 	"cmdb/internal/identity"
-	"github.com/go-sql-driver/mysql"
+	"github.com/jackc/pgx/v5/pgconn"
 	"gorm.io/gorm"
 )
 
@@ -260,13 +260,13 @@ func (s *Service) Delete(ctx context.Context, id uint64) error {
 	return s.repository.Delete(ctx, id)
 }
 
-// isDuplicateCodeError 兼容 GORM 已翻译错误和未启用 TranslateError 时原样返回的 MySQL 1062。
+// isDuplicateCodeError 兼容 GORM 已翻译错误和未启用 TranslateError 时原样返回的 PostgreSQL 23505。
 func isDuplicateCodeError(err error) bool {
 	if errors.Is(err, gorm.ErrDuplicatedKey) {
 		return true
 	}
-	var mysqlError *mysql.MySQLError
-	return errors.As(err, &mysqlError) && mysqlError.Number == 1062
+	var postgresError *pgconn.PgError
+	return errors.As(err, &postgresError) && postgresError.Code == "23505"
 }
 
 // validProjectStatus 集中维护项目允许的生命周期状态，避免接口写入未定义状态。
