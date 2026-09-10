@@ -19,7 +19,7 @@
 
 - 后端使用 Go 1.25.1、Gin 和 GORM。
 - 前端使用 Vue 3、TypeScript、Pinia、Vue Router 和 Element Plus。
-- 数据库使用 MySQL 8.4。
+- 数据库使用 PostgreSQL 17。
 - 本地及单机部署使用 Docker Compose。
 - 未经用户确认，不得更换上述核心技术栈或引入独立微服务。
 

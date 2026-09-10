@@ -6,18 +6,18 @@ CMDB 是面向公有云的资源配置管理平台，业务项目是最高级的
 
 ## 技术栈
 
-后端使用 Go 1.25.1、Gin、GORM；前端使用 Vue 3、TypeScript、Pinia、Vue Router、Element Plus；数据库使用 MySQL 8.4。Docker Compose 启动一个 MySQL 容器和一个同时提供前端静态文件与 API 的应用容器。
+后端使用 Go 1.25.1、Gin、GORM；前端使用 Vue 3、TypeScript、Pinia、Vue Router、Element Plus；数据库使用 PostgreSQL 17。Docker Compose 启动一个 PostgreSQL 容器和一个同时提供前端静态文件与 API 的应用容器。
 
 ## 从空库部署
 
-需要 Docker Engine、Docker Compose、Bash 和 OpenSSL。部署使用独立的 `cmdb-mysql-data` 数据卷，并按编号顺序执行 `backend/migrations` 下的 SQL，不创建默认账号、业务项目或云接入源。
+需要 Docker Engine、Docker Compose、Bash 和 OpenSSL。部署使用独立的 `cmdb-postgresql-data` 数据卷：首次创建空卷时，PostgreSQL 按文件名顺序以管理员身份执行 `backend/database/init/001_create_app_role.sh` 和 `002_schema.sql`，先创建受限的 `cmdb` 应用账号，再建立业务结构；不会创建默认账号、业务项目或云接入源。
 
-先在当前终端设置部署环境，数据库密码由操作者提供，两个应用密钥独立随机生成。以下命令不会回显输入或生成值：
+先在当前终端设置部署环境。PostgreSQL 管理员密码与 `cmdb` 应用账号密码必须分别设置且不得相同；两个应用密钥独立随机生成。以下命令不会回显输入或生成值：
 
 ```bash
-read -rsp 'MySQL root 密码：' MYSQL_ROOT_PASSWORD; echo
+read -rsp 'PostgreSQL 管理员密码：' POSTGRES_ADMIN_PASSWORD; echo
 read -rsp 'CMDB 数据库用户密码：' DB_PASSWORD; echo
-export MYSQL_ROOT_PASSWORD DB_PASSWORD
+export POSTGRES_ADMIN_PASSWORD DB_PASSWORD
 export JWT_SECRET="$(openssl rand -hex 32)"
 export CMDB_ENCRYPTION_KEY="$(openssl rand -hex 32)"
 
@@ -27,9 +27,9 @@ docker compose up -d --build
 docker compose ps
 ```
 
-所有四个安全变量均无默认值，缺失或为空时 Compose 拒绝启动。应用使用独立的 `cmdb` 数据库用户，MySQL 不对宿主机公开端口。普通 `docker compose config` 会展开环境值，请使用 `--quiet` 验证配置，避免将输出贴入日志、工单或版本库。生产环境应在入口代理配置 HTTPS。
+所有四个安全变量均无默认值，缺失或为空时 Compose 拒绝启动。应用使用独立的 `cmdb` 数据库用户；管理员 `postgres` 账号仅用于数据库初始化，不得配置给应用。Compose 将 PostgreSQL 的 `5432` 端口发布到宿主机，外部运维连接应使用 `cmdb` 账号并在命令提示时输入数据库密码，例如 `psql -h 127.0.0.1 -p 5432 -U cmdb -d cmdb`；生产环境必须通过网络策略限制该端口来源。普通 `docker compose config` 会展开环境值，请使用 `--quiet` 验证配置，避免将输出贴入日志、工单或版本库。生产环境应在入口代理配置 HTTPS。
 
-MySQL 首次就绪后，显式创建第一个系统管理员。用户名可自行选择，密码必须为 12 至 72 字节；密码通过标准输入传入，不使用命令行参数，也不写入应用环境：
+PostgreSQL 首次就绪后，显式创建第一个系统管理员。用户名可自行选择，密码必须为 12 至 72 字节；密码通过标准输入传入，不使用命令行参数，也不写入应用环境：
 
 ```bash
 read -rsp '首次系统管理员密码：' CMDB_INITIAL_PASSWORD; echo
@@ -41,7 +41,7 @@ unset CMDB_INITIAL_PASSWORD
 
 打开 [CMDB 控制台](http://localhost)，用刚创建的身份登录。空库首次登录显示空项目状态；系统管理员通过项目 API 创建项目后即可在页面查看。默认使用 HTTP 端口 `80`，可通过 `CMDB_PORT` 覆盖。健康检查地址为 `/health`，仅报告 HTTP 进程存活，不代表数据库或下游服务就绪。
 
-数据库初始化 SQL 只在数据卷首次启动时执行；已有空卷或外部数据库需由运维显式执行同一迁移文件。服务不会自动迁移或覆盖现有表。停止服务使用 `docker compose down`，不要附加 `-v`，以保留数据。
+初始化脚本只在新建的空数据卷首次启动时执行；已有数据卷、已有空库或外部数据库不会自动重新初始化，运维必须以 PostgreSQL 管理员身份按相同顺序显式执行初始化文件。服务不会自动迁移、覆盖或转换现有表；从 MySQL 迁移到 PostgreSQL 需要另行完成数据迁移。停止服务使用 `docker compose down`，不要附加 `-v`，以保留数据。
 
 ## API 与权限
 
@@ -79,7 +79,7 @@ unset CMDB_INITIAL_PASSWORD
 
 ## 本地开发与验证
 
-后端需要可连接的 MySQL 8.4 和已执行数据库迁移的数据库；设置 `DB_HOST`、`DB_PORT`、`DB_USER`、`DB_PASSWORD`、`DB_NAME`、`JWT_SECRET`、`CMDB_ENCRYPTION_KEY`。`SERVER_PORT` 默认 `8080`，本地独立前端开发不设置 `STATIC_DIR`。
+后端需要可连接的 PostgreSQL 17 和已执行初始化结构的数据库；设置 `DB_HOST`、`DB_PORT`、`DB_USER`、`DB_PASSWORD`、`DB_NAME`、`JWT_SECRET`、`CMDB_ENCRYPTION_KEY`。`SERVER_PORT` 默认 `8080`，本地独立前端开发不设置 `STATIC_DIR`。
 
 ```bash
 cd backend

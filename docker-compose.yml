@@ -1,30 +1,27 @@
 # CMDB 从空库初始化；安全关键配置必须由部署环境显式提供。
 name: cmdb
 services:
-  mysql:
-    image: mysql:8.4
+  postgresql:
+    image: postgres:17
     restart: unless-stopped
     ports:
-      # 对外发布标准 MySQL 端口，访问控制由宿主机防火墙和数据库账号共同承担。
-      - "3306:3306"
+      # 对外发布 PostgreSQL 端口，访问控制由宿主机防火墙和受限应用账号共同承担。
+      - "5432:5432"
     environment:
-      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?请设置 MYSQL_ROOT_PASSWORD}
-      MYSQL_DATABASE: cmdb
-      MYSQL_USER: cmdb
-      MYSQL_PASSWORD: ${DB_PASSWORD:?请设置 DB_PASSWORD}
+      # PostgreSQL 管理员仅用于首次初始化，应用始终通过受限 cmdb 账号访问数据库。
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_ADMIN_PASSWORD:?请设置 POSTGRES_ADMIN_PASSWORD}
+      POSTGRES_DB: cmdb
+      DB_PASSWORD: ${DB_PASSWORD:?请设置 DB_PASSWORD}
     volumes:
       # 数据库使用独立持久卷，停止应用容器不会丢失业务数据。
-      - cmdb-mysql-data:/var/lib/mysql
-      - ./backend/migrations/001_schema.sql:/docker-entrypoint-initdb.d/001_schema.sql:ro
-      - ./backend/migrations/002_cloud_resources.sql:/docker-entrypoint-initdb.d/002_cloud_resources.sql:ro
-      - ./backend/migrations/003_async_sync_jobs.sql:/docker-entrypoint-initdb.d/003_async_sync_jobs.sql:ro
-      - ./backend/migrations/004_remove_kubernetes.sql:/docker-entrypoint-initdb.d/004_remove_kubernetes.sql:ro
-      - ./backend/migrations/005_remove_viewer_role.sql:/docker-entrypoint-initdb.d/005_remove_viewer_role.sql:ro
-    command:
-      - --character-set-server=utf8mb4
-      - --collation-server=utf8mb4_0900_ai_ci
+      - cmdb-postgresql-data:/var/lib/postgresql/data
+      # 官方镜像按文件名顺序执行只读初始化文件，先创建受限应用账号再初始化业务结构。
+      - ./backend/database/init/001_create_app_role.sh:/docker-entrypoint-initdb.d/001_create_app_role.sh:ro
+      - ./backend/database/init/002_schema.sql:/docker-entrypoint-initdb.d/002_schema.sql:ro
     healthcheck:
-      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      # 仅在 PostgreSQL 已接受 CMDB 数据库连接后允许应用启动。
+      test: ["CMD-SHELL", "pg_isready -U postgres -d cmdb"]
       interval: 10s
       timeout: 5s
       retries: 10
@@ -39,8 +36,8 @@ services:
       SERVER_PORT: "80"
       STATIC_DIR: /app/web
       GIN_MODE: release
-      DB_HOST: mysql
-      DB_PORT: "3306"
+      DB_HOST: postgresql
+      DB_PORT: "5432"
       DB_USER: cmdb
       DB_PASSWORD: ${DB_PASSWORD:?请设置 DB_PASSWORD}
       DB_NAME: cmdb
@@ -49,8 +46,8 @@ services:
     ports:
       - "${CMDB_PORT:-80}:80"
     depends_on:
-      mysql:
+      postgresql:
         condition: service_healthy
 
 volumes:
-  cmdb-mysql-data:
+  cmdb-postgresql-data:
