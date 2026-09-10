@@ -14,9 +14,9 @@ const lifecycleStatus = ref('')
 let requestVersion = 0
 
 const category = computed(() => ({
-  server: { title: '服务器', description: '统一查看阿里云 ECS 和 AWS EC2 实例。', types: ['ecs', 'ec2'] },
-  database: { title: '数据库', description: '统一查看阿里云和 AWS 的 RDS 实例。', types: ['rds'] },
-  load_balancer: { title: '负载均衡', description: '统一查看阿里云 SLB 和 AWS ELB。', types: ['slb', 'elb'] },
+  server: { title: '服务器', types: ['ecs', 'ec2'] },
+  database: { title: '数据库', types: ['rds'] },
+  load_balancer: { title: '负载均衡', types: ['slb', 'elb'] },
 }[props.category]))
 
 /** 按资产类别并行查询底层资源类型，过期响应不能覆盖新项目的结果。 */
@@ -44,7 +44,7 @@ const display = (value?: string | number) => value === undefined || value === nu
 
 <template>
   <section>
-    <header class="page-heading"><div><p class="page-eyebrow">资产列表</p><h1>{{ category.title }}</h1><p class="page-description">{{ category.description }}</p></div><button class="console-button" :disabled="!projects.currentProjectId || loading" @click="loadAssets">刷新列表</button></header>
+    <header class="page-heading"><div><p class="page-eyebrow">资产列表</p><h1>{{ category.title }}</h1></div><button class="console-button" :disabled="!projects.currentProjectId || loading" @click="loadAssets">刷新列表</button></header>
     <div v-if="!projects.currentProjectId" class="console-panel page-state"><span class="state-symbol">▦</span><h3>请先选择项目</h3><p>资产必须在明确的项目边界内查看。</p></div>
     <section v-else class="console-panel">
       <div class="panel-heading resource-toolbar"><h2>{{ category.title }}列表</h2><div><select v-model="lifecycleStatus" aria-label="生命周期" @change="loadAssets"><option value="">全部状态</option><option value="active">正常</option><option value="lost">已失联</option></select><span class="muted">共 {{ resources.length }} 项</span></div></div>

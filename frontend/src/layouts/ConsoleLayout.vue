@@ -4,6 +4,7 @@ import { computed, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useAuthStore } from '@/modules/auth/store'
 import { useProjectStore } from '@/modules/project/store'
+import ConsoleIcon from '@/components/ConsoleIcon.vue'
 
 const auth = useAuthStore()
 const projects = useProjectStore()
@@ -58,22 +59,20 @@ async function logout() {
     <aside class="console-sidebar">
       <router-link class="console-brand" to="/assets/servers" aria-label="CMDB 资产首页">
         <span class="brand-mark" aria-hidden="true">C</span><strong>CMDB</strong>
-        <span class="brand-caption">云资源管理</span>
+        <span class="brand-caption">资源管理</span>
       </router-link>
       <nav aria-label="主导航" class="console-nav">
-        <p class="nav-parent"><span class="nav-symbol" aria-hidden="true">▦</span>资产列表</p>
-        <router-link to="/assets/servers" class="nav-item nav-child" :class="{ 'is-active': route.path === '/assets/servers' }">服务器</router-link>
-        <router-link to="/assets/databases" class="nav-item nav-child" :class="{ 'is-active': route.path === '/assets/databases' }">数据库</router-link>
-        <router-link to="/assets/load-balancers" class="nav-item nav-child" :class="{ 'is-active': route.path === '/assets/load-balancers' }">负载均衡</router-link>
+        <p class="nav-parent"><ConsoleIcon name="assets"/>资产列表</p>
+        <router-link to="/assets/servers" class="nav-item nav-child" :class="{ 'is-active': route.path === '/assets/servers' }"><ConsoleIcon name="server"/>服务器</router-link>
+        <router-link to="/assets/databases" class="nav-item nav-child" :class="{ 'is-active': route.path === '/assets/databases' }"><ConsoleIcon name="database"/>数据库</router-link>
+        <router-link to="/assets/load-balancers" class="nav-item nav-child" :class="{ 'is-active': route.path === '/assets/load-balancers' }"><ConsoleIcon name="load-balancer"/>负载均衡</router-link>
         <template v-if="canSeeManagement">
-          <p class="nav-group-label">管理</p>
-          <router-link to="/projects" class="nav-item" :class="{ 'is-active': route.path.startsWith('/projects') }"><span class="nav-symbol" aria-hidden="true">▣</span>项目管理</router-link>
-          <router-link to="/cloud-sync" class="nav-item" :class="{ 'is-active': route.path === '/cloud-sync' }"><span class="nav-symbol" aria-hidden="true">↻</span>云同步管理</router-link>
-          <router-link v-if="isSystemAdmin" to="/roles" class="nav-item" :class="{ 'is-active': route.path === '/roles' }"><span class="nav-symbol" aria-hidden="true">◇</span>角色权限</router-link>
-          <router-link v-if="isSystemAdmin" to="/users" class="nav-item" :class="{ 'is-active': route.path === '/users' }"><span class="nav-symbol" aria-hidden="true">♙</span>用户管理</router-link>
+          <p class="nav-parent"><ConsoleIcon name="management"/>管理</p>
+          <router-link to="/projects" class="nav-item nav-child" :class="{ 'is-active': route.path.startsWith('/projects') }"><ConsoleIcon name="project"/>项目管理</router-link>
+          <router-link to="/cloud-sync" class="nav-item nav-child" :class="{ 'is-active': route.path === '/cloud-sync' }"><ConsoleIcon name="cloud-sync"/>云同步管理</router-link>
+          <router-link v-if="isSystemAdmin" to="/users" class="nav-item nav-child" :class="{ 'is-active': route.path === '/users' }"><ConsoleIcon name="user"/>用户管理</router-link>
         </template>
       </nav>
-      <div class="sidebar-footer"><span class="status-dot" />项目隔离 · 统一管理</div>
     </aside>
 
     <div class="console-workspace">
@@ -95,7 +94,6 @@ async function logout() {
       </header>
       <!-- 各平台页面共享顶部项目上下文，资源接口始终以该项目作为最高边界。 -->
       <main id="console-content" class="console-content" tabindex="-1"><router-view /></main>
-      <footer class="console-footer">CMDB · 公有云资源配置管理</footer>
     </div>
   </div>
 </template>

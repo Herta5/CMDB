@@ -15,13 +15,12 @@
 .nav-item { display: flex; align-items: center; gap: 11px; width: 100%; min-height: 42px; padding: 10px 12px; margin: 3px 0; border: 0; border-radius: 6px; background: transparent; text-align: left; }
 .nav-item.is-active { background: var(--cmdb-accent-soft); font-weight: 600; }
 .nav-parent { display: flex; align-items: center; gap: 11px; min-height: 38px; margin: 0; padding: 7px 12px; font-weight: 600; }
-.nav-item.nav-child { min-height: 36px; padding: 7px 12px 7px 42px; color: #68758a; font-size: 13px; }
-.nav-symbol { font-size: 19px; line-height: 1; }
+.nav-item.nav-child { min-height: 36px; padding: 7px 12px 7px 38px; color: #68758a; font-size: 13px; }
+.nav-icon { width: 17px; height: 17px; flex: 0 0 17px; }
 .platform-nav { color: #68758a; }
 .platform-dot { width: 8px; height: 8px; border-radius: 3px; flex-shrink: 0; margin: 0 3px; }
 .aliyun { background: #c7814c; }.aws { background: #b98d43; }
 .nav-soon { margin-left: auto; font-size: 10px; color: #758094; white-space: nowrap; }
-.sidebar-footer { margin-top: auto; padding: 20px 22px; color: var(--cmdb-muted); font-size: 11px; border-top: 1px solid var(--cmdb-border); display: flex; align-items: center; gap: 8px; }
 .console-workspace { flex: 1; min-width: 0; display: flex; flex-direction: column; }
 .console-topbar { min-height: 70px; display: flex; align-items: center; justify-content: space-between; gap: 24px; padding: 14px 32px; background: var(--cmdb-surface); border-bottom: 1px solid var(--cmdb-border); }
 .project-switcher { display: flex; align-items: center; gap: 14px; min-width: 0; }
@@ -104,7 +103,6 @@
 .member-toolbar select, .member-panel td select { border: 1px solid var(--cmdb-border); border-radius: 6px; padding: 7px 10px; background: white; }
 .member-toolbar select:first-child { min-width: 240px; }
 .member-feedback { padding: 12px 22px 0; }
-.console-footer { padding: 12px 32px 20px; color: #788499; font-size: 11px; }
 .sr-only, .skip-link:not(:focus) { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }.skip-link:focus { position: fixed; top: 8px; left: 8px; z-index: 30; background: white; padding: 12px; }
 /* 平板保留导航文字和键盘入口，宽表格只在自身容器内滚动。 */
 @media (max-width: 1024px) { :root { --cmdb-sidebar-width: 184px; }.console-content { padding: 24px 20px; }.console-topbar { padding: 14px 20px; gap: 16px; }.project-switcher { gap: 8px; }.project-switcher select { width: 190px; }.project-summary > div { padding: 18px; }.console-brand { padding: 20px 16px; }.nav-soon { font-size: 9px; }.nav-item { padding: 10px 8px; gap: 7px; } }

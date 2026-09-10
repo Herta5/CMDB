@@ -84,4 +84,8 @@ describe('认证路由守卫', () => {
     await router.push('/projects')
     expect(router.currentRoute.value.path).toBe('/assets/servers')
   })
+
+  it('独立权限管理页面已移除', () => {
+    expect(router.resolve('/roles').name).not.toBe('RolePermissions')
+  })
 })

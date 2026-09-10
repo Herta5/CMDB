@@ -11,7 +11,6 @@ import ProjectListPage from './ProjectListPage.vue'
 import ProjectDetailPage from './ProjectDetailPage.vue'
 import ConsoleLayout from '@/layouts/ConsoleLayout.vue'
 import UserManagementPage from '@/modules/user/UserManagementPage.vue'
-import RolePermissionsPage from '@/modules/user/RolePermissionsPage.vue'
 import AssetListPage from '@/modules/resource/AssetListPage.vue'
 
 // 节点模型只承担宿主操作，页面逻辑、路由和项目状态均执行生产代码。
@@ -72,7 +71,6 @@ async function mount(component: Component, path = '/projects') {
     // 控制台导航需要这些真实目标，页面测试不渲染对应内容但不能留下路由警告。
     { path: '/aliyun', component: { render: () => null } },
     { path: '/aws', component: { render: () => null } },
-    { path: '/roles', component: { render: () => null } },
     { path: '/users', component: { render: () => null } },
     { path: '/login', component: { render: () => null } },
   ] })
@@ -187,6 +185,8 @@ describe('项目控制台页面', () => {
     const { root, app, router } = await mount(ConsoleLayout, '/assets/servers')
     expect(text(root)).toContain('运维用户')
     expect(text(root)).toContain('资产列表')
+    expect(text(root)).toContain('资源管理')
+    expect(text(root)).not.toContain('云资源管理')
     expect(text(root)).not.toContain('阿里云')
     expect(text(root)).not.toContain('AWS')
     expect(text(root)).not.toContain('系统管理')
@@ -234,12 +234,17 @@ describe('项目控制台页面', () => {
     expect(text(root)).toContain('数据库')
     expect(text(root)).toContain('负载均衡')
     expect(text(root)).toContain('管理')
-    const navigationGroups = all(root).filter(n => n.props.class === 'nav-group-label').map(text)
-    expect(navigationGroups).toEqual(['管理'])
+    const navigationParents = all(root).filter(n => n.props.class === 'nav-parent').map(text)
+    expect(navigationParents).toEqual(['资产列表', '管理'])
     expect(text(root)).toContain('项目管理')
     expect(text(root)).toContain('云同步管理')
-    expect(text(root)).toContain('角色权限')
+    expect(text(root)).not.toContain('权限管理')
+    expect(text(root)).not.toContain('角色权限')
     expect(text(root)).toContain('用户管理')
+    expect(text(root)).not.toContain('项目隔离 · 统一管理')
+    expect(text(root)).not.toContain('CMDB · 公有云资源配置管理')
+    const navigationIcons = all(root).filter(n => n.type === 'svg').map(n => n.props['data-icon'])
+    expect(navigationIcons).toEqual(expect.arrayContaining(['assets', 'server', 'database', 'load-balancer', 'management', 'project', 'cloud-sync', 'user']))
     expect(text(root)).not.toContain('云平台')
     expect(text(root)).not.toContain('阿里云AWS')
     expect(all(root).some(n => n.type === 'a' && n.props.href === '/users')).toBe(true)
@@ -278,19 +283,6 @@ describe('项目控制台页面', () => {
     expect(router.currentRoute.value.path).toBe('/assets/servers')
     app.unmount()
   })
-  it('角色权限页展示全局与项目角色的能力边界', async () => {
-    const { root, app } = await mount(RolePermissionsPage, '/roles')
-    expect(text(root)).toContain('系统管理员')
-    expect(text(root)).toContain('访问所有项目')
-    expect(text(root)).toContain('普通用户')
-    expect(text(root)).toContain('具体能力由项目角色决定')
-    expect(text(root)).toContain('项目管理员')
-    expect(text(root)).toContain('管理本项目成员')
-    expect(text(root)).toContain('项目成员')
-    expect(text(root)).toContain('查看服务器、数据库和负载均衡资产')
-    expect(text(root)).not.toContain('只读成员')
-    app.unmount()
-  })
   it('服务器资产页合并当前项目的 ECS 和 EC2', async () => {
     const projectStore = useProjectStore()
     projectStore.projects = [{ id: 2, code: 'platform', name: '平台项目', description: '', status: 'enabled', ownerUserId: null, createdAt: '', updatedAt: '' }]
@@ -299,6 +291,7 @@ describe('项目控制台页面', () => {
     const component = { render: () => h(AssetListPage, { category: 'server' }) }
     const { root, app } = await mount(component, '/assets/servers')
     expect(text(root)).toContain('服务器列表')
+    expect(text(root)).not.toContain('统一查看阿里云 ECS 和 AWS EC2 实例。')
     expect(text(root)).toContain('阿里云')
     expect(text(root)).toContain('AWS')
     expect(get).toHaveBeenCalledWith('/projects/2/resources', { params: expect.objectContaining({ resource_type: 'ecs' }) })
