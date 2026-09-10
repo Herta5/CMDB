@@ -28,6 +28,12 @@ func Mount(r *gin.Engine, staticDir string) error {
 	}
 
 	r.GET("/assets/*filepath", func(c *gin.Context) {
+		// 资产页面与 Vite 构建产物共享 /assets 前缀；无扩展名路径属于前端路由，刷新时必须回退首页。
+		if path.Ext(c.Param("filepath")) == "" {
+			c.Header("Cache-Control", "no-cache")
+			c.File(indexPath)
+			return
+		}
 		filePath, ok := resolveFile(filepath.Join(root, "assets"), c.Param("filepath"))
 		if !ok {
 			c.Status(http.StatusNotFound)

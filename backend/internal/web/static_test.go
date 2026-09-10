@@ -30,6 +30,27 @@ func TestMountServesSPAAndAssetsWithoutCapturingAPI(t *testing.T) {
 	assertResponse(t, r, "/api/v1/missing", http.StatusNotFound, "", "")
 }
 
+// TestMountServesAssetPageRoutesThroughSPA 防止资产页面与构建产物共用 /assets 前缀时刷新返回 404。
+func TestMountServesAssetPageRoutesThroughSPA(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	dir := t.TempDir()
+	requireWrite(t, filepath.Join(dir, "index.html"), "<html>cmdb</html>")
+
+	r := gin.New()
+	if err := Mount(r, dir); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, requestPath := range []string{
+		"/assets/servers",
+		"/assets/databases",
+		"/assets/load-balancers",
+		"/assets/load-balancer",
+	} {
+		assertResponse(t, r, requestPath, http.StatusOK, "<html>cmdb</html>", "no-cache")
+	}
+}
+
 func TestMountRejectsAssetTraversalAttempts(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	dir := t.TempDir()
