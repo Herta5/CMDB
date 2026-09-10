@@ -39,4 +39,15 @@ describe('用户管理状态', () => {
     await store.updateStatus(2, 'disabled')
     expect(store.users[0].status).toBe('disabled')
   })
+
+  it('编辑用户后更新公开资料且不在状态中保存新密码', async () => {
+    get.mockResolvedValue([dto])
+    put.mockResolvedValue({ ...dto, display_name: '平台管理员', email: 'admin@example.invalid', global_role: 'system_admin' })
+    const store = useUserStore()
+    await store.loadUsers()
+    await store.updateUser(2, { displayName: '平台管理员', email: 'admin@example.invalid', globalRole: 'system_admin', status: 'active', password: 'replacement-password' })
+    expect(put).toHaveBeenCalledWith('/users/2', { display_name: '平台管理员', email: 'admin@example.invalid', global_role: 'system_admin', status: 'active', password: 'replacement-password' })
+    expect(store.users[0]).toEqual({ id: 2, username: 'cloud-user', displayName: '平台管理员', email: 'admin@example.invalid', globalRole: 'system_admin', status: 'active' })
+    expect(store.users[0]).not.toHaveProperty('password')
+  })
 })

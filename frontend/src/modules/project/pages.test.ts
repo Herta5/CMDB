@@ -10,15 +10,21 @@ import { useProjectStore } from './store'
 import ProjectListPage from './ProjectListPage.vue'
 import ProjectDetailPage from './ProjectDetailPage.vue'
 import ConsoleLayout from '@/layouts/ConsoleLayout.vue'
+import UserManagementPage from '@/modules/user/UserManagementPage.vue'
 
 // 节点模型只承担宿主操作，页面逻辑、路由和项目状态均执行生产代码。
-type Node = { type: string; text: string; props: Record<string, any>; children: Node[]; parent: Node | null }
-const node = (type: string, text = ''): Node => ({ type, text, props: {}, children: [], parent: null })
+type Node = { type: string; text: string; props: Record<string, any>; children: Node[]; parent: Node | null; value?: unknown; selected?: boolean; readonly options: Node[]; addEventListener: () => void; removeEventListener: () => void }
+// 轻量节点实现 Vue 表单指令读取的最小 DOM 契约，事件断言仍通过 props 执行真实处理器。
+const node = (type: string, text = ''): Node => {
+  const entry = { type, text, props: {}, children: [], parent: null, addEventListener: () => {}, removeEventListener: () => {} } as Node
+  Object.defineProperty(entry, 'options', { get: () => entry.children.filter(child => child.type === 'option') })
+  return entry
+}
 const renderer = createRenderer<Node, Node>({
   createElement: type => node(type), createText: text => node('text', text), createComment: () => node('comment'),
   setText: (n, text) => { n.text = text }, setElementText: (n, text) => { n.text = text; n.children = [] },
   parentNode: n => n.parent, nextSibling: n => n.parent?.children[n.parent.children.indexOf(n) + 1] || null,
-  patchProp: (n, key, _old, value) => { n.props[key] = value },
+  patchProp: (n, key, _old, value) => { n.props[key] = value; if (key === 'value') n.value = value },
   insert: (n, parent, anchor) => {
     if (n.parent) n.parent.children.splice(n.parent.children.indexOf(n), 1)
     n.parent = parent
@@ -60,6 +66,7 @@ async function mount(component: Component, path = '/projects') {
     // 控制台导航需要这些真实目标，页面测试不渲染平台内容但不能留下路由警告。
     { path: '/aliyun', component: { render: () => null } },
     { path: '/aws', component: { render: () => null } },
+    { path: '/users', component: { render: () => null } },
     { path: '/login', component: { render: () => null } },
   ] })
   await router.push(path)
@@ -174,6 +181,8 @@ describe('项目控制台页面', () => {
     expect(text(root)).toContain('运维用户')
     expect(text(root)).toContain('阿里云')
     expect(text(root)).toContain('AWS')
+    expect(text(root)).not.toContain('权限管理')
+    expect(text(root)).not.toContain('用户管理')
     expect(text(root)).not.toContain('Kubernetes')
     expect(all(root).some(n => n.props['aria-label'] === '全局搜索')).toBe(false)
     const switcher = all(root).find(n => n.type === 'select' && n.props['aria-label'] === '当前业务项目')!
@@ -207,6 +216,26 @@ describe('项目控制台页面', () => {
     expect(post).toHaveBeenCalledWith('/projects', { code: 'cloud-platform', name: '云平台', description: '公有云资源归属', owner_user_id: null })
     expect(text(root)).toContain('平台项目')
     expect(text(root)).not.toContain('新建业务项目')
+    app.unmount()
+  })
+  it('系统管理员侧栏显示权限管理一级分组和用户管理入口', async () => {
+    useAuthStore().acceptSession('管理员会话', { id: 1, username: 'admin', globalRole: 'system_admin' })
+    const { root, app } = await mount(ConsoleLayout)
+    expect(text(root)).toContain('权限管理')
+    expect(text(root)).toContain('用户管理')
+    expect(all(root).some(n => n.type === 'a' && n.props.href === '/users')).toBe(true)
+    app.unmount()
+  })
+  it('系统管理员可打开用户编辑窗口且用户名保持不可修改', async () => {
+    useAuthStore().acceptSession('管理员会话', { id: 1, username: 'admin', globalRole: 'system_admin' })
+    get.mockResolvedValue([{ id: 2, username: 'cloud-user', display_name: '云资源用户', email: 'cloud@example.invalid', global_role: 'user', status: 'active' }])
+    const { root, app } = await mount(UserManagementPage, '/users')
+    await all(root).find(n => n.type === 'button' && text(n) === '编辑')!.props.onClick()
+    await flush()
+    expect(text(root)).toContain('编辑用户')
+    expect(all(root).find(n => n.props.name === 'username')?.props.disabled).toBe(true)
+    expect(all(root).some(n => n.props.name === 'global-role')).toBe(true)
+    expect(all(root).some(n => n.type === 'button' && text(n) === '保存修改')).toBe(true)
     app.unmount()
   })
   it('普通用户没有项目创建、编辑或删除入口', async () => {

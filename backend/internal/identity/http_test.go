@@ -296,6 +296,11 @@ func (inMemoryUserRepository) Create(context.Context, *identity.User) error {
 	return gorm.ErrInvalidDB
 }
 
+// Update 不属于认证接口测试范围，返回明确的未实现错误。
+func (inMemoryUserRepository) Update(context.Context, *identity.User) error {
+	return gorm.ErrInvalidDB
+}
+
 // FindByID 不属于本登录测试覆盖范围，因此返回未找到。
 func (r inMemoryUserRepository) FindByID(_ context.Context, id uint64) (*identity.User, error) {
 	for _, user := range r.users {

@@ -37,7 +37,7 @@ printf '%s' "$CMDB_INITIAL_PASSWORD" | docker compose exec -T app ./cmdb-init-ad
 unset CMDB_INITIAL_PASSWORD
 ```
 
-初始化命令只保存 bcrypt 哈希；只要 `users` 表已有任何用户就会拒绝再次执行，不修改或覆盖已有身份。系统管理员登录后可在用户管理页面创建和启停普通用户，再在项目详情中分配项目角色；密码只以 bcrypt 哈希保存且不会通过接口回显。
+初始化命令只保存 bcrypt 哈希；只要 `users` 表已有任何用户就会拒绝再次执行，不修改或覆盖已有身份。系统管理员登录后可在权限管理的用户页面创建、编辑、授权和启停用户，再在项目详情中分配项目角色；密码只以 bcrypt 哈希保存且不会通过接口回显。
 
 打开 [CMDB 控制台](http://localhost)，用刚创建的身份登录。空库首次登录显示空项目状态；系统管理员通过项目 API 创建项目后即可在页面查看。默认使用 HTTP 端口 `80`，可通过 `CMDB_PORT` 覆盖。健康检查地址为 `/health`，仅报告 HTTP 进程存活，不代表数据库或下游服务就绪。
 
@@ -54,6 +54,7 @@ unset CMDB_INITIAL_PASSWORD
 | GET | `/api/v1/users` | 系统管理员查看用户列表 |
 | POST | `/api/v1/users` | 系统管理员创建普通用户 |
 | PUT | `/api/v1/users/:id/status` | 系统管理员启用或停用用户 |
+| PUT | `/api/v1/users/:id` | 系统管理员编辑显示名称、邮箱、全局角色、状态及可选新密码；用户名不可修改 |
 | GET | `/api/v1/projects` | 系统管理员查看全部；普通用户仅查看所属项目 |
 | POST | `/api/v1/projects` | 系统管理员创建项目，必填 `code`、`name` |
 | GET | `/api/v1/projects/:id` | 系统管理员或该项目成员查看详情 |

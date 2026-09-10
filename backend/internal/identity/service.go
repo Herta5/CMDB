@@ -24,7 +24,18 @@ var (
 	ErrDuplicateUsername = errors.New("用户名已存在")
 	// ErrUserNotFound 表示管理接口指定的用户不存在。
 	ErrUserNotFound = errors.New("用户不存在")
+	// ErrSelfProtection 表示当前管理员试图停用自己或移除自己的系统管理权限。
+	ErrSelfProtection = errors.New("不能停用或降级当前管理员")
 )
+
+// UpdateUserInput 是系统管理员可维护的用户字段；空密码表示保持原密码。
+type UpdateUserInput struct {
+	DisplayName string
+	Email       string
+	GlobalRole  string
+	Status      string
+	Password    string
+}
 
 // defaultTokenLifetime 限制会话可被盗用的时间窗口，同时保证每个 JWT 都带有到期时间。
 const defaultTokenLifetime = 24 * time.Hour
@@ -141,14 +152,57 @@ func (s *Service) ListUsers(ctx context.Context) ([]User, error) {
 }
 
 // UpdateUserStatus 启停用户；停用后认证中间件会在下一次请求立即使其会话失效。
-func (s *Service) UpdateUserStatus(ctx context.Context, id uint64, status string) (*User, error) {
+func (s *Service) UpdateUserStatus(ctx context.Context, actorID, id uint64, status string) (*User, error) {
 	if s.repository == nil {
 		return nil, ErrIdentityRepositoryUnavailable
 	}
-	if id == 0 || (status != "active" && status != "disabled") {
+	if actorID == 0 || id == 0 || (status != "active" && status != "disabled") {
 		return nil, ErrInvalidUserInput
 	}
+	if actorID == id && status != "active" {
+		return nil, ErrSelfProtection
+	}
 	if err := s.repository.UpdateStatus(ctx, id, status); err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, ErrUserNotFound
+		}
+		return nil, err
+	}
+	return s.repository.FindByID(ctx, id)
+}
+
+// UpdateUser 更新公开资料、全局角色、状态及可选密码，并保护当前管理员不会锁定自己。
+func (s *Service) UpdateUser(ctx context.Context, actorID, id uint64, input UpdateUserInput) (*User, error) {
+	if s.repository == nil {
+		return nil, ErrIdentityRepositoryUnavailable
+	}
+	input.DisplayName = strings.TrimSpace(input.DisplayName)
+	input.Email = strings.TrimSpace(input.Email)
+	if actorID == 0 || id == 0 || input.DisplayName == "" || (input.GlobalRole != GlobalRoleSystemAdmin && input.GlobalRole != GlobalRoleUser) || (input.Status != "active" && input.Status != "disabled") || (input.Password != "" && (len(input.Password) < 12 || len(input.Password) > 72)) {
+		return nil, ErrInvalidUserInput
+	}
+	if actorID == id && (input.GlobalRole != GlobalRoleSystemAdmin || input.Status != "active") {
+		return nil, ErrSelfProtection
+	}
+	user, err := s.repository.FindByID(ctx, id)
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, ErrUserNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	user.DisplayName = input.DisplayName
+	user.Email = input.Email
+	user.GlobalRole = input.GlobalRole
+	user.Status = input.Status
+	if input.Password != "" {
+		hash, hashErr := HashPassword(input.Password)
+		if hashErr != nil {
+			return nil, hashErr
+		}
+		user.PasswordHash = hash
+	}
+	if err := s.repository.Update(ctx, user); err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, ErrUserNotFound
 		}

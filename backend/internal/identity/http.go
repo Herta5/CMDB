@@ -78,9 +78,51 @@ func (h *HTTPHandler) UpdateUserStatus(c *gin.Context, claims UserClaims) {
 		writeError(c, http.StatusBadRequest, "USER_INVALID_REQUEST", "请求格式错误")
 		return
 	}
-	user, err := h.service.UpdateUserStatus(c.Request.Context(), id, request.Status)
+	user, err := h.service.UpdateUserStatus(c.Request.Context(), claims.UserID, id, request.Status)
 	if errors.Is(err, ErrInvalidUserInput) {
 		writeError(c, http.StatusBadRequest, "USER_INVALID_INPUT", "用户参数无效")
+		return
+	}
+	if errors.Is(err, ErrSelfProtection) {
+		writeError(c, http.StatusConflict, "USER_SELF_PROTECTED", "不能停用当前管理员")
+		return
+	}
+	if errors.Is(err, ErrUserNotFound) {
+		writeError(c, http.StatusNotFound, "USER_NOT_FOUND", "用户不存在")
+		return
+	}
+	if err != nil {
+		writeError(c, http.StatusInternalServerError, "USER_SERVICE_UNAVAILABLE", "用户服务暂不可用")
+		return
+	}
+	c.JSON(http.StatusOK, toPublicUser(user))
+}
+
+// UpdateUser 允许系统管理员维护用户资料、角色、状态和可选新密码，用户名不可修改。
+func (h *HTTPHandler) UpdateUser(c *gin.Context, claims UserClaims) {
+	if claims.GlobalRole != GlobalRoleSystemAdmin {
+		writeError(c, http.StatusForbidden, "USER_FORBIDDEN", "无权执行该操作")
+		return
+	}
+	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
+	var request struct {
+		DisplayName string `json:"display_name"`
+		Email       string `json:"email"`
+		GlobalRole  string `json:"global_role"`
+		Status      string `json:"status"`
+		Password    string `json:"password"`
+	}
+	if err != nil || id == 0 || c.ShouldBindJSON(&request) != nil {
+		writeError(c, http.StatusBadRequest, "USER_INVALID_REQUEST", "请求格式错误")
+		return
+	}
+	user, err := h.service.UpdateUser(c.Request.Context(), claims.UserID, id, UpdateUserInput{DisplayName: request.DisplayName, Email: request.Email, GlobalRole: request.GlobalRole, Status: request.Status, Password: request.Password})
+	if errors.Is(err, ErrInvalidUserInput) {
+		writeError(c, http.StatusBadRequest, "USER_INVALID_INPUT", "用户参数无效")
+		return
+	}
+	if errors.Is(err, ErrSelfProtection) {
+		writeError(c, http.StatusConflict, "USER_SELF_PROTECTED", "不能停用或降级当前管理员")
 		return
 	}
 	if errors.Is(err, ErrUserNotFound) {

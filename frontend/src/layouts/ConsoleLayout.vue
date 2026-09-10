@@ -59,10 +59,13 @@ async function logout() {
         <router-link to="/projects" class="nav-item" :class="{ 'is-active': route.path === '/' || route.path.startsWith('/projects') }">
           <span class="nav-symbol" aria-hidden="true">▦</span>业务项目
         </router-link>
-        <router-link v-if="auth.currentUser?.globalRole === 'system_admin'" to="/users" class="nav-item" :class="{ 'is-active': route.path === '/users' }"><span class="nav-symbol" aria-hidden="true">♙</span>用户管理</router-link>
         <p class="nav-group-label">云平台</p>
         <router-link to="/aliyun" class="nav-item platform-nav" :class="{ 'is-active': route.path === '/aliyun' }"><span class="platform-dot aliyun" aria-hidden="true" />阿里云</router-link>
         <router-link to="/aws" class="nav-item platform-nav" :class="{ 'is-active': route.path === '/aws' }"><span class="platform-dot aws" aria-hidden="true" />AWS</router-link>
+        <template v-if="auth.currentUser?.globalRole === 'system_admin'">
+          <p class="nav-group-label">权限管理</p>
+          <router-link to="/users" class="nav-item" :class="{ 'is-active': route.path === '/users' }"><span class="nav-symbol" aria-hidden="true">♙</span>用户管理</router-link>
+        </template>
       </nav>
       <div class="sidebar-footer"><span class="status-dot" />项目隔离 · 统一管理</div>
     </aside>

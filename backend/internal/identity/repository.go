@@ -13,7 +13,33 @@ type UserRepository interface {
 	FindByID(ctx context.Context, id uint64) (*User, error)
 	FindByUsername(ctx context.Context, username string) (*User, error)
 	List(ctx context.Context) ([]User, error)
+	Update(ctx context.Context, user *User) error
 	UpdateStatus(ctx context.Context, id uint64, status string) error
+}
+
+// Update 只写入系统管理员允许维护的资料、角色、状态和密码哈希，用户名保持不可变。
+func (r *gormUserRepository) Update(ctx context.Context, user *User) error {
+	result := r.db.WithContext(ctx).Model(&User{}).Where("id = ?", user.ID).Updates(map[string]any{
+		"display_name":  user.DisplayName,
+		"email":         user.Email,
+		"global_role":   user.GlobalRole,
+		"status":        user.Status,
+		"password_hash": user.PasswordHash,
+	})
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected == 0 {
+		// MySQL 对值未变化的更新可能报告零行，需再查存在性，避免把幂等保存误判为用户不存在。
+		var count int64
+		if err := r.db.WithContext(ctx).Model(&User{}).Where("id = ?", user.ID).Count(&count).Error; err != nil {
+			return err
+		}
+		if count == 0 {
+			return gorm.ErrRecordNotFound
+		}
+	}
+	return nil
 }
 
 // List 按创建顺序返回用户，调用方必须在 HTTP 边界完成系统管理员授权。

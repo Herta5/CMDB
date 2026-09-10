@@ -108,6 +108,30 @@ func TestSystemAdministratorManagesUsers(t *testing.T) {
 	integrationRequest(t, server, "", http.MethodPost, "/api/v1/auth/login", map[string]any{"username": "cloud-user", "password": "secure-user-password"}, http.StatusUnauthorized)
 }
 
+// TestSystemAdministratorEditsUserAndCannotLockSelfOut 验证用户资料、角色和密码可维护，同时保护当前管理员权限。
+func TestSystemAdministratorEditsUserAndCannotLockSelfOut(t *testing.T) {
+	server, password := integrationServer(t)
+	admin := loginUser(t, server, "operator", password)
+	member := loginUser(t, server, "member-a", password)
+	created := integrationRequest(t, server, admin, http.MethodPost, "/api/v1/users", map[string]any{
+		"username": "editable-user", "password": "initial-user-password", "display_name": "待编辑用户", "email": "old@example.invalid",
+	}, http.StatusCreated)
+	var user identity.User
+	decodeIntegration(t, created, &user)
+	path := "/api/v1/users/" + strconv.FormatUint(user.ID, 10)
+	updated := integrationRequest(t, server, admin, http.MethodPut, path, map[string]any{
+		"display_name": "已编辑用户", "email": "new@example.invalid", "global_role": "system_admin", "status": "active", "password": "replacement-password",
+	}, http.StatusOK)
+	if strings.Contains(updated.Body.String(), "password") || !strings.Contains(updated.Body.String(), "已编辑用户") || !strings.Contains(updated.Body.String(), "system_admin") {
+		t.Fatal("编辑响应必须返回更新后的公开资料且不得包含密码")
+	}
+	integrationRequest(t, server, "", http.MethodPost, "/api/v1/auth/login", map[string]any{"username": "editable-user", "password": "initial-user-password"}, http.StatusUnauthorized)
+	integrationRequest(t, server, "", http.MethodPost, "/api/v1/auth/login", map[string]any{"username": "editable-user", "password": "replacement-password"}, http.StatusOK)
+	integrationRequest(t, server, member, http.MethodPut, path, map[string]any{"display_name": "越权修改", "email": "", "global_role": "user", "status": "active"}, http.StatusForbidden)
+	integrationRequest(t, server, admin, http.MethodPut, "/api/v1/users/1", map[string]any{"display_name": "当前管理员", "email": "", "global_role": "user", "status": "active"}, http.StatusConflict)
+	integrationRequest(t, server, admin, http.MethodPut, "/api/v1/users/1/status", map[string]any{"status": "disabled"}, http.StatusConflict)
+}
+
 // TestProjectAdministratorReadsCandidatesAndManagesMemberRoles 验证项目管理员只能在所属项目内查询候选身份并管理角色。
 func TestProjectAdministratorReadsCandidatesAndManagesMemberRoles(t *testing.T) {
 	server, password := integrationServer(t)
