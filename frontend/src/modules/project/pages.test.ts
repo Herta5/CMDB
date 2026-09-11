@@ -16,10 +16,11 @@ import CloudSyncManagementPage from '@/modules/resource/CloudSyncManagementPage.
 import { useResourceStore } from '@/modules/resource/store'
 
 // 节点模型只承担宿主操作，页面逻辑、路由和项目状态均执行生产代码。
-type Node = { type: string; text: string; props: Record<string, any>; children: Node[]; parent: Node | null; value?: unknown; selected?: boolean; readonly options: Node[]; addEventListener: () => void; removeEventListener: () => void }
+type Node = { type: string; text: string; props: Record<string, any>; children: Node[]; parent: Node | null; value?: unknown; selected?: boolean; readonly options: Node[]; addEventListener: () => void; removeEventListener: () => void; getRootNode: () => Node }
 // 轻量节点实现 Vue 表单指令读取的最小 DOM 契约，事件断言仍通过 props 执行真实处理器。
 const node = (type: string, text = ''): Node => {
-  const entry = { type, text, props: {}, children: [], parent: null, addEventListener: () => {}, removeEventListener: () => {} } as Node
+  const entry = { type, text, props: {}, children: [], parent: null, addEventListener: () => {}, removeEventListener: () => {}, getRootNode: () => undefined as unknown as Node } as Node
+  entry.getRootNode = () => entry
   Object.defineProperty(entry, 'options', { get: () => entry.children.filter(child => child.type === 'option') })
   return entry
 }
@@ -51,6 +52,8 @@ let pinia: ReturnType<typeof createPinia>
 beforeEach(() => {
   const storage = new Map<string, string>()
   vi.stubGlobal('localStorage', { getItem: (key: string) => storage.get(key) ?? null, setItem: (key: string, value: string) => storage.set(key, value), removeItem: (key: string) => storage.delete(key) })
+  vi.stubGlobal('Document', class {})
+  vi.stubGlobal('ShadowRoot', class {})
   pinia = createPinia()
   setActivePinia(pinia)
   useAuthStore().acceptSession('测试会话', { id: 1, username: 'operator', displayName: '运维用户', globalRole: 'user' })
@@ -186,7 +189,7 @@ describe('项目控制台页面', () => {
   it('顶部切换项目后保留当前功能页，退出时清除身份与项目', async () => {
     get.mockImplementation((url: string) => Promise.resolve(url === '/projects' ? [fixture, { ...fixture, id: 3, name: '支付项目' }] : { ...fixture, id: 3, name: '支付项目' }))
     const { root, app, router } = await mount(ConsoleLayout, '/assets/servers')
-    expect(text(root)).toContain('运维用户')
+    expect(text(root)).toContain('operator')
     expect(text(root)).toContain('资产列表')
     expect(text(root)).toContain('资源管理')
     expect(text(root)).not.toContain('云资源管理')
@@ -363,8 +366,8 @@ describe('项目控制台页面', () => {
     app.unmount()
   })
   it('系统管理员可打开用户编辑窗口且用户名保持不可修改', async () => {
-    useAuthStore().acceptSession('管理员会话', { id: 1, username: 'admin', globalRole: 'system_admin' })
-    get.mockImplementation((url: string) => Promise.resolve(url === '/users' ? [{ id: 2, username: 'cloud-user', display_name: '云资源用户', email: 'cloud@example.invalid', global_role: 'user', status: 'active', project_permissions: [{ project_id: 2, project_name: '平台项目', role: 'member' }] }] : [fixture]))
+    useAuthStore().acceptSession('管理员会话', { username: 'admin', globalRole: 'system_admin' })
+    get.mockImplementation((url: string) => Promise.resolve(url === '/users' ? [{ username: 'cloud_user', display_name: '云资源用户', email: 'cloud@example.invalid', global_role: 'user', status: 'active', project_permissions: [{ project_id: 2, project_name: '平台项目', role: 'member' }] }] : [fixture]))
     const { root, app } = await mount(UserManagementPage, '/users')
     await all(root).find(n => n.type === 'button' && text(n) === '编辑')!.props.onClick()
     await flush()
@@ -378,10 +381,10 @@ describe('项目控制台页面', () => {
     app.unmount()
   })
   it('系统管理员确认后删除其他用户，当前用户没有删除入口', async () => {
-    useAuthStore().acceptSession('管理员会话', { id: 1, username: 'admin', displayName: '系统管理员', globalRole: 'system_admin' })
+    useAuthStore().acceptSession('管理员会话', { username: 'admin', displayName: '系统管理员', globalRole: 'system_admin' })
     get.mockImplementation((url: string) => Promise.resolve(url === '/users' ? [
-      { id: 1, username: 'admin', display_name: '系统管理员', email: '', global_role: 'system_admin', status: 'active', project_permissions: [] },
-      { id: 2, username: 'cloud-user', display_name: '云资源用户', email: '', global_role: 'user', status: 'active', project_permissions: [] },
+      { username: 'admin', display_name: '系统管理员', email: '', global_role: 'system_admin', status: 'active', project_permissions: [] },
+      { username: 'cloud_user', display_name: '云资源用户', email: '', global_role: 'user', status: 'active', project_permissions: [] },
     ] : []))
     remove.mockResolvedValue(undefined)
     const { root, app } = await mount(UserManagementPage, '/users')
@@ -392,9 +395,46 @@ describe('项目控制台页面', () => {
     expect(text(root)).toContain('确认删除用户')
     await all(root).find(n => n.type === 'button' && text(n) === '确认删除')!.props.onClick()
     await flush()
-    expect(remove).toHaveBeenCalledWith('/users/2')
+    expect(remove).toHaveBeenCalledWith('/users/cloud_user')
     expect(text(root)).not.toContain('云资源用户')
     expect(text(root)).toContain('系统管理员')
+    app.unmount()
+  })
+  it('用户管理以用户名展示，并按当前用户名保护删除、降级和停用入口', async () => {
+    useAuthStore().acceptSession('管理员会话', { username: 'admin', displayName: '系统管理员', globalRole: 'system_admin' })
+    get.mockImplementation((url: string) => Promise.resolve(url === '/users' ? [
+      { username: 'admin', display_name: '系统管理员', email: '', global_role: 'system_admin', status: 'active', project_permissions: [] },
+      { username: 'cloud_user', display_name: '云资源用户', email: '', global_role: 'user', status: 'active', project_permissions: [] },
+    ] : []))
+
+    const { root, app } = await mount(UserManagementPage, '/users')
+
+    expect(text(root)).toContain('admin')
+    expect(text(root)).toContain('cloud_user')
+    expect(text(root)).not.toContain('ID')
+    expect(all(root).filter(n => n.type === 'button' && text(n) === '删除')).toHaveLength(1)
+
+    await all(root).filter(n => n.type === 'button' && text(n) === '编辑')[0]!.props.onClick()
+    await flush()
+    expect(all(root).find(n => n.props.name === 'global-role')?.props.disabled).toBe(true)
+    expect(all(root).find(n => n.props.name === 'status')?.props.disabled).toBe(true)
+    app.unmount()
+  })
+  it('创建用户时拒绝非法用户名且不提交请求', async () => {
+    get.mockResolvedValue([])
+    const { root, app } = await mount(UserManagementPage, '/users')
+
+    await all(root).find(n => n.type === 'button' && text(n) === '创建用户')!.props.onClick()
+    await flush()
+    const input = (name: string) => all(root).find(n => n.props.name === name)!
+    input('username').props['onUpdate:modelValue']('cloud-user')
+    input('display-name').props['onUpdate:modelValue']('云资源用户')
+    input('password').props['onUpdate:modelValue']('secure-user-password')
+    await all(root).find(n => n.type === 'form' && text(n).includes('创建用户'))!.props.onSubmit({ preventDefault() {} })
+    await flush()
+
+    expect(post).not.toHaveBeenCalled()
+    expect(text(root)).toContain('用户名只能包含字母、数字和下划线')
     app.unmount()
   })
   it('普通用户没有项目创建、编辑或删除入口', async () => {
