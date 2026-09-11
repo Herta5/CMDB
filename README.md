@@ -53,6 +53,7 @@ unset CMDB_INITIAL_PASSWORD
 | GET | `/api/v1/me` | 当前登录身份 |
 | GET | `/api/v1/users` | 系统管理员查看用户列表 |
 | POST | `/api/v1/users` | 系统管理员创建用户，并原子设置全局角色、状态和多项目权限 |
+| DELETE | `/api/v1/users/:id` | 系统管理员删除其他用户及其项目成员关系 |
 | PUT | `/api/v1/users/:id/status` | 系统管理员启用或停用用户 |
 | PUT | `/api/v1/users/:id` | 系统管理员编辑显示名称、邮箱、全局角色、状态、可选新密码及全量项目权限；用户名不可修改 |
 | GET | `/api/v1/projects` | 系统管理员查看全部；普通用户仅查看所属项目 |

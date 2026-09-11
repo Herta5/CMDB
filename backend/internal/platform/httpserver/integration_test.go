@@ -116,6 +116,60 @@ func TestSystemAdministratorManagesUsers(t *testing.T) {
 	integrationRequest(t, server, "", http.MethodPost, "/api/v1/auth/login", map[string]any{"username": "cloud-user", "password": "secure-user-password"}, http.StatusUnauthorized)
 }
 
+// TestSystemAdministratorDeletesUser 验证系统管理员可删除其他用户，但不能删除当前登录身份。
+func TestSystemAdministratorDeletesUser(t *testing.T) {
+	server, password, db := integrationServerWithDatabase(t)
+	admin := loginUser(t, server, "operator", password)
+	member := loginUser(t, server, "member-a", password)
+	if err := db.Exec("PRAGMA foreign_keys = ON").Error; err != nil {
+		t.Fatalf("启用删除副作用校验失败：%v", err)
+	}
+	ownerID := uint64(2)
+	ownedProject := project.Project{Code: "deleted-user-project", Name: "待清理负责人项目", Description: "", Status: project.ProjectStatusEnabled, OwnerUserID: &ownerID}
+	if err := db.Create(&ownedProject).Error; err != nil {
+		t.Fatalf("准备用户负责项目失败：%v", err)
+	}
+	if err := db.Create(&project.MemberRole{ProjectID: ownedProject.ID, UserID: ownerID, Role: project.MemberRoleMember}).Error; err != nil {
+		t.Fatalf("准备用户项目权限失败：%v", err)
+	}
+	audit := cloudresource.AuditLog{ActorID: &ownerID, ProjectID: &ownedProject.ID, Action: "user.fixture", ResourceType: "user", ResourceID: "2", Detail: []byte(`{}`)}
+	if err := db.Create(&audit).Error; err != nil {
+		t.Fatalf("准备独立审计记录失败：%v", err)
+	}
+
+	forbidden := integrationRequest(t, server, member, http.MethodDelete, "/api/v1/users/2", nil, http.StatusForbidden)
+	if forbidden.Body.String() != `{"code":"USER_FORBIDDEN","message":"无权执行该操作"}` {
+		t.Fatalf("普通用户删除响应契约错误：%s", forbidden.Body.String())
+	}
+	protected := integrationRequest(t, server, admin, http.MethodDelete, "/api/v1/users/1", nil, http.StatusConflict)
+	if protected.Body.String() != `{"code":"USER_SELF_PROTECTED","message":"不能删除当前管理员"}` {
+		t.Fatalf("管理员自删保护响应契约错误：%s", protected.Body.String())
+	}
+	invalid := integrationRequest(t, server, admin, http.MethodDelete, "/api/v1/users/not-a-number", nil, http.StatusBadRequest)
+	if invalid.Body.String() != `{"code":"USER_INVALID_REQUEST","message":"请求格式错误"}` {
+		t.Fatalf("无效用户标识响应契约错误：%s", invalid.Body.String())
+	}
+	integrationRequest(t, server, admin, http.MethodDelete, "/api/v1/users/2", nil, http.StatusNoContent)
+
+	var remaining, memberships, audits int64
+	if err := db.Model(&identity.User{}).Where("id = ?", 2).Count(&remaining).Error; err != nil || remaining != 0 {
+		t.Fatalf("删除成功后用户记录必须消失：count=%d err=%v", remaining, err)
+	}
+	if err := db.Model(&project.MemberRole{}).Where("user_id = ?", 2).Count(&memberships).Error; err != nil || memberships != 0 {
+		t.Fatalf("删除用户必须级联清理项目成员关系：count=%d err=%v", memberships, err)
+	}
+	if err := db.First(&ownedProject, ownedProject.ID).Error; err != nil || ownedProject.OwnerUserID != nil {
+		t.Fatalf("删除用户必须把项目负责人置空：owner=%v err=%v", ownedProject.OwnerUserID, err)
+	}
+	if err := db.Model(&cloudresource.AuditLog{}).Where("id = ?", audit.ID).Count(&audits).Error; err != nil || audits != 1 {
+		t.Fatalf("删除用户后必须保留独立审计记录：count=%d err=%v", audits, err)
+	}
+	notFound := integrationRequest(t, server, admin, http.MethodDelete, "/api/v1/users/2", nil, http.StatusNotFound)
+	if notFound.Body.String() != `{"code":"USER_NOT_FOUND","message":"用户不存在"}` {
+		t.Fatalf("重复删除响应契约错误：%s", notFound.Body.String())
+	}
+}
+
 // TestSystemAdministratorEditsUserAndCannotLockSelfOut 验证用户资料、角色和密码可维护，同时保护当前管理员权限。
 func TestSystemAdministratorEditsUserAndCannotLockSelfOut(t *testing.T) {
 	server, password, db := integrationServerWithDatabase(t)

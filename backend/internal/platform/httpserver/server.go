@@ -55,6 +55,7 @@ func New(dependencies Dependencies) *gin.Engine {
 	users := engine.Group("/api/v1/users", authenticator.RequireUser())
 	users.GET("", func(c *gin.Context) { handler.ListUsers(c, CurrentUser(c)) })
 	users.POST("", func(c *gin.Context) { handler.CreateUser(c, CurrentUser(c)) })
+	users.DELETE("/:id", func(c *gin.Context) { handler.DeleteUser(c, CurrentUser(c)) })
 	users.PUT("/:id", func(c *gin.Context) { handler.UpdateUser(c, CurrentUser(c)) })
 	users.PUT("/:id/status", func(c *gin.Context) { handler.UpdateUserStatus(c, CurrentUser(c)) })
 	projects := engine.Group("/api/v1/projects")

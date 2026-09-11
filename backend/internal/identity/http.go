@@ -67,6 +67,33 @@ func (h *HTTPHandler) CreateUser(c *gin.Context, claims UserClaims) {
 	c.JSON(http.StatusCreated, toPublicUser(user))
 }
 
+// DeleteUser 仅允许系统管理员删除其他用户，当前管理员身份受到自删保护。
+func (h *HTTPHandler) DeleteUser(c *gin.Context, claims UserClaims) {
+	if claims.GlobalRole != GlobalRoleSystemAdmin {
+		writeError(c, http.StatusForbidden, "USER_FORBIDDEN", "无权执行该操作")
+		return
+	}
+	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
+	if err != nil || id == 0 {
+		writeError(c, http.StatusBadRequest, "USER_INVALID_REQUEST", "请求格式错误")
+		return
+	}
+	err = h.service.DeleteUser(c.Request.Context(), claims.UserID, id)
+	if errors.Is(err, ErrSelfProtection) {
+		writeError(c, http.StatusConflict, "USER_SELF_PROTECTED", "不能删除当前管理员")
+		return
+	}
+	if errors.Is(err, ErrUserNotFound) {
+		writeError(c, http.StatusNotFound, "USER_NOT_FOUND", "用户不存在")
+		return
+	}
+	if err != nil {
+		writeError(c, http.StatusInternalServerError, "USER_SERVICE_UNAVAILABLE", "用户服务暂不可用")
+		return
+	}
+	c.Status(http.StatusNoContent)
+}
+
 // UpdateUserStatus 允许系统管理员启停用户，禁止普通用户修改全局身份状态。
 func (h *HTTPHandler) UpdateUserStatus(c *gin.Context, claims UserClaims) {
 	if claims.GlobalRole != GlobalRoleSystemAdmin {

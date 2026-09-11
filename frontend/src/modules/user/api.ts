@@ -67,3 +67,8 @@ export async function createUser(input: CreateUserInput): Promise<User> {
 export async function updateUser(id: number, input: UpdateUserInput): Promise<User> {
   return toUser(await request.put(`/users/${id}`, { display_name: input.displayName, email: input.email, global_role: input.globalRole, status: input.status, password: input.password, project_permissions: input.projectPermissions.map(permission => ({ project_id: permission.projectId, role: permission.role })) }) as UserDTO)
 }
+
+/** 删除用户身份；关联项目成员关系由服务端统一清理。 */
+export async function deleteUser(id: number): Promise<void> {
+  await request.delete(`/users/${id}`)
+}
