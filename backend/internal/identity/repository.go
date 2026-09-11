@@ -6,6 +6,7 @@ import (
 	"errors"
 	"time"
 
+	"cmdb/internal/audit"
 	"gorm.io/gorm"
 )
 
@@ -25,6 +26,12 @@ type UserRepository interface {
 	Update(ctx context.Context, user *User) error
 	UpdateWithPermissions(ctx context.Context, user *User, permissions []ProjectPermission) error
 	UpdateStatus(ctx context.Context, id uint64, status string) error
+}
+
+// auditTransactionUserRepository 是启用审计时仓储必须实现的原子写入能力。
+// 事务回调获得绑定同一数据库事务的用户仓储和审计记录器。
+type auditTransactionUserRepository interface {
+	WithAuditTransaction(ctx context.Context, operation func(UserRepository, audit.Recorder) error) error
 }
 
 // Update 只写入系统管理员允许维护的资料、角色、状态和密码哈希，用户名保持不可变。
@@ -89,6 +96,13 @@ type gormUserRepository struct {
 // NewUserRepository 创建用户仓储；传入的数据库连接由平台层统一管理。
 func NewUserRepository(db *gorm.DB) UserRepository {
 	return &gormUserRepository{db: db}
+}
+
+// WithAuditTransaction 确保用户、项目权限和审计日志在同一事务中提交或回滚。
+func (r *gormUserRepository) WithAuditTransaction(ctx context.Context, operation func(UserRepository, audit.Recorder) error) error {
+	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		return operation(&gormUserRepository{db: tx}, audit.NewRepository(tx))
+	})
 }
 
 // Create 写入新用户，由数据库唯一索引保证用户名在全局范围内唯一。

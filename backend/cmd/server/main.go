@@ -9,6 +9,7 @@ import (
 	"syscall"
 
 	aliyuncollector "cmdb/internal/aliyun"
+	"cmdb/internal/audit"
 	awscollector "cmdb/internal/aws"
 	"cmdb/internal/platform/config"
 	"cmdb/internal/platform/database"
@@ -36,7 +37,8 @@ func main() {
 		cloudresource.ProviderAliyun: aliyuncollector.NewCollector(),
 		cloudresource.ProviderAWS:    awscollector.NewCollector(),
 	}
-	resourceService := cloudresource.NewService(cloudresource.NewRepository(db), cloudresource.NewCredentialCipher(configuration.EncryptionKey))
+	// 调度器与 HTTP 操作共享统一审计仓储，人工同步保留操作者，定时同步保持系统任务语义。
+	resourceService := cloudresource.NewService(cloudresource.NewRepository(db), cloudresource.NewCredentialCipher(configuration.EncryptionKey), audit.NewRepository(db))
 	// 调度器和 HTTP 必须共享同一服务实例，才能统一执行同源互斥与生命周期规则。
 	schedulerContext, stopScheduler := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stopScheduler()

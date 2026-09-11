@@ -20,6 +20,8 @@ const routes: RouteRecordRaw[] = [
       { path: 'projects/:projectId', name: 'ProjectDetail', component: () => import('@/modules/project/ProjectDetailPage.vue'), meta: { title: '项目详情' } },
       { path: 'users', name: 'UserManagement', component: () => import('@/modules/user/UserManagementPage.vue'), meta: { title: '用户管理', requiresSystemAdmin: true } },
       { path: 'cloud-sync', name: 'CloudSyncManagement', component: () => import('@/modules/resource/CloudSyncManagementPage.vue'), meta: { title: '云同步管理', requiresProjectAdmin: true } },
+	  // 审计入口与项目管理使用同一角色边界；系统管理员可在所有项目上下文查看全局记录。
+	  { path: 'audit-logs', name: 'AuditLogs', component: () => import('@/modules/audit/AuditLogPage.vue'), meta: { title: '审计日志', requiresProjectAdmin: true } },
       // 保留旧书签的可达性，平台入口统一迁移到云同步管理。
       { path: 'aliyun', name: 'LegacyAliyunResources', redirect: '/cloud-sync?provider=aliyun' },
       { path: 'aws', name: 'LegacyAWSResources', redirect: '/cloud-sync?provider=aws' },

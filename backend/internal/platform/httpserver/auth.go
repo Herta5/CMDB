@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"strings"
 
+	"cmdb/internal/audit"
 	"cmdb/internal/identity"
 	"github.com/gin-gonic/gin"
 	"github.com/golang-jwt/jwt/v5"
@@ -56,6 +57,8 @@ func (a *Authenticator) RequireUser() gin.HandlerFunc {
 		// 停用和删除已由身份服务拒绝；所有下游项目接口只消费数据库当前全局角色。
 		claims.GlobalRole = user.GlobalRole
 		c.Set(identity.UserClaimsContextKey, claims)
+		// 只有完成实时账户校验的请求才能写入操作者审计上下文，令牌和用户资料不进入其中。
+		c.Request = c.Request.WithContext(audit.WithActorProfile(c.Request.Context(), claims.UserID, c.ClientIP(), user.Username, user.DisplayName))
 		c.Next()
 	}
 }
