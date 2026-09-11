@@ -12,6 +12,14 @@ import (
 	"github.com/aliyun/alibaba-cloud-sdk-go/services/slb"
 )
 
+// TestNewCollectorImplementsProviderAdapter 防止阿里云构造器返回的采集器失去资源核心要求的平台适配器能力。
+func TestNewCollectorImplementsProviderAdapter(t *testing.T) {
+	var adapter resource.ProviderAdapter = NewCollector()
+	if adapter == nil {
+		t.Fatal("阿里云构造器必须返回可接入资源核心的平台适配器")
+	}
+}
+
 type ecsProbeStub struct{ request *ecs.DescribeInstancesRequest }
 
 func (s *ecsProbeStub) DescribeInstances(request *ecs.DescribeInstancesRequest) (*ecs.DescribeInstancesResponse, error) {
