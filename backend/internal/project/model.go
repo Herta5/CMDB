@@ -26,7 +26,7 @@ type Project struct {
 	Name        string         `gorm:"column:name;size:128;not null" json:"name"`
 	Description string         `gorm:"column:description;size:500;not null" json:"description"`
 	Status      string         `gorm:"column:status;size:32;not null" json:"status"`
-	OwnerUserID *uint64        `gorm:"column:owner_user_id" json:"owner_user_id"`
+	OwnerUserID *uint64        `gorm:"column:owner_user_id" json:"-"`
 	OwnerUser   *identity.User `gorm:"foreignKey:OwnerUserID;constraint:OnDelete:SET NULL" json:"-"`
 	CreatedAt   time.Time      `gorm:"column:created_at;not null" json:"created_at"`
 	UpdatedAt   time.Time      `gorm:"column:updated_at;not null" json:"updated_at"`
@@ -43,7 +43,7 @@ func (Project) TableName() string {
 type MemberRole struct {
 	ID        uint64         `gorm:"column:id;primaryKey;autoIncrement" json:"id"`
 	ProjectID uint64         `gorm:"column:project_id;not null;uniqueIndex:uk_project_members_project_user" json:"project_id"`
-	UserID    uint64         `gorm:"column:user_id;not null;uniqueIndex:uk_project_members_project_user" json:"user_id"`
+	UserID    uint64         `gorm:"column:user_id;not null;uniqueIndex:uk_project_members_project_user" json:"-"`
 	Role      string         `gorm:"column:role;size:32;not null" json:"role"`
 	Project   *Project       `gorm:"foreignKey:ProjectID;constraint:OnDelete:CASCADE" json:"-"`
 	User      *identity.User `gorm:"foreignKey:UserID;constraint:OnDelete:CASCADE" json:"-"`

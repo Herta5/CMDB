@@ -161,6 +161,79 @@ func TestProjectHTTPListsOnlyCurrentUserMembership(t *testing.T) {
 	}
 }
 
+// TestProjectOwnerUsesUsername 验证负责人解析、清空和读取均只公开用户名。
+func TestProjectOwnerUsesUsername(t *testing.T) {
+	server, db := newProjectHTTPServerWithDatabase(t)
+	createProjectUser(t, db, 7)
+	created := createProjectResponse(t, server, `{"code":"owner","name":"负责人项目","owner_username":"member_7"}`)
+	var payload map[string]any
+	if err := json.Unmarshal(created.Body.Bytes(), &payload); err != nil || created.Code != http.StatusCreated || payload["owner_username"] != "member_7" {
+		t.Fatalf("创建项目必须返回负责人用户名：%s", created.Body.String())
+	}
+	if _, exists := payload["owner_user_id"]; exists {
+		t.Fatal("项目不得暴露负责人内部 ID")
+	}
+	id := uint64(payload["id"].(float64))
+	var persisted project.Project
+	if err := db.First(&persisted, id).Error; err != nil || persisted.OwnerUserID == nil || *persisted.OwnerUserID != 7 {
+		t.Fatal("负责人用户名必须解析为内部关联")
+	}
+	for _, path := range []string{"/api/v1/projects", "/api/v1/projects/" + strconv.FormatUint(id, 10)} {
+		request := httptest.NewRequest(http.MethodGet, path, nil)
+		request.Header.Set("Authorization", "Bearer "+projectTestToken(t, 1, identity.GlobalRoleSystemAdmin))
+		response := httptest.NewRecorder()
+		server.ServeHTTP(response, request)
+		if response.Code != http.StatusOK || !bytes.Contains(response.Body.Bytes(), []byte(`"owner_username":"member_7"`)) || bytes.Contains(response.Body.Bytes(), []byte(`"owner_user_id"`)) {
+			t.Fatalf("读取项目必须返回负责人用户名：%s", response.Body.String())
+		}
+	}
+	for _, owner := range []string{`"project_admin"`, `null`} {
+		request := httptest.NewRequest(http.MethodPut, "/api/v1/projects/"+strconv.FormatUint(id, 10), bytes.NewBufferString(`{"name":"负责人项目","status":"enabled","owner_username":`+owner+`}`))
+		request.Header.Set("Content-Type", "application/json")
+		request.Header.Set("Authorization", "Bearer "+projectTestToken(t, 1, identity.GlobalRoleSystemAdmin))
+		response := httptest.NewRecorder()
+		server.ServeHTTP(response, request)
+		if response.Code != http.StatusOK || !bytes.Contains(response.Body.Bytes(), []byte(`"owner_username":`+owner)) || bytes.Contains(response.Body.Bytes(), []byte(`"owner_user_id"`)) {
+			t.Fatalf("负责人更新或清空失败：%s", response.Body.String())
+		}
+	}
+	for _, owner := range []string{`"missing_user"`, `"invalid-name"`} {
+		request := httptest.NewRequest(http.MethodPut, "/api/v1/projects/"+strconv.FormatUint(id, 10), bytes.NewBufferString(`{"name":"错误更新","status":"enabled","owner_username":`+owner+`}`))
+		request.Header.Set("Content-Type", "application/json")
+		request.Header.Set("Authorization", "Bearer "+projectTestToken(t, 1, identity.GlobalRoleSystemAdmin))
+		response := httptest.NewRecorder()
+		server.ServeHTTP(response, request)
+		if response.Code != http.StatusBadRequest {
+			t.Fatalf("无效负责人更新必须失败：%s", response.Body.String())
+		}
+	}
+	if err := db.First(&persisted, id).Error; err != nil || persisted.Name != "负责人项目" || persisted.OwnerUserID != nil {
+		t.Fatal("负责人清空必须持久化，无效更新不得改变项目")
+	}
+	var logs []audit.Log
+	if err := db.Where("project_id = ?", id).Order("id ASC").Find(&logs).Error; err != nil || len(logs) != 3 {
+		t.Fatal("负责人变更应产生三条成功审计")
+	}
+	if !bytes.Contains(logs[0].Detail, []byte(`"owner_username":"member_7"`)) || !bytes.Contains(logs[1].Detail, []byte(`"previous_owner_username":"member_7"`)) || !bytes.Contains(logs[1].Detail, []byte(`"owner_username":"project_admin"`)) {
+		t.Fatal("负责人审计必须保留用户名变化")
+	}
+}
+
+// TestProjectOwnerRejectsUnknownAndLegacyInput 防止不存在的负责人和旧 ID 请求被静默接受。
+func TestProjectOwnerRejectsUnknownAndLegacyInput(t *testing.T) {
+	for _, test := range []struct{ name, body, code string }{
+		{"负责人不存在", `{"code":"owner","name":"项目","owner_username":"missing_user"}`, "PROJECT_OWNER_NOT_FOUND"},
+		{"旧负责人字段", `{"code":"owner","name":"项目","owner_user_id":1}`, "PROJECT_INVALID_REQUEST"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			response := createProjectResponse(t, newProjectHTTPServer(t), test.body)
+			if response.Code != http.StatusBadRequest || !bytes.Contains(response.Body.Bytes(), []byte(test.code)) {
+				t.Fatalf("无效负责人必须被拒绝：%s", response.Body.String())
+			}
+		})
+	}
+}
+
 // createdProject 是创建项目接口测试中需要继续操作的最小公开资料。
 type createdProject struct {
 	ID uint64 `json:"id"`

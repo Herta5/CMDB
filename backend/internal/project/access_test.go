@@ -48,22 +48,28 @@ func TestProjectAdminManagesMembers(t *testing.T) {
 	admin := createProjectMember(t, db, managedProject.ID, 7, project.MemberRoleProjectAdmin)
 	createProjectUser(t, db, 8)
 
-	created := requestProjectMember(t, server, http.MethodPost, managedProject.ID, "", `{"user_id":8,"role":"member"}`, admin.ID, identity.GlobalRoleUser)
+	created := requestProjectMember(t, server, http.MethodPost, managedProject.ID, "", `{"username":"member_8","role":"member"}`, admin.ID, identity.GlobalRoleUser)
 	if created.Code != http.StatusCreated || created.Body.String() == "" {
 		t.Fatalf("项目管理员新增成员失败：status=%d body=%s", created.Code, created.Body.String())
 	}
+	if !bytes.Contains(created.Body.Bytes(), []byte(`"username":"member_8"`)) || bytes.Contains(created.Body.Bytes(), []byte(`"id"`)) || bytes.Contains(created.Body.Bytes(), []byte(`"user_id"`)) {
+		t.Fatalf("新增成员只应公开用户名身份：%s", created.Body.String())
+	}
 
 	listed := requestProjectMember(t, server, http.MethodGet, managedProject.ID, "", "", admin.ID, identity.GlobalRoleUser)
-	if listed.Code != http.StatusOK || !bytes.Contains(listed.Body.Bytes(), []byte(`"user_id":8`)) {
+	if listed.Code != http.StatusOK || !bytes.Contains(listed.Body.Bytes(), []byte(`"username":"member_8"`)) {
 		t.Fatalf("项目管理员必须能查看成员：status=%d body=%s", listed.Code, listed.Body.String())
 	}
 
-	updated := requestProjectMember(t, server, http.MethodPut, managedProject.ID, "/8", `{"role":"member"}`, admin.ID, identity.GlobalRoleUser)
+	updated := requestProjectMember(t, server, http.MethodPut, managedProject.ID, "/member_8", `{"role":"member"}`, admin.ID, identity.GlobalRoleUser)
 	if updated.Code != http.StatusOK || !bytes.Contains(updated.Body.Bytes(), []byte(`"role":"member"`)) {
 		t.Fatalf("项目管理员修改成员角色失败：status=%d body=%s", updated.Code, updated.Body.String())
 	}
+	if !bytes.Contains(updated.Body.Bytes(), []byte(`"username":"member_8"`)) || bytes.Contains(updated.Body.Bytes(), []byte(`"id"`)) || bytes.Contains(updated.Body.Bytes(), []byte(`"user_id"`)) {
+		t.Fatalf("更新成员只应公开用户名身份：%s", updated.Body.String())
+	}
 
-	deleted := requestProjectMember(t, server, http.MethodDelete, managedProject.ID, "/8", "", admin.ID, identity.GlobalRoleUser)
+	deleted := requestProjectMember(t, server, http.MethodDelete, managedProject.ID, "/member_8", "", admin.ID, identity.GlobalRoleUser)
 	if deleted.Code != http.StatusNoContent {
 		t.Fatalf("项目管理员移除成员失败：status=%d body=%s", deleted.Code, deleted.Body.String())
 	}
@@ -79,7 +85,7 @@ func TestProjectAdminCannotRemoveSelf(t *testing.T) {
 	managedProject := createProjectThroughHTTP(t, server, `{"code":"platform","name":"平台项目"}`)
 	admin := createProjectMember(t, db, managedProject.ID, 7, project.MemberRoleProjectAdmin)
 
-	response := requestProjectMember(t, server, http.MethodDelete, managedProject.ID, "/7", "", admin.ID, identity.GlobalRoleUser)
+	response := requestProjectMember(t, server, http.MethodDelete, managedProject.ID, "/member_7", "", admin.ID, identity.GlobalRoleUser)
 	if response.Code != http.StatusConflict || response.Body.String() != `{"code":"PROJECT_MEMBER_SELF_REMOVE","message":"项目管理员不能移除自己"}` {
 		t.Fatalf("项目管理员自我移除必须被拒绝：status=%d body=%s", response.Code, response.Body.String())
 	}
@@ -96,7 +102,7 @@ func TestProjectMemberCannotManageMembers(t *testing.T) {
 	member := createProjectMember(t, db, managedProject.ID, 7, project.MemberRoleMember)
 	createProjectUser(t, db, 8)
 
-	response := requestProjectMember(t, server, http.MethodPost, managedProject.ID, "", `{"user_id":8,"role":"member"}`, member.ID, identity.GlobalRoleUser)
+	response := requestProjectMember(t, server, http.MethodPost, managedProject.ID, "", `{"username":"member_8","role":"member"}`, member.ID, identity.GlobalRoleUser)
 	if response.Code != http.StatusNotFound || response.Body.String() != `{"code":"PROJECT_NOT_FOUND","message":"项目不存在"}` {
 		t.Fatalf("项目成员管理权限必须隐藏项目存在性：status=%d body=%s", response.Code, response.Body.String())
 	}
@@ -112,7 +118,7 @@ func TestMemberCannotEscalateOwnRole(t *testing.T) {
 	managedProject := createProjectThroughHTTP(t, server, `{"code":"platform","name":"平台项目"}`)
 	member := createProjectMember(t, db, managedProject.ID, 7, project.MemberRoleMember)
 
-	response := requestProjectMember(t, server, http.MethodPut, managedProject.ID, "/7", `{"role":"project_admin"}`, member.ID, identity.GlobalRoleUser)
+	response := requestProjectMember(t, server, http.MethodPut, managedProject.ID, "/member_7", `{"role":"project_admin"}`, member.ID, identity.GlobalRoleUser)
 	if response.Code != http.StatusNotFound || response.Body.String() != `{"code":"PROJECT_NOT_FOUND","message":"项目不存在"}` {
 		t.Fatalf("普通成员不得提升自己的项目角色：status=%d body=%s", response.Code, response.Body.String())
 	}
@@ -133,7 +139,7 @@ func TestProjectAdminCannotWriteAnotherProjectMembers(t *testing.T) {
 	admin := createProjectMember(t, db, projectA.ID, 7, project.MemberRoleProjectAdmin)
 	createProjectUser(t, db, 8)
 
-	response := requestProjectMember(t, server, http.MethodPost, projectB.ID, "", `{"user_id":8,"role":"member"}`, admin.ID, identity.GlobalRoleUser)
+	response := requestProjectMember(t, server, http.MethodPost, projectB.ID, "", `{"username":"member_8","role":"member"}`, admin.ID, identity.GlobalRoleUser)
 	if response.Code != http.StatusNotFound || response.Body.String() != `{"code":"PROJECT_NOT_FOUND","message":"项目不存在"}` {
 		t.Fatalf("跨项目成员写入必须隐藏目标存在性：status=%d body=%s", response.Code, response.Body.String())
 	}
@@ -150,13 +156,64 @@ func TestProjectAdminRejectsInvalidMemberRole(t *testing.T) {
 	admin := createProjectMember(t, db, managedProject.ID, 7, project.MemberRoleProjectAdmin)
 	createProjectUser(t, db, 8)
 
-	response := requestProjectMember(t, server, http.MethodPost, managedProject.ID, "", `{"user_id":8,"role":"viewer"}`, admin.ID, identity.GlobalRoleUser)
+	response := requestProjectMember(t, server, http.MethodPost, managedProject.ID, "", `{"username":"member_8","role":"viewer"}`, admin.ID, identity.GlobalRoleUser)
 	if response.Code != http.StatusBadRequest || response.Body.String() != `{"code":"PROJECT_MEMBER_INVALID_INPUT","message":"项目成员参数无效"}` {
 		t.Fatalf("非法成员角色必须被稳定拒绝：status=%d body=%s", response.Code, response.Body.String())
 	}
 	var created int64
 	if err := db.Model(&project.MemberRole{}).Where("project_id = ? AND user_id = ?", managedProject.ID, 8).Count(&created).Error; err != nil || created != 0 {
 		t.Fatalf("非法成员角色不得创建关系：count=%d err=%v", created, err)
+	}
+}
+
+// TestMemberUsernameContract 验证成员用户名契约及旧数字 ID 不会误操作其他用户。
+func TestMemberUsernameContract(t *testing.T) {
+	server, db := newProjectHTTPServerWithDatabase(t)
+	target := createProjectThroughHTTP(t, server, `{"code":"members","name":"成员项目"}`)
+	createProjectMember(t, db, target.ID, 8, project.MemberRoleMember)
+	for _, method := range []string{http.MethodPut, http.MethodDelete} {
+		response := requestProjectMember(t, server, method, target.ID, "/8", `{"role":"project_admin"}`, 1, identity.GlobalRoleSystemAdmin)
+		if response.Code != http.StatusNotFound {
+			t.Fatalf("数字路径不得作为内部用户 ID：status=%d body=%s", response.Code, response.Body.String())
+		}
+	}
+	for _, path := range []string{"/members", "/member-candidates"} {
+		request := httptest.NewRequest(http.MethodGet, "/api/v1/projects/"+strconv.FormatUint(target.ID, 10)+path, nil)
+		request.Header.Set("Authorization", "Bearer "+projectTestToken(t, 1, identity.GlobalRoleSystemAdmin))
+		response := httptest.NewRecorder()
+		server.ServeHTTP(response, request)
+		if response.Code != http.StatusOK || !bytes.Contains(response.Body.Bytes(), []byte(`"username":"member_8"`)) || bytes.Contains(response.Body.Bytes(), []byte(`"id"`)) || bytes.Contains(response.Body.Bytes(), []byte(`"user_id"`)) {
+			t.Fatalf("成员和候选列表只能以用户名标识：%s", response.Body.String())
+		}
+	}
+	response := requestProjectMember(t, server, http.MethodPost, target.ID, "", `{"username":"missing_user","role":"member"}`, 1, identity.GlobalRoleSystemAdmin)
+	if response.Code != http.StatusNotFound || response.Body.String() != `{"code":"PROJECT_MEMBER_NOT_FOUND","message":"项目成员不存在"}` {
+		t.Fatalf("不存在的成员用户名必须返回稳定错误：%s", response.Body.String())
+	}
+	response = requestProjectMember(t, server, http.MethodPost, target.ID, "", `{"username":"member_8","user_id":8,"role":"member"}`, 1, identity.GlobalRoleSystemAdmin)
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("成员请求不得接收旧用户 ID：%s", response.Body.String())
+	}
+	// 纯数字用户名合法，必须准确修改它自己的成员关系，不能误伤 ID 相同的其他用户。
+	numericUser := identity.User{ID: 9, Username: "8", DisplayName: "数字用户名", GlobalRole: identity.GlobalRoleUser, Status: "active"}
+	if err := db.Create(&numericUser).Error; err != nil {
+		t.Fatal("准备数字用户名失败")
+	}
+	response = requestProjectMember(t, server, http.MethodPost, target.ID, "", `{"username":"8","role":"member"}`, 1, identity.GlobalRoleSystemAdmin)
+	if response.Code != http.StatusCreated {
+		t.Fatalf("数字用户名应可添加成员：%s", response.Body.String())
+	}
+	response = requestProjectMember(t, server, http.MethodPut, target.ID, "/8", `{"role":"project_admin"}`, 1, identity.GlobalRoleSystemAdmin)
+	if response.Code != http.StatusOK || !bytes.Contains(response.Body.Bytes(), []byte(`"username":"8"`)) {
+		t.Fatalf("数字路径应按用户名更新：%s", response.Body.String())
+	}
+	response = requestProjectMember(t, server, http.MethodDelete, target.ID, "/8", "", 1, identity.GlobalRoleSystemAdmin)
+	if response.Code != http.StatusNoContent {
+		t.Fatalf("数字路径应按用户名删除：%s", response.Body.String())
+	}
+	var remaining project.MemberRole
+	if err := db.Where("project_id = ? AND user_id = ?", target.ID, 8).First(&remaining).Error; err != nil || remaining.Role != project.MemberRoleMember {
+		t.Fatal("数字用户名操作不得改变内部 ID 同值的其他用户")
 	}
 }
 

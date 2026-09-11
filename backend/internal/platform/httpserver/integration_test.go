@@ -35,8 +35,8 @@ func TestAuditQueryPermissionsAndProjectIsolation(t *testing.T) {
 	decodeIntegration(t, integrationRequest(t, server, admin, http.MethodPost, "/api/v1/projects", map[string]any{"code": "audit-a", "name": "审计项目甲"}, http.StatusCreated), &firstProject)
 	decodeIntegration(t, integrationRequest(t, server, admin, http.MethodPost, "/api/v1/projects", map[string]any{"code": "audit-b", "name": "审计项目乙"}, http.StatusCreated), &secondProject)
 	firstPath := "/api/v1/projects/" + strconv.FormatUint(firstProject.ID, 10)
-	integrationRequest(t, server, admin, http.MethodPost, firstPath+"/members", map[string]any{"user_id": 2, "role": "project_admin"}, http.StatusCreated)
-	integrationRequest(t, server, admin, http.MethodPost, firstPath+"/members", map[string]any{"user_id": 3, "role": "member"}, http.StatusCreated)
+	integrationRequest(t, server, admin, http.MethodPost, firstPath+"/members", map[string]any{"username": "member_a", "role": "project_admin"}, http.StatusCreated)
+	integrationRequest(t, server, admin, http.MethodPost, firstPath+"/members", map[string]any{"username": "member_b", "role": "member"}, http.StatusCreated)
 	if err := db.Create(&[]audit.Log{
 		{ProjectID: &firstProject.ID, Action: audit.ActionProjectUpdated, ResourceType: "project", ResourceID: strconv.FormatUint(firstProject.ID, 10), Detail: json.RawMessage(`{}`)},
 		{ProjectID: &secondProject.ID, Action: audit.ActionProjectUpdated, ResourceType: "project", ResourceID: strconv.FormatUint(secondProject.ID, 10), Detail: json.RawMessage(`{}`)},
@@ -85,9 +85,9 @@ func TestManagementMutationsWriteActorAudit(t *testing.T) {
 	userPath := "/api/v1/users/" + managedUser.Username
 	integrationRequest(t, server, admin, http.MethodPut, userPath, map[string]any{"display_name": "审计用户新版", "email": "audit@example.invalid", "global_role": "user", "status": "active", "password": "another-never-persist-password", "project_permissions": []any{}}, http.StatusOK)
 	integrationRequest(t, server, admin, http.MethodPut, userPath+"/status", map[string]any{"status": "disabled"}, http.StatusOK)
-	integrationRequest(t, server, admin, http.MethodPost, projectPath+"/members", map[string]any{"user_id": managedUser.ID, "role": "member"}, http.StatusCreated)
-	integrationRequest(t, server, admin, http.MethodPut, projectPath+"/members/"+strconv.FormatUint(managedUser.ID, 10), map[string]any{"role": "project_admin"}, http.StatusOK)
-	integrationRequest(t, server, admin, http.MethodDelete, projectPath+"/members/"+strconv.FormatUint(managedUser.ID, 10), nil, http.StatusNoContent)
+	integrationRequest(t, server, admin, http.MethodPost, projectPath+"/members", map[string]any{"username": managedUser.Username, "role": "member"}, http.StatusCreated)
+	integrationRequest(t, server, admin, http.MethodPut, projectPath+"/members/"+managedUser.Username, map[string]any{"role": "project_admin"}, http.StatusOK)
+	integrationRequest(t, server, admin, http.MethodDelete, projectPath+"/members/"+managedUser.Username, nil, http.StatusNoContent)
 	integrationRequest(t, server, admin, http.MethodDelete, projectPath, nil, http.StatusNoContent)
 
 	expectedActions := []string{
@@ -104,6 +104,12 @@ func TestManagementMutationsWriteActorAudit(t *testing.T) {
 			t.Fatalf("人工管理审计必须记录真实操作者和来源 IP：action=%s value=%+v", action, value)
 		}
 		encoded := string(value.Detail)
+		if strings.Contains(encoded, "user_id") {
+			t.Fatalf("项目与成员审计不得记录用户数字 ID：%s", encoded)
+		}
+		if value.ResourceType == "project_member" && (value.ResourceID != "audit_user" || !strings.Contains(encoded, `"target_username":"audit_user"`)) {
+			t.Fatalf("成员审计必须以用户名标识目标：%+v", value)
+		}
 		if strings.Contains(encoded, "never-persist") || strings.Contains(encoded, "password") {
 			t.Fatalf("管理审计不得保存密码或密码字段：action=%s detail=%s", action, encoded)
 		}
@@ -151,7 +157,7 @@ func TestProjectBoundaryEndToEnd(t *testing.T) {
 	decodeIntegration(t, second, &secondProject)
 	firstPath := "/api/v1/projects/" + strconv.FormatUint(firstProject.ID, 10)
 	secondPath := "/api/v1/projects/" + strconv.FormatUint(secondProject.ID, 10)
-	integrationRequest(t, server, admin, "POST", firstPath+"/members", map[string]any{"user_id": 2, "role": "member"}, 201)
+	integrationRequest(t, server, admin, "POST", firstPath+"/members", map[string]any{"username": "member_a", "role": "member"}, 201)
 
 	var me map[string]any
 	decodeIntegration(t, integrationRequest(t, server, member, "GET", "/api/v1/me", nil, 200), &me)
@@ -173,7 +179,7 @@ func TestProjectBoundaryEndToEnd(t *testing.T) {
 		}
 	}
 	integrationRequest(t, server, member, "GET", secondPath+"/members", nil, 404)
-	integrationRequest(t, server, member, "POST", firstPath+"/members", map[string]any{"user_id": 3, "role": "member"}, 404)
+	integrationRequest(t, server, member, "POST", firstPath+"/members", map[string]any{"username": "member_b", "role": "member"}, 404)
 	integrationRequest(t, server, "", "GET", firstPath, nil, 401)
 	var unchanged project.Project
 	decodeIntegration(t, integrationRequest(t, server, admin, "GET", secondPath, nil, 200), &unchanged)
@@ -182,7 +188,7 @@ func TestProjectBoundaryEndToEnd(t *testing.T) {
 	}
 
 	// 移除成员后继续使用原 JWT，权限必须立即反映数据库中的当前成员关系。
-	integrationRequest(t, server, admin, "DELETE", firstPath+"/members/2", nil, 204)
+	integrationRequest(t, server, admin, "DELETE", firstPath+"/members/member_a", nil, 204)
 	integrationRequest(t, server, member, "GET", firstPath, nil, 404)
 	decodeIntegration(t, integrationRequest(t, server, member, "GET", "/api/v1/projects", nil, 200), &projects)
 	if len(projects) != 0 {
@@ -357,21 +363,20 @@ func TestProjectAdministratorReadsCandidatesAndManagesMemberRoles(t *testing.T) 
 	var created project.Project
 	decodeIntegration(t, integrationRequest(t, server, admin, http.MethodPost, "/api/v1/projects", map[string]any{"code": "members", "name": "成员项目"}, http.StatusCreated), &created)
 	path := "/api/v1/projects/" + strconv.FormatUint(created.ID, 10)
-	integrationRequest(t, server, admin, http.MethodPost, path+"/members", map[string]any{"user_id": 2, "role": "project_admin"}, http.StatusCreated)
+	integrationRequest(t, server, admin, http.MethodPost, path+"/members", map[string]any{"username": "member_a", "role": "project_admin"}, http.StatusCreated)
 	candidates := integrationRequest(t, server, member, http.MethodGet, path+"/member-candidates", nil, http.StatusOK)
-	if strings.Contains(candidates.Body.String(), "email") || strings.Contains(candidates.Body.String(), "password") {
+	if strings.Contains(candidates.Body.String(), "email") || strings.Contains(candidates.Body.String(), "password") || strings.Contains(candidates.Body.String(), `"id"`) || strings.Contains(candidates.Body.String(), `"user_id"`) {
 		t.Fatal("成员候选接口不得暴露邮箱或认证字段")
 	}
 	var values []struct {
-		ID       uint64 `json:"id"`
 		Username string `json:"username"`
 	}
 	decodeIntegration(t, candidates, &values)
-	if len(values) != 2 || values[0].ID == 0 || values[0].Username == "" {
+	if len(values) != 2 || values[0].Username != "member_a" || values[1].Username != "operator" {
 		t.Fatal("项目管理员必须能读取可添加用户的最小公开身份")
 	}
 	members := integrationRequest(t, server, member, http.MethodGet, path+"/members", nil, http.StatusOK)
-	if !strings.Contains(members.Body.String(), "member_a") || strings.Contains(members.Body.String(), "password") {
+	if !strings.Contains(members.Body.String(), "member_a") || strings.Contains(members.Body.String(), "password") || strings.Contains(members.Body.String(), `"id"`) || strings.Contains(members.Body.String(), `"user_id"`) {
 		t.Fatal("成员列表必须包含公开用户名且不得包含认证字段")
 	}
 }
@@ -384,7 +389,7 @@ func TestProjectSourceAPINeverReturnsCredentials(t *testing.T) {
 	var created project.Project
 	decodeIntegration(t, integrationRequest(t, server, admin, http.MethodPost, "/api/v1/projects", map[string]any{"code": "sources", "name": "接入项目"}, http.StatusCreated), &created)
 	path := "/api/v1/projects/" + strconv.FormatUint(created.ID, 10)
-	integrationRequest(t, server, admin, http.MethodPost, path+"/members", map[string]any{"user_id": 2, "role": "member"}, http.StatusCreated)
+	integrationRequest(t, server, admin, http.MethodPost, path+"/members", map[string]any{"username": "member_a", "role": "member"}, http.StatusCreated)
 	response := integrationRequest(t, server, admin, http.MethodPost, path+"/sources", map[string]any{"provider": "aws", "name": "AWS 生产账号", "region": "cn-north-1", "credential": map[string]any{"access_key_id": "example-id", "secret_access_key": "example-secret"}}, http.StatusCreated)
 	if strings.Contains(response.Body.String(), "example") || strings.Contains(response.Body.String(), "encrypted") {
 		t.Fatal("接入源响应不得暴露凭证明文或密文字段")

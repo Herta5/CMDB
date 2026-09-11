@@ -83,22 +83,22 @@ func TestProjectMemberMutationsRollBackWhenAuditWriteFails(t *testing.T) {
 				t.Fatalf("准备项目失败：%v", err)
 			}
 			userID := uint64(7)
-			if err := db.Create(&identity.User{ID: userID, Username: "member-" + operation, PasswordHash: "test-hash", DisplayName: "成员用户", GlobalRole: identity.GlobalRoleUser, Status: "active"}).Error; err != nil {
+			if err := db.Create(&identity.User{ID: userID, Username: "member_user", PasswordHash: "test-hash", DisplayName: "成员用户", GlobalRole: identity.GlobalRoleUser, Status: "active"}).Error; err != nil {
 				t.Fatalf("准备成员用户失败：%v", err)
 			}
 			if operation != "新增" {
-				if _, err := setup.AddMember(context.Background(), project.ID, userID, MemberRoleMember); err != nil {
+				if _, err := setup.AddMember(context.Background(), project.ID, "member_user", MemberRoleMember); err != nil {
 					t.Fatalf("准备成员关系失败：%v", err)
 				}
 			}
 			service := NewService(NewRepository(db), audit.NewRepository(db))
 			switch operation {
 			case "新增":
-				_, err = service.AddMember(context.Background(), project.ID, userID, MemberRoleMember)
+				_, err = service.AddMember(context.Background(), project.ID, "member_user", MemberRoleMember)
 			case "改角":
-				_, err = service.UpdateMemberRole(context.Background(), project.ID, userID, MemberRoleProjectAdmin)
+				_, err = service.UpdateMemberRole(context.Background(), project.ID, "member_user", MemberRoleProjectAdmin)
 			case "移除":
-				err = service.RemoveMember(context.Background(), project.ID, userID)
+				err = service.RemoveMember(context.Background(), project.ID, "member_user")
 			}
 			if err == nil {
 				t.Fatalf("审计写入失败时成员%s必须返回错误", operation)
@@ -121,7 +121,7 @@ func TestProjectMemberMutationsRollBackWhenAuditWriteFails(t *testing.T) {
 // TestCreateProjectAllowsEmptyOwnerAndRejectsDuplicateCode 防止未指定负责人时创建失败，或重复项目编码绕过全局唯一边界。
 func TestCreateProjectAllowsEmptyOwnerAndRejectsDuplicateCode(t *testing.T) {
 	service := newProjectService(t)
-	input := CreateInput{Name: "云平台", Code: "cloud", OwnerUserID: nil}
+	input := CreateInput{Name: "云平台", Code: "cloud", OwnerUsername: nil}
 
 	created, err := service.Create(context.Background(), input)
 	if err != nil {
@@ -148,10 +148,10 @@ func TestUpdateProjectPreservesCodeAndValidatesStatus(t *testing.T) {
 	}
 
 	updated, err := service.Update(context.Background(), created.ID, UpdateInput{
-		Name:        "云资源平台",
-		Description: "托管公有云资源",
-		Status:      ProjectStatusDisabled,
-		OwnerUserID: nil,
+		Name:          "云资源平台",
+		Description:   "托管公有云资源",
+		Status:        ProjectStatusDisabled,
+		OwnerUsername: nil,
 	})
 	if err != nil {
 		t.Fatalf("更新项目失败：%v", err)
@@ -209,15 +209,15 @@ func TestUpdateMemberRoleReturnsPersistedMember(t *testing.T) {
 	if err != nil {
 		t.Fatalf("准备项目失败：%v", err)
 	}
-	if err := db.Create(&identity.User{ID: 7, Username: "member-update", PasswordHash: "test-hash", DisplayName: "待更新成员", GlobalRole: identity.GlobalRoleUser, Status: "active"}).Error; err != nil {
+	if err := db.Create(&identity.User{ID: 7, Username: "member_update", PasswordHash: "test-hash", DisplayName: "待更新成员", GlobalRole: identity.GlobalRoleUser, Status: "active"}).Error; err != nil {
 		t.Fatalf("准备成员用户失败：%v", err)
 	}
-	createdMember, err := service.AddMember(context.Background(), createdProject.ID, 7, MemberRoleMember)
+	createdMember, err := service.AddMember(context.Background(), createdProject.ID, "member_update", MemberRoleMember)
 	if err != nil {
 		t.Fatalf("准备成员关系失败：%v", err)
 	}
 
-	updatedMember, err := service.UpdateMemberRole(context.Background(), createdProject.ID, 7, MemberRoleProjectAdmin)
+	updatedMember, err := service.UpdateMemberRole(context.Background(), createdProject.ID, "member_update", MemberRoleProjectAdmin)
 	if err != nil {
 		t.Fatalf("更新成员角色失败：%v", err)
 	}

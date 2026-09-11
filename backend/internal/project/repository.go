@@ -19,6 +19,7 @@ type Repository interface {
 	Delete(ctx context.Context, id uint64) error
 	List(ctx context.Context) ([]Project, error)
 	ListForUser(ctx context.Context, userID uint64) ([]Project, error)
+	FindUserByUsername(ctx context.Context, username string) (*identity.User, error)
 	FindMemberRole(ctx context.Context, projectID, userID uint64) (*MemberRole, error)
 	ListMembers(ctx context.Context, projectID uint64) ([]MemberRole, error)
 	ListMemberCandidates(ctx context.Context) ([]identity.User, error)
@@ -51,13 +52,13 @@ func (r *gormRepository) WithAuditTransaction(ctx context.Context, operation fun
 
 // Create 写入项目，数据库唯一索引用于并发场景下最终保障项目编码唯一。
 func (r *gormRepository) Create(ctx context.Context, project *Project) error {
-	return r.db.WithContext(ctx).Create(project).Error
+	return r.db.WithContext(ctx).Omit("OwnerUser").Create(project).Error
 }
 
 // FindByID 按项目主键查询，调用方负责将未找到转换为项目领域错误。
 func (r *gormRepository) FindByID(ctx context.Context, id uint64) (*Project, error) {
 	var project Project
-	if err := r.db.WithContext(ctx).First(&project, id).Error; err != nil {
+	if err := r.db.WithContext(ctx).Preload("OwnerUser").First(&project, id).Error; err != nil {
 		return nil, err
 	}
 	return &project, nil
@@ -66,7 +67,7 @@ func (r *gormRepository) FindByID(ctx context.Context, id uint64) (*Project, err
 // FindByCode 按全局唯一项目编码查询，用于在创建前提供稳定的重复编码错误。
 func (r *gormRepository) FindByCode(ctx context.Context, code string) (*Project, error) {
 	var project Project
-	if err := r.db.WithContext(ctx).Where("code = ?", code).First(&project).Error; err != nil {
+	if err := r.db.WithContext(ctx).Preload("OwnerUser").Where("code = ?", code).First(&project).Error; err != nil {
 		return nil, err
 	}
 	return &project, nil
@@ -100,7 +101,7 @@ func (r *gormRepository) Delete(ctx context.Context, id uint64) error {
 // List 返回全部项目，仅供系统管理员的全局项目视图使用。
 func (r *gormRepository) List(ctx context.Context) ([]Project, error) {
 	var projects []Project
-	if err := r.db.WithContext(ctx).Order("id ASC").Find(&projects).Error; err != nil {
+	if err := r.db.WithContext(ctx).Preload("OwnerUser").Order("id ASC").Find(&projects).Error; err != nil {
 		return nil, err
 	}
 	return projects, nil
@@ -110,6 +111,7 @@ func (r *gormRepository) List(ctx context.Context) ([]Project, error) {
 func (r *gormRepository) ListForUser(ctx context.Context, userID uint64) ([]Project, error) {
 	var projects []Project
 	if err := r.db.WithContext(ctx).
+		Preload("OwnerUser").
 		Select("projects.*, project_members.role AS current_role").
 		Joins("JOIN project_members ON project_members.project_id = projects.id").
 		Where("project_members.user_id = ?", userID).
@@ -120,10 +122,19 @@ func (r *gormRepository) ListForUser(ctx context.Context, userID uint64) ([]Proj
 	return projects, nil
 }
 
+// FindUserByUsername 将公开用户名转换为内部关联，禁止回退到数字主键查询。
+func (r *gormRepository) FindUserByUsername(ctx context.Context, username string) (*identity.User, error) {
+	var user identity.User
+	if err := r.db.WithContext(ctx).Where("username = ?", username).First(&user).Error; err != nil {
+		return nil, err
+	}
+	return &user, nil
+}
+
 // FindMemberRole 按项目和用户查询唯一成员关系，权限中间件不得改为先查询项目以免泄露项目存在性。
 func (r *gormRepository) FindMemberRole(ctx context.Context, projectID, userID uint64) (*MemberRole, error) {
 	var member MemberRole
-	if err := r.db.WithContext(ctx).Where("project_id = ? AND user_id = ?", projectID, userID).First(&member).Error; err != nil {
+	if err := r.db.WithContext(ctx).Preload("User").Where("project_id = ? AND user_id = ?", projectID, userID).First(&member).Error; err != nil {
 		return nil, err
 	}
 	return &member, nil
@@ -149,7 +160,7 @@ func (r *gormRepository) ListMemberCandidates(ctx context.Context) ([]identity.U
 
 // CreateMember 写入项目成员关系，联合唯一索引负责并发情况下的一人一角色约束。
 func (r *gormRepository) CreateMember(ctx context.Context, member *MemberRole) error {
-	return r.db.WithContext(ctx).Create(member).Error
+	return r.db.WithContext(ctx).Omit("User").Create(member).Error
 }
 
 // UpdateMemberRole 只更新成员角色，零行受影响代表成员已被并发移除。

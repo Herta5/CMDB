@@ -2,9 +2,11 @@
 package project
 
 import (
+	"encoding/json"
 	"errors"
 	"net/http"
 	"strconv"
+	"time"
 
 	"cmdb/internal/identity"
 	"github.com/gin-gonic/gin"
@@ -27,23 +29,28 @@ func (h *HTTPHandler) Create(c *gin.Context, claims identity.UserClaims) {
 		return
 	}
 	var request struct {
-		Code        string  `json:"code"`
-		Name        string  `json:"name"`
-		Description string  `json:"description"`
-		OwnerUserID *uint64 `json:"owner_user_id"`
+		Code          string          `json:"code"`
+		Name          string          `json:"name"`
+		Description   string          `json:"description"`
+		OwnerUsername *string         `json:"owner_username"`
+		LegacyOwnerID json.RawMessage `json:"owner_user_id"`
 	}
-	if err := c.ShouldBindJSON(&request); err != nil {
+	if err := c.ShouldBindJSON(&request); err != nil || len(request.LegacyOwnerID) > 0 {
 		writeProjectError(c, http.StatusBadRequest, "PROJECT_INVALID_REQUEST", "请求格式错误")
 		return
 	}
 	project, err := h.service.Create(c.Request.Context(), CreateInput{
-		Code:        request.Code,
-		Name:        request.Name,
-		Description: request.Description,
-		OwnerUserID: request.OwnerUserID,
+		Code:          request.Code,
+		Name:          request.Name,
+		Description:   request.Description,
+		OwnerUsername: request.OwnerUsername,
 	})
 	if errors.Is(err, ErrDuplicateCode) {
 		writeProjectError(c, http.StatusConflict, "PROJECT_DUPLICATE_CODE", "项目编码已存在")
+		return
+	}
+	if errors.Is(err, ErrProjectOwnerNotFound) {
+		writeProjectError(c, http.StatusBadRequest, "PROJECT_OWNER_NOT_FOUND", "负责人用户不存在")
 		return
 	}
 	if errors.Is(err, ErrInvalidProjectInput) {
@@ -54,7 +61,7 @@ func (h *HTTPHandler) Create(c *gin.Context, claims identity.UserClaims) {
 		writeProjectError(c, http.StatusInternalServerError, "PROJECT_SERVICE_UNAVAILABLE", "项目服务暂不可用")
 		return
 	}
-	c.JSON(http.StatusCreated, project)
+	c.JSON(http.StatusCreated, newProjectResponse(project))
 }
 
 // Update 仅允许系统管理员修改项目资料；普通用户统一得到项目不存在，避免写接口泄露目标存在性。
@@ -69,20 +76,21 @@ func (h *HTTPHandler) Update(c *gin.Context, claims identity.UserClaims) {
 		return
 	}
 	var request struct {
-		Name        string  `json:"name"`
-		Description string  `json:"description"`
-		Status      string  `json:"status"`
-		OwnerUserID *uint64 `json:"owner_user_id"`
+		Name          string          `json:"name"`
+		Description   string          `json:"description"`
+		Status        string          `json:"status"`
+		OwnerUsername *string         `json:"owner_username"`
+		LegacyOwnerID json.RawMessage `json:"owner_user_id"`
 	}
-	if err := c.ShouldBindJSON(&request); err != nil {
+	if err := c.ShouldBindJSON(&request); err != nil || len(request.LegacyOwnerID) > 0 {
 		writeProjectError(c, http.StatusBadRequest, "PROJECT_INVALID_REQUEST", "请求格式错误")
 		return
 	}
 	project, err := h.service.Update(c.Request.Context(), projectID, UpdateInput{
-		Name:        request.Name,
-		Description: request.Description,
-		Status:      request.Status,
-		OwnerUserID: request.OwnerUserID,
+		Name:          request.Name,
+		Description:   request.Description,
+		Status:        request.Status,
+		OwnerUsername: request.OwnerUsername,
 	})
 	if errors.Is(err, ErrProjectNotFound) {
 		writeProjectError(c, http.StatusNotFound, "PROJECT_NOT_FOUND", "项目不存在")
@@ -92,11 +100,15 @@ func (h *HTTPHandler) Update(c *gin.Context, claims identity.UserClaims) {
 		writeProjectError(c, http.StatusBadRequest, "PROJECT_INVALID_INPUT", "项目参数无效")
 		return
 	}
+	if errors.Is(err, ErrProjectOwnerNotFound) {
+		writeProjectError(c, http.StatusBadRequest, "PROJECT_OWNER_NOT_FOUND", "负责人用户不存在")
+		return
+	}
 	if err != nil {
 		writeProjectError(c, http.StatusInternalServerError, "PROJECT_SERVICE_UNAVAILABLE", "项目服务暂不可用")
 		return
 	}
-	c.JSON(http.StatusOK, project)
+	c.JSON(http.StatusOK, newProjectResponse(project))
 }
 
 // List 返回当前用户可见的项目集合；普通用户只能得到成员关系允许的结果。
@@ -106,7 +118,11 @@ func (h *HTTPHandler) List(c *gin.Context, claims identity.UserClaims) {
 		writeProjectError(c, http.StatusInternalServerError, "PROJECT_SERVICE_UNAVAILABLE", "项目服务暂不可用")
 		return
 	}
-	c.JSON(http.StatusOK, projects)
+	response := make([]projectResponse, 0, len(projects))
+	for i := range projects {
+		response = append(response, newProjectResponse(&projects[i]))
+	}
+	c.JSON(http.StatusOK, response)
 }
 
 // Get 返回单个项目资料；路由上的项目角色中间件已在读取前隐藏无权项目的存在性。
@@ -129,7 +145,7 @@ func (h *HTTPHandler) Get(c *gin.Context) {
 		writeProjectError(c, http.StatusInternalServerError, "PROJECT_SERVICE_UNAVAILABLE", "项目服务暂不可用")
 		return
 	}
-	c.JSON(http.StatusOK, project)
+	c.JSON(http.StatusOK, newProjectResponse(project))
 }
 
 // Delete 仅允许系统管理员移除项目；普通用户统一得到项目不存在，避免删除接口泄露目标存在性。
@@ -151,6 +167,24 @@ func (h *HTTPHandler) Delete(c *gin.Context, claims identity.UserClaims) {
 		return
 	}
 	c.Status(http.StatusNoContent)
+}
+
+// projectResponse 明确列出公开项目资料，防止内部用户关联随模型扩展泄露。
+type projectResponse struct {
+	ID            uint64    `json:"id"`
+	Code          string    `json:"code"`
+	Name          string    `json:"name"`
+	Description   string    `json:"description"`
+	Status        string    `json:"status"`
+	OwnerUsername *string   `json:"owner_username"`
+	CreatedAt     time.Time `json:"created_at"`
+	UpdatedAt     time.Time `json:"updated_at"`
+	CurrentRole   string    `json:"current_role,omitempty"`
+}
+
+// newProjectResponse 保留项目自身标识并仅以用户名公开负责人。
+func newProjectResponse(project *Project) projectResponse {
+	return projectResponse{ID: project.ID, Code: project.Code, Name: project.Name, Description: project.Description, Status: project.Status, OwnerUsername: ownerUsername(project), CreatedAt: project.CreatedAt, UpdatedAt: project.UpdatedAt, CurrentRole: project.CurrentRole}
 }
 
 // projectIDFromPath 严格解析正整数项目标识，同时兼容项目详情的 id 和项目级子资源的 projectId 路径参数。
