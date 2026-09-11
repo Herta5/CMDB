@@ -31,6 +31,13 @@ func newUserRepositoryTestDB(t *testing.T) (*gorm.DB, *sql.DB) {
 	if err := db.AutoMigrate(&User{}); err != nil {
 		t.Fatalf("创建新版用户表失败：%v", err)
 	}
+	// 按用户名读取现在与按 ID 读取一致地加载项目授权，夹具需提供关联查询所需的最小表结构。
+	if err := db.Exec("CREATE TABLE projects (id integer primary key, name text not null)").Error; err != nil {
+		t.Fatalf("创建项目测试表失败：%v", err)
+	}
+	if err := db.Exec("CREATE TABLE project_members (id integer primary key autoincrement, project_id integer not null, user_id integer not null, role text not null, created_at datetime not null, updated_at datetime not null)").Error; err != nil {
+		t.Fatalf("创建项目成员测试表失败：%v", err)
+	}
 	return db, sqlDB
 }
 

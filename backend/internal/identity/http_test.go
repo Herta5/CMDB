@@ -12,8 +12,11 @@ import (
 
 	"cmdb/internal/identity"
 	"cmdb/internal/platform/httpserver"
+	"cmdb/internal/project"
 	"github.com/golang-jwt/jwt/v5"
+	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
+	"gorm.io/gorm/logger"
 )
 
 // TestLoginDoesNotRevealWhetherUserExists 防止攻击者通过登录响应枚举 CMDB 用户。
@@ -155,6 +158,48 @@ func TestCurrentUserRequiresJWTAndReturnsPublicIdentity(t *testing.T) {
 	server.ServeHTTP(response, request)
 	if response.Code != http.StatusOK || strings.Contains(response.Body.String(), "password_hash") || strings.Contains(response.Body.String(), `"id"`) || strings.Contains(response.Body.String(), `"user_id"`) || !strings.Contains(response.Body.String(), `"username":"me_user"`) {
 		t.Fatalf("当前用户接口必须仅返回公开身份信息：status=%d", response.Code)
+	}
+}
+
+// TestCurrentUserReturnsProjectPermissionsByUsername 防止用户名查询丢失当前用户已获授的项目权限。
+func TestCurrentUserReturnsProjectPermissionsByUsername(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open("file:"+t.Name()+"?mode=memory&cache=shared"), &gorm.Config{Logger: logger.Default.LogMode(logger.Silent)})
+	if err != nil {
+		t.Fatalf("打开当前用户测试数据库失败：%v", err)
+	}
+	if err := db.AutoMigrate(&identity.User{}, &project.Project{}, &project.MemberRole{}); err != nil {
+		t.Fatalf("创建当前用户测试表失败：%v", err)
+	}
+	hash, err := identity.HashPassword("correct-password")
+	if err != nil {
+		t.Fatal("准备当前用户测试密码失败")
+	}
+	user := &identity.User{Username: "permission_user", PasswordHash: hash, DisplayName: "授权用户", GlobalRole: identity.GlobalRoleUser, Status: "active"}
+	if err := db.Create(user).Error; err != nil {
+		t.Fatalf("创建当前用户失败：%v", err)
+	}
+	managedProject := &project.Project{Code: "identity_permissions", Name: "身份权限项目", Status: project.ProjectStatusEnabled}
+	if err := db.Create(managedProject).Error; err != nil {
+		t.Fatalf("创建项目失败：%v", err)
+	}
+	if err := db.Create(&project.MemberRole{ProjectID: managedProject.ID, UserID: user.ID, Role: project.MemberRoleProjectAdmin}).Error; err != nil {
+		t.Fatalf("创建项目授权失败：%v", err)
+	}
+	server := httpserver.New(httpserver.Dependencies{Database: db, JWTSecret: "identity-test-signing-key", EncryptionKey: "identity-test-encryption-key"})
+
+	response := requestCurrentUser(t, server, sessionToken(t, requestLogin(t, server, user.Username, "correct-password")))
+	var payload struct {
+		ProjectPermissions []struct {
+			ProjectID   uint64 `json:"project_id"`
+			ProjectName string `json:"project_name"`
+			Role        string `json:"role"`
+		} `json:"project_permissions"`
+	}
+	if response.Code != http.StatusOK || json.Unmarshal(response.Body.Bytes(), &payload) != nil {
+		t.Fatalf("当前用户项目权限响应错误：status=%d", response.Code)
+	}
+	if len(payload.ProjectPermissions) != 1 || payload.ProjectPermissions[0].ProjectID != managedProject.ID || payload.ProjectPermissions[0].ProjectName != managedProject.Name || payload.ProjectPermissions[0].Role != project.MemberRoleProjectAdmin {
+		t.Fatalf("当前用户必须返回已授予的项目权限：%+v", payload.ProjectPermissions)
 	}
 }
 

@@ -219,11 +219,15 @@ func (r *gormUserRepository) FindByID(ctx context.Context, id uint64) (*User, er
 	return &users[0], nil
 }
 
-// FindByUsername 按登录名查询用户，用于后续认证时取得密码哈希而不返回给接口层。
+// FindByUsername 按登录名查询完整用户资料，认证和公开资料读取均需保留项目授权。
 func (r *gormUserRepository) FindByUsername(ctx context.Context, username string) (*User, error) {
 	var user User
 	if err := r.db.WithContext(ctx).Where("username = ?", username).First(&user).Error; err != nil {
 		return nil, err
 	}
-	return &user, nil
+	users := []User{user}
+	if err := r.loadPermissions(ctx, users); err != nil {
+		return nil, err
+	}
+	return &users[0], nil
 }
