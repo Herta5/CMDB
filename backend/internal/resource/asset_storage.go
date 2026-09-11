@@ -146,7 +146,7 @@ func changedBusinessColumns(existing assetRow, table string, snapshot Snapshot) 
 		case "network_type":
 			changed = existing.NetworkType != value
 		case "raw_attributes":
-			changed = !jsonValuesEqual(existing.RawAttributes, value.([]byte))
+			changed = !jsonValuesEqualForChanges(existing.RawAttributes, value.([]byte), snapshot.VolatileRawAttributeKeys)
 		case "private_ips":
 			changed = !jsonStringSetsEqual(existing.PrivateIPs, value.([]byte))
 		case "public_ips":
@@ -159,6 +159,28 @@ func changedBusinessColumns(existing assetRow, table string, snapshot Snapshot) 
 		}
 	}
 	return changes
+}
+
+// jsonValuesEqualForChanges 忽略采集器声明的顶层观测键，只用剩余原始属性判断是否发生业务配置变化。
+func jsonValuesEqualForChanges(left, right []byte, volatileKeys []string) bool {
+	if len(volatileKeys) == 0 {
+		return jsonValuesEqual(left, right)
+	}
+	leftValue, leftOK := decodeJSONValue(left)
+	rightValue, rightOK := decodeJSONValue(right)
+	if !leftOK || !rightOK {
+		return false
+	}
+	leftObject, leftIsObject := leftValue.(map[string]any)
+	rightObject, rightIsObject := rightValue.(map[string]any)
+	if !leftIsObject || !rightIsObject {
+		return jsonDecodedValuesEqual(leftValue, rightValue)
+	}
+	for _, key := range volatileKeys {
+		delete(leftObject, key)
+		delete(rightObject, key)
+	}
+	return jsonDecodedValuesEqual(leftObject, rightObject)
 }
 
 // jsonStringSetsEqual 将旧版可能无序或为 null 的 IP 数组按集合语义比较，避免升级时产生一次性伪更新。
@@ -208,21 +230,27 @@ func jsonValuesEqual(left, right []byte) bool {
 	if bytes.Equal(left, right) {
 		return true
 	}
-	if len(left) == 0 || len(right) == 0 {
-		return false
-	}
-	if !json.Valid(left) || !json.Valid(right) {
-		return false
-	}
-	var leftValue, rightValue any
-	leftDecoder := json.NewDecoder(bytes.NewReader(left))
-	rightDecoder := json.NewDecoder(bytes.NewReader(right))
-	leftDecoder.UseNumber()
-	rightDecoder.UseNumber()
-	if leftDecoder.Decode(&leftValue) != nil || rightDecoder.Decode(&rightValue) != nil {
+	leftValue, leftOK := decodeJSONValue(left)
+	rightValue, rightOK := decodeJSONValue(right)
+	if !leftOK || !rightOK {
 		return false
 	}
 	return jsonDecodedValuesEqual(leftValue, rightValue)
+}
+
+// decodeJSONValue 使用任意精度数字解码 JSON，供完整比较和忽略易变键后的配置比较共用。
+func decodeJSONValue(value []byte) (any, bool) {
+	value = bytes.TrimSpace(value)
+	if len(value) == 0 || !json.Valid(value) {
+		return nil, false
+	}
+	var decoded any
+	decoder := json.NewDecoder(bytes.NewReader(value))
+	decoder.UseNumber()
+	if decoder.Decode(&decoded) != nil {
+		return nil, false
+	}
+	return decoded, true
 }
 
 // jsonDecodedValuesEqual 递归比较 JSON 值，并用任意精度有理数避免大整数转换为 float64 后丢失变化。

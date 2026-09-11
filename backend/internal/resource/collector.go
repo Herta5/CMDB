@@ -24,7 +24,9 @@ type Snapshot struct {
 	EngineVersion string
 	NetworkType   string
 	RawAttributes []byte
-	Endpoints     []EndpointSnapshot
+	// VolatileRawAttributeKeys 声明原始 JSON 中只用于观测、不得触发配置更新统计的顶层键；原始值仍会持久化。
+	VolatileRawAttributeKeys []string
+	Endpoints                []EndpointSnapshot
 }
 
 // EndpointSnapshot 表示采集时观察到的原始地址和动态解析结果。
