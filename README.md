@@ -4,6 +4,8 @@ CMDB 是面向公有云的资源配置管理平台，业务项目是最高级的
 
 当前提供用户名密码登录、用户与业务项目管理、项目成员授权，以及阿里云、AWS 两个独立资源模块。平台模块共享接入源、凭证加密、同步任务、资源地址、失联恢复、24 小时清理和审计能力；默认每 60 分钟自动同步，并支持项目管理员手工触发。
 
+产品长期要求请从 [项目规范入口](docs/project/README.md) 阅读；当前提交的实现状态、证据与差距请参阅 [实现状态](docs/project/implementation-status.md)，该状态文档不重复规范能力矩阵。
+
 ## 技术栈
 
 后端使用 Go 1.25.1、Gin、GORM；前端使用 Vue 3、TypeScript、Pinia、Vue Router、Element Plus；数据库使用 PostgreSQL 17。Docker Compose 启动一个 PostgreSQL 容器和一个同时提供前端静态文件与 API 的应用容器。
