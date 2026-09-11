@@ -120,7 +120,7 @@ type Repository struct{ db *gorm.DB }
 // NewRepository 创建由平台数据库连接管理的资源仓储。
 func NewRepository(db *gorm.DB) *Repository { return &Repository{db: db} }
 
-// Transaction 保证单类快照的更新与失联判断原子提交。
+// Transaction 保证一次同步任务内的资源变化、生命周期处理、统计和审计原子提交。
 func (r *Repository) Transaction(ctx context.Context, operation func(*gorm.DB) error) error {
 	return r.db.WithContext(ctx).Transaction(operation)
 }
@@ -163,42 +163,4 @@ func (r *Repository) RecoverableJobs(ctx context.Context) ([]SyncJob, error) {
 // FailInterruptedJobs 将进程中断时遗留的运行任务结束为脱敏失败状态。
 func (r *Repository) FailInterruptedJobs(ctx context.Context, finished time.Time) error {
 	return r.db.WithContext(ctx).Model(&SyncJob{}).Where("status = ?", "running").Updates(map[string]any{"status": "failed", "error_summary": "服务重启导致任务中断，可重新执行", "finished_at": finished}).Error
-}
-
-// UpdateSourceSchedule 记录最近同步与下一次调度时间。
-func (r *Repository) UpdateSourceSchedule(ctx context.Context, source *Source) error {
-	return r.db.WithContext(ctx).Model(&Source{}).Where("id = ?", source.ID).Updates(map[string]any{"last_sync_at": source.LastSyncAt, "next_sync_at": source.NextSyncAt}).Error
-}
-
-// PurgeLostBefore 跨三表删除截止时间前持续失联的资产，并先写入独立审计。
-func (r *Repository) PurgeLostBefore(ctx context.Context, cutoff time.Time) (int64, error) {
-	var deleted int64
-	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		for _, table := range []string{"resources_servers", "resources_databases", "resources_load_balancers"} {
-			var resources []assetRow
-			if err := tx.Table(table).Where("asset_status = ? AND missing_since <= ?", AssetStatusLost, cutoff).Find(&resources).Error; err != nil {
-				return err
-			}
-			for _, value := range resources {
-				projectID := value.ProjectID
-				detail, _ := json.Marshal(map[string]any{"source_id": value.SourceID, "provider": value.Provider, "resource_type": value.ResourceType})
-				if err := tx.Create(&AuditLog{ProjectID: &projectID, Action: "resource.deleted", ResourceType: value.ResourceType, ResourceID: value.ExternalID, Detail: detail}).Error; err != nil {
-					return err
-				}
-			}
-			if len(resources) > 0 {
-				ids := make([]uint64, 0, len(resources))
-				for _, value := range resources {
-					ids = append(ids, value.ID)
-				}
-				result := tx.Table(table).Where("id IN ?", ids).Delete(&assetRow{})
-				if result.Error != nil {
-					return result.Error
-				}
-				deleted += result.RowsAffected
-			}
-		}
-		return nil
-	})
-	return deleted, err
 }

@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strconv"
 	"sync"
 	"time"
 
@@ -329,35 +330,45 @@ func (s *Service) executeSync(ctx context.Context, sourceID uint64, trigger stri
 	}
 	statistics := map[string]map[string]int{}
 	failed := 0
-	for _, result := range results {
-		if result.Err != nil {
-			failed++
-			statistics[result.ResourceType] = map[string]int{"added": 0, "updated": 0, "restored": 0, "lost": 0, "deleted": 0, "failed": 1}
-			continue
+	// 所有成功类型的资源变化、删除、任务统计和调度时间使用同一事务，后续类型失败时不会留下无统计归属的部分写入。
+	applyErr := s.repository.Transaction(ctx, func(tx *gorm.DB) error {
+		for _, result := range results {
+			if result.Err != nil {
+				failed++
+				statistics[result.ResourceType] = map[string]int{"added": 0, "updated": 0, "restored": 0, "lost": 0, "deleted": 0, "failed": 1}
+				continue
+			}
+			counts, typeErr := s.applyType(tx, *source, result.ResourceType, result.Snapshots, now)
+			if typeErr != nil {
+				return typeErr
+			}
+			statistics[result.ResourceType] = counts
 		}
-		counts, err := s.applyType(ctx, *source, result.ResourceType, result.Snapshots, now)
-		if err != nil {
-			return s.finishFailed(ctx, job, "资源写入失败", err)
+		job.Status = "success"
+		if failed > 0 {
+			job.Status = "partial_success"
 		}
-		statistics[result.ResourceType] = counts
+		job.Statistics, _ = json.Marshal(statistics)
+		finished := s.now()
+		job.FinishedAt = &finished
+		source.LastSyncAt = &finished
+		next := finished.Add(time.Duration(source.SyncIntervalMinutes) * time.Minute)
+		source.NextSyncAt = &next
+		if err := tx.Save(job).Error; err != nil {
+			return err
+		}
+		if err := tx.Model(&Source{}).Where("id = ?", source.ID).Updates(map[string]any{"last_sync_at": source.LastSyncAt, "next_sync_at": source.NextSyncAt}).Error; err != nil {
+			return err
+		}
+		projectID := source.ProjectID
+		detail, _ := json.Marshal(map[string]any{"trigger": trigger, "status": job.Status, "statistics": statistics})
+		return tx.Create(&AuditLog{ProjectID: &projectID, Action: "source.synced", ResourceType: "resource_source", ResourceID: strconv.FormatUint(source.ID, 10), Detail: detail}).Error
+	})
+	if applyErr != nil {
+		// 外层事务已经回滚全部资源变化，失败任务不得保留尚未生效的统计。
+		job.Statistics = nil
+		return s.finishFailed(ctx, job, "资源写入失败", applyErr)
 	}
-	job.Status = "success"
-	if failed > 0 {
-		job.Status = "partial_success"
-	}
-	job.Statistics, _ = json.Marshal(statistics)
-	finished := s.now()
-	job.FinishedAt = &finished
-	source.LastSyncAt = &finished
-	next := finished.Add(time.Duration(source.SyncIntervalMinutes) * time.Minute)
-	source.NextSyncAt = &next
-	if err := s.repository.SaveJob(ctx, job); err != nil {
-		return nil, err
-	}
-	if err := s.repository.UpdateSourceSchedule(ctx, source); err != nil {
-		return nil, err
-	}
-	_ = s.repository.CreateAudit(ctx, source.ProjectID, "source.synced", "resource_source", source.ID, map[string]any{"trigger": trigger, "status": job.Status, "statistics": statistics})
 	return job, nil
 }
 
@@ -376,89 +387,120 @@ func (s *Service) finishFailed(ctx context.Context, job *SyncJob, summary string
 	return job, cause
 }
 
-// applyType 原子写入一个成功资源类型，并只对该类型执行缺失判定。
-func (s *Service) applyType(ctx context.Context, source Source, resourceType string, snapshots []Snapshot, now time.Time) (map[string]int, error) {
+// applyType 在任务事务内写入一个成功资源类型，并只对该类型执行失联和删除判断。
+func (s *Service) applyType(tx *gorm.DB, source Source, resourceType string, snapshots []Snapshot, now time.Time) (map[string]int, error) {
 	counts := map[string]int{"added": 0, "updated": 0, "restored": 0, "lost": 0, "deleted": 0, "failed": 0}
 	table, err := assetTableForType(resourceType)
 	if err != nil {
 		return counts, err
 	}
 	seen := make([]string, 0, len(snapshots))
-	err = s.repository.Transaction(ctx, func(tx *gorm.DB) error {
-		for _, snapshot := range snapshots {
-			seen = append(seen, snapshot.ExternalID)
-			var existing assetRow
-			lookupErr := tx.Table(table).Where("source_id = ? AND resource_type = ? AND external_id = ?", source.ID, resourceType, snapshot.ExternalID).First(&existing).Error
-			action := "resource.updated"
-			if errors.Is(lookupErr, gorm.ErrRecordNotFound) {
-				counts["added"]++
-				action = "resource.created"
-			} else if lookupErr != nil {
-				return lookupErr
-			} else if existing.AssetStatus == AssetStatusLost {
-				counts["restored"]++
-				action = "resource.restored"
-			} else {
-				counts["updated"]++
+	unchangedIDs := make([]uint64, 0, len(snapshots))
+	for _, snapshot := range snapshots {
+		seen = append(seen, snapshot.ExternalID)
+		var existing assetRow
+		lookupErr := tx.Table(table).Where("source_id = ? AND resource_type = ? AND external_id = ?", source.ID, resourceType, snapshot.ExternalID).First(&existing).Error
+		action := ""
+		var businessChanges map[string]any
+		if errors.Is(lookupErr, gorm.ErrRecordNotFound) {
+			counts["added"]++
+			action = "resource.created"
+		} else if lookupErr != nil {
+			return counts, lookupErr
+		} else if existing.AssetStatus == AssetStatusLost {
+			counts["restored"]++
+			action = "resource.restored"
+		} else {
+			businessChanges = changedBusinessColumns(existing, table, snapshot)
+			if len(businessChanges) == 0 {
+				unchangedIDs = append(unchangedIDs, existing.ID)
+				continue
 			}
-			updates := map[string]any{"project_id": source.ProjectID, "source_id": source.ID, "provider": source.Provider, "resource_type": resourceType, "external_id": snapshot.ExternalID, "name": snapshot.Name, "region": snapshot.Region, "zone": snapshot.Zone, "cloud_status": snapshot.CloudStatus, "asset_status": AssetStatusActive, "raw_attributes": snapshot.RawAttributes, "last_seen_at": now, "missing_since": nil}
-			for key, value := range endpointColumns(table, snapshot.Endpoints) {
-				updates[key] = value
-			}
-			if table == "resources_databases" {
-				updates["engine"] = snapshot.Engine
-				updates["engine_version"] = snapshot.EngineVersion
-			}
-			if table == "resources_load_balancers" {
-				updates["network_type"] = snapshot.NetworkType
-			}
-			if errors.Is(lookupErr, gorm.ErrRecordNotFound) {
-				updates["first_seen_at"] = now
-				updates["created_at"] = now
-				if err := tx.Table(table).Create(updates).Error; err != nil {
-					return err
-				}
-			} else if err := tx.Table(table).Where("id = ?", existing.ID).Updates(updates).Error; err != nil {
-				return err
-			}
-			projectID := source.ProjectID
-			detail, _ := json.Marshal(map[string]any{"source_id": source.ID, "provider": source.Provider, "resource_type": resourceType, "external_id": snapshot.ExternalID})
-			if err := tx.Create(&AuditLog{ProjectID: &projectID, Action: action, ResourceType: resourceType, ResourceID: snapshot.ExternalID, Detail: detail}).Error; err != nil {
-				return err
-			}
+			counts["updated"]++
+			action = "resource.updated"
 		}
-		query := tx.Table(table).Where("source_id = ? AND resource_type = ? AND asset_status = ?", source.ID, resourceType, AssetStatusActive)
-		if len(seen) > 0 {
-			query = query.Where("external_id NOT IN ?", seen)
+		updates := snapshotBusinessColumns(table, snapshot)
+		if action == "resource.updated" {
+			updates = businessChanges
 		}
-		var missing []assetRow
-		if err := query.Find(&missing).Error; err != nil {
-			return err
+		for key, value := range map[string]any{"asset_status": AssetStatusActive, "last_seen_at": now, "missing_since": nil, "updated_at": now} {
+			updates[key] = value
 		}
-		ids := make([]uint64, 0, len(missing))
-		for _, value := range missing {
-			ids = append(ids, value.ID)
+		if errors.Is(lookupErr, gorm.ErrRecordNotFound) {
+			updates["project_id"] = source.ProjectID
+			updates["source_id"] = source.ID
+			updates["provider"] = source.Provider
+			updates["resource_type"] = resourceType
+			updates["external_id"] = snapshot.ExternalID
+			updates["first_seen_at"] = now
+			updates["created_at"] = now
+			if err := tx.Table(table).Create(updates).Error; err != nil {
+				return counts, err
+			}
+		} else if err := tx.Table(table).Where("id = ?", existing.ID).Updates(updates).Error; err != nil {
+			return counts, err
 		}
-		result := tx.Table(table).Where("id IN ?", ids).Updates(map[string]any{"asset_status": AssetStatusLost, "missing_since": now})
+		projectID := source.ProjectID
+		detail, _ := json.Marshal(map[string]any{"source_id": source.ID, "provider": source.Provider, "resource_type": resourceType, "external_id": snapshot.ExternalID})
+		if err := tx.Create(&AuditLog{ProjectID: &projectID, Action: action, ResourceType: resourceType, ResourceID: snapshot.ExternalID, Detail: detail}).Error; err != nil {
+			return counts, err
+		}
+	}
+	// 未变化资源只批量刷新最近发现时间，不改变业务更新时间，也不制造配置变更审计。
+	if len(unchangedIDs) > 0 {
+		if err := tx.Table(table).Where("id IN ?", unchangedIDs).Update("last_seen_at", now).Error; err != nil {
+			return counts, err
+		}
+	}
+	query := tx.Table(table).Where("source_id = ? AND resource_type = ? AND asset_status = ?", source.ID, resourceType, AssetStatusActive)
+	if len(seen) > 0 {
+		query = query.Where("external_id NOT IN ?", seen)
+	}
+	var missing []assetRow
+	if err := query.Find(&missing).Error; err != nil {
+		return counts, err
+	}
+	ids := make([]uint64, 0, len(missing))
+	for _, value := range missing {
+		ids = append(ids, value.ID)
+	}
+	if len(ids) > 0 {
+		result := tx.Table(table).Where("id IN ?", ids).Updates(map[string]any{"asset_status": AssetStatusLost, "missing_since": now, "updated_at": now})
 		counts["lost"] = int(result.RowsAffected)
 		if result.Error != nil {
-			return result.Error
+			return counts, result.Error
 		}
-		for _, value := range missing {
-			projectID := source.ProjectID
-			detail, _ := json.Marshal(map[string]any{"source_id": source.ID, "provider": source.Provider, "resource_type": resourceType})
-			if err := tx.Create(&AuditLog{ProjectID: &projectID, Action: "resource.lost", ResourceType: resourceType, ResourceID: value.ExternalID, Detail: detail}).Error; err != nil {
-				return err
-			}
+	}
+	for _, value := range missing {
+		projectID := source.ProjectID
+		detail, _ := json.Marshal(map[string]any{"source_id": source.ID, "provider": source.Provider, "resource_type": resourceType})
+		if err := tx.Create(&AuditLog{ProjectID: &projectID, Action: "resource.lost", ResourceType: resourceType, ResourceID: value.ExternalID, Detail: detail}).Error; err != nil {
+			return counts, err
 		}
-		return nil
-	})
-	return counts, err
-}
+	}
 
-// PurgeLostResources 物理删除连续失联满 24 小时的资源。
-func (s *Service) PurgeLostResources(ctx context.Context) (int64, error) {
-	return s.repository.PurgeLostBefore(ctx, s.now().Add(-24*time.Hour))
+	// 仅成功采集的当前类型允许清理；重新出现的资源已在上方恢复，不会被这里误删。
+	var expired []assetRow
+	if err := tx.Table(table).Where("source_id = ? AND resource_type = ? AND asset_status = ? AND missing_since <= ?", source.ID, resourceType, AssetStatusLost, now.Add(-24*time.Hour)).Find(&expired).Error; err != nil {
+		return counts, err
+	}
+	expiredIDs := make([]uint64, 0, len(expired))
+	for _, value := range expired {
+		expiredIDs = append(expiredIDs, value.ID)
+		projectID := source.ProjectID
+		detail, _ := json.Marshal(map[string]any{"source_id": source.ID, "provider": source.Provider, "resource_type": resourceType})
+		if err := tx.Create(&AuditLog{ProjectID: &projectID, Action: "resource.deleted", ResourceType: resourceType, ResourceID: value.ExternalID, Detail: detail}).Error; err != nil {
+			return counts, err
+		}
+	}
+	if len(expiredIDs) > 0 {
+		result := tx.Table(table).Where("id IN ?", expiredIDs).Delete(&assetRow{})
+		counts["deleted"] = int(result.RowsAffected)
+		if result.Error != nil {
+			return counts, result.Error
+		}
+	}
+	return counts, nil
 }
 
 // SyncDueSources 并行执行所有已到期接入源；同源互斥仍由 Sync 统一保证。
@@ -505,9 +547,8 @@ func (s *Service) StartScheduler(ctx context.Context, collectors map[string]Coll
 		}
 	}
 	go func() {
-		// 服务启动后立即补跑已到期任务，再按分钟检查并清理过期失联资源。
+		// 服务启动后立即补跑已到期任务，再按分钟检查；资源清理由成功类型同步负责并记录任务统计。
 		s.SyncDueSources(ctx, collectors)
-		_, _ = s.PurgeLostResources(ctx)
 		ticker := time.NewTicker(time.Minute)
 		defer ticker.Stop()
 		for {
@@ -516,7 +557,6 @@ func (s *Service) StartScheduler(ctx context.Context, collectors map[string]Coll
 				return
 			case <-ticker.C:
 				s.SyncDueSources(ctx, collectors)
-				_, _ = s.PurgeLostResources(ctx)
 			}
 		}
 	}()

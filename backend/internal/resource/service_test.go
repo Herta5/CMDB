@@ -134,6 +134,221 @@ func TestSyncIsIdempotentMarksMissingAndRestores(t *testing.T) {
 	}
 }
 
+// TestSyncUnchangedResourceOnlyRefreshesLastSeen 防止重复快照重写业务字段、虚增更新统计和制造无意义审计。
+func TestSyncUnchangedResourceOnlyRefreshesLastSeen(t *testing.T) {
+	service, db, source, now := newResourceServiceTest(t)
+	firstSnapshot := Snapshot{ResourceType: "ec2", ExternalID: "i-stable", Name: "稳定实例", Region: "cn-test", CloudStatus: "running", RawAttributes: []byte(`{"name":"stable","cpu":4}`), Endpoints: []EndpointSnapshot{{Kind: "private", Address: "10.0.0.8"}}}
+	if _, err := service.Sync(context.Background(), source.ID, "manual", collectorStub{results: []CollectionResult{{ResourceType: "ec2", Snapshots: []Snapshot{firstSnapshot}}}}); err != nil {
+		t.Fatalf("准备首次同步失败：%v", err)
+	}
+	var before Server
+	if err := db.Where("external_id = ?", firstSnapshot.ExternalID).First(&before).Error; err != nil {
+		t.Fatalf("读取首次同步资源失败：%v", err)
+	}
+
+	// 通过真实数据库更新回调观察 SQL 的更新列；相同 JSON 对象即使键顺序不同，也不应触发业务字段更新。
+	updatedColumns := map[string]int{}
+	if err := db.Callback().Update().Before("gorm:update").Register("test:count_business_updates", func(tx *gorm.DB) {
+		if tx.Statement.Table != "resources_servers" {
+			return
+		}
+		if updates, ok := tx.Statement.Dest.(map[string]any); ok {
+			for column := range updates {
+				updatedColumns[column]++
+			}
+		}
+	}); err != nil {
+		t.Fatalf("注册数据库更新观察器失败：%v", err)
+	}
+	*now = now.Add(time.Hour)
+	secondSnapshot := firstSnapshot
+	secondSnapshot.RawAttributes = []byte(`{"cpu":4,"name":"stable"}`)
+	job, err := service.Sync(context.Background(), source.ID, "scheduled", collectorStub{results: []CollectionResult{{ResourceType: "ec2", Snapshots: []Snapshot{secondSnapshot}}}})
+	if err != nil {
+		t.Fatalf("重复同步失败：%v", err)
+	}
+	if string(job.Statistics) != `{"ec2":{"added":0,"deleted":0,"failed":0,"lost":0,"restored":0,"updated":0}}` {
+		t.Fatalf("相同快照不得计为业务更新：%s", job.Statistics)
+	}
+	if len(updatedColumns) != 1 || updatedColumns["last_seen_at"] != 1 {
+		t.Fatalf("相同快照只能刷新最近发现时间：columns=%v", updatedColumns)
+	}
+	var persisted Server
+	if err := db.Where("external_id = ?", firstSnapshot.ExternalID).First(&persisted).Error; err != nil {
+		t.Fatalf("读取重复同步后的资源失败：%v", err)
+	}
+	if !persisted.LastSeenAt.Equal(*now) {
+		t.Fatalf("相同快照仍须刷新最近发现时间：got=%s want=%s", persisted.LastSeenAt, *now)
+	}
+	if !persisted.UpdatedAt.Equal(before.UpdatedAt) {
+		t.Fatalf("相同快照不得改变业务更新时间：before=%s after=%s", before.UpdatedAt, persisted.UpdatedAt)
+	}
+	var updatedAudits int64
+	if err := db.Model(&AuditLog{}).Where("action = ? AND resource_id = ?", "resource.updated", firstSnapshot.ExternalID).Count(&updatedAudits).Error; err != nil {
+		t.Fatalf("查询资源更新审计失败：%v", err)
+	}
+	if updatedAudits != 0 {
+		t.Fatalf("相同快照不得产生资源更新审计：count=%d", updatedAudits)
+	}
+}
+
+// TestSyncChangedResourceRecordsOneUpdate 验证真实业务字段变化仍会持久化、计数并保留审计。
+func TestSyncChangedResourceRecordsOneUpdate(t *testing.T) {
+	service, db, source, now := newResourceServiceTest(t)
+	snapshot := Snapshot{ResourceType: "ec2", ExternalID: "i-changed", Name: "变更前", CloudStatus: "running"}
+	collector := collectorStub{results: []CollectionResult{{ResourceType: "ec2", Snapshots: []Snapshot{snapshot}}}}
+	if _, err := service.Sync(context.Background(), source.ID, "manual", collector); err != nil {
+		t.Fatalf("准备首次同步失败：%v", err)
+	}
+	*now = now.Add(time.Hour)
+	snapshot.Name = "变更后"
+	collector.results[0].Snapshots[0] = snapshot
+	job, err := service.Sync(context.Background(), source.ID, "scheduled", collector)
+	if err != nil {
+		t.Fatalf("同步资源变更失败：%v", err)
+	}
+	if string(job.Statistics) != `{"ec2":{"added":0,"deleted":0,"failed":0,"lost":0,"restored":0,"updated":1}}` {
+		t.Fatalf("真实业务变化必须计为一次更新：%s", job.Statistics)
+	}
+	var persisted Server
+	if err := db.Where("external_id = ?", snapshot.ExternalID).First(&persisted).Error; err != nil || persisted.Name != "变更后" || !persisted.LastSeenAt.Equal(*now) {
+		t.Fatalf("真实业务变化未正确持久化：resource=%+v err=%v", persisted, err)
+	}
+	var updatedAudits int64
+	if err := db.Model(&AuditLog{}).Where("action = ? AND resource_id = ?", "resource.updated", snapshot.ExternalID).Count(&updatedAudits).Error; err != nil || updatedAudits != 1 {
+		t.Fatalf("真实业务变化必须产生一次更新审计：count=%d err=%v", updatedAudits, err)
+	}
+}
+
+// TestSyncDetectsTypeSpecificFieldChanges 验证 RDS 和负载均衡专属字段参与真实变化判断。
+func TestSyncDetectsTypeSpecificFieldChanges(t *testing.T) {
+	service, db, source, now := newResourceServiceTest(t)
+	first := []CollectionResult{
+		{ResourceType: "rds", Snapshots: []Snapshot{{ExternalID: "db-specific", Engine: "mysql", EngineVersion: "8.0"}}},
+		{ResourceType: "elb", Snapshots: []Snapshot{{ExternalID: "lb-specific", NetworkType: "internet-facing"}}},
+	}
+	if _, err := service.Sync(context.Background(), source.ID, "manual", collectorStub{results: first}); err != nil {
+		t.Fatalf("准备类型专属字段测试失败：%v", err)
+	}
+	*now = now.Add(time.Hour)
+	second := []CollectionResult{
+		{ResourceType: "rds", Snapshots: []Snapshot{{ExternalID: "db-specific", Engine: "postgres", EngineVersion: "17"}}},
+		{ResourceType: "elb", Snapshots: []Snapshot{{ExternalID: "lb-specific", NetworkType: "internal"}}},
+	}
+	job, err := service.Sync(context.Background(), source.ID, "scheduled", collectorStub{results: second})
+	if err != nil {
+		t.Fatalf("同步类型专属字段变化失败：%v", err)
+	}
+	if string(job.Statistics) != `{"elb":{"added":0,"deleted":0,"failed":0,"lost":0,"restored":0,"updated":1},"rds":{"added":0,"deleted":0,"failed":0,"lost":0,"restored":0,"updated":1}}` {
+		t.Fatalf("类型专属字段变化必须分别计为更新：%s", job.Statistics)
+	}
+	var database Database
+	var loadBalancer LoadBalancer
+	if err := db.Where("external_id = ?", "db-specific").First(&database).Error; err != nil || database.Engine != "postgres" || database.EngineVersion != "17" {
+		t.Fatalf("RDS 专属字段未正确更新：resource=%+v err=%v", database, err)
+	}
+	if err := db.Where("external_id = ?", "lb-specific").First(&loadBalancer).Error; err != nil || loadBalancer.NetworkType != "internal" {
+		t.Fatalf("负载均衡专属字段未正确更新：resource=%+v err=%v", loadBalancer, err)
+	}
+}
+
+// TestSyncEndpointOrderDoesNotCreateFalseUpdates 防止云 API 和 DNS 返回集合顺序变化时制造伪更新。
+func TestSyncEndpointOrderDoesNotCreateFalseUpdates(t *testing.T) {
+	service, _, source, now := newResourceServiceTest(t)
+	first := []CollectionResult{
+		{ResourceType: "ec2", Snapshots: []Snapshot{{
+			ExternalID: "i-order",
+			Endpoints:  []EndpointSnapshot{{Kind: "private", Address: "10.0.0.2"}, {Kind: "private", Address: "10.0.0.1"}},
+		}}},
+		{ResourceType: "rds", Snapshots: []Snapshot{{
+			ExternalID: "db-order",
+			Endpoints: []EndpointSnapshot{
+				{Kind: "hostname", Address: "secondary.example", Port: 3306, Protocol: "tcp"},
+				{Kind: "hostname", Address: "primary.example", Port: 3306, Protocol: "tcp", ResolvedIPs: []string{"192.0.2.2", "192.0.2.1"}},
+			},
+		}}},
+	}
+	if _, err := service.Sync(context.Background(), source.ID, "manual", collectorStub{results: first}); err != nil {
+		t.Fatalf("准备端点顺序测试失败：%v", err)
+	}
+	*now = now.Add(time.Hour)
+	second := []CollectionResult{
+		{ResourceType: "ec2", Snapshots: []Snapshot{{
+			ExternalID: "i-order",
+			Endpoints:  []EndpointSnapshot{{Kind: "private", Address: "10.0.0.1"}, {Kind: "private", Address: "10.0.0.2"}},
+		}}},
+		{ResourceType: "rds", Snapshots: []Snapshot{{
+			ExternalID: "db-order",
+			Endpoints: []EndpointSnapshot{
+				{Kind: "hostname", Address: "primary.example", Port: 3306, Protocol: "tcp", ResolvedIPs: []string{"192.0.2.1", "192.0.2.2"}},
+				{Kind: "hostname", Address: "secondary.example", Port: 3306, Protocol: "tcp"},
+			},
+		}}},
+	}
+	job, err := service.Sync(context.Background(), source.ID, "scheduled", collectorStub{results: second})
+	if err != nil {
+		t.Fatalf("重复端点集合同步失败：%v", err)
+	}
+	if string(job.Statistics) != `{"ec2":{"added":0,"deleted":0,"failed":0,"lost":0,"restored":0,"updated":0},"rds":{"added":0,"deleted":0,"failed":0,"lost":0,"restored":0,"updated":0}}` {
+		t.Fatalf("相同端点集合换序不得计为更新：%s", job.Statistics)
+	}
+}
+
+// TestSyncLegacyEndpointOrderDoesNotCreateUpgradeUpdate 防止升级后首次同步把旧版无序端点数据误报为配置变化。
+func TestSyncLegacyEndpointOrderDoesNotCreateUpgradeUpdate(t *testing.T) {
+	service, db, source, now := newResourceServiceTest(t)
+	old := now.Add(-time.Hour)
+	server := Server{
+		AssetBase:  AssetBase{ProjectID: 1, SourceID: source.ID, Provider: ProviderAWS, ResourceType: "ec2", ExternalID: "i-legacy-order", AssetStatus: AssetStatusActive, FirstSeenAt: old, LastSeenAt: old},
+		PrivateIPs: json.RawMessage(`["10.0.0.2","10.0.0.1"]`),
+		PublicIPs:  json.RawMessage(`null`),
+	}
+	database := Database{
+		AssetBase: AssetBase{ProjectID: 1, SourceID: source.ID, Provider: ProviderAWS, ResourceType: "rds", ExternalID: "db-legacy-order", AssetStatus: AssetStatusActive, FirstSeenAt: old, LastSeenAt: old},
+		Endpoints: json.RawMessage(`[{"kind":"hostname","address":"secondary.example","port":3306,"protocol":"tcp","resolved_ips":null},{"kind":"hostname","address":"primary.example","port":3306,"protocol":"tcp","resolved_ips":["192.0.2.2","192.0.2.1"]}]`),
+	}
+	if err := db.Create(&server).Error; err != nil {
+		t.Fatalf("准备旧版服务器端点失败：%v", err)
+	}
+	if err := db.Create(&database).Error; err != nil {
+		t.Fatalf("准备旧版数据库端点失败：%v", err)
+	}
+	job, err := service.Sync(context.Background(), source.ID, "scheduled", collectorStub{results: []CollectionResult{
+		{ResourceType: "ec2", Snapshots: []Snapshot{{ExternalID: server.ExternalID, Endpoints: []EndpointSnapshot{{Kind: "private", Address: "10.0.0.1"}, {Kind: "private", Address: "10.0.0.2"}}}}},
+		{ResourceType: "rds", Snapshots: []Snapshot{{ExternalID: database.ExternalID, Endpoints: []EndpointSnapshot{{Kind: "hostname", Address: "primary.example", Port: 3306, Protocol: "tcp", ResolvedIPs: []string{"192.0.2.1", "192.0.2.2"}}, {Kind: "hostname", Address: "secondary.example", Port: 3306, Protocol: "tcp"}}}}},
+	}})
+	if err != nil {
+		t.Fatalf("同步旧版端点数据失败：%v", err)
+	}
+	if string(job.Statistics) != `{"ec2":{"added":0,"deleted":0,"failed":0,"lost":0,"restored":0,"updated":0},"rds":{"added":0,"deleted":0,"failed":0,"lost":0,"restored":0,"updated":0}}` {
+		t.Fatalf("旧版端点数据与相同快照不得产生升级伪更新：%s", job.Statistics)
+	}
+}
+
+// TestSyncRawAttributesPreserveLargeIntegerChanges 防止 JSON 大整数经浮点转换后丢失精度并漏报变化。
+func TestSyncRawAttributesPreserveLargeIntegerChanges(t *testing.T) {
+	service, db, source, now := newResourceServiceTest(t)
+	snapshot := Snapshot{ResourceType: "ec2", ExternalID: "i-large-number", RawAttributes: []byte(`{"sequence":9007199254740992}`)}
+	collector := collectorStub{results: []CollectionResult{{ResourceType: "ec2", Snapshots: []Snapshot{snapshot}}}}
+	if _, err := service.Sync(context.Background(), source.ID, "manual", collector); err != nil {
+		t.Fatalf("准备大整数属性测试失败：%v", err)
+	}
+	*now = now.Add(time.Hour)
+	snapshot.RawAttributes = []byte(`{"sequence":9007199254740993}`)
+	collector.results[0].Snapshots[0] = snapshot
+	job, err := service.Sync(context.Background(), source.ID, "scheduled", collector)
+	if err != nil {
+		t.Fatalf("同步大整数属性变化失败：%v", err)
+	}
+	if string(job.Statistics) != `{"ec2":{"added":0,"deleted":0,"failed":0,"lost":0,"restored":0,"updated":1}}` {
+		t.Fatalf("大整数属性变化必须计为更新：%s", job.Statistics)
+	}
+	var persisted Server
+	if err := db.Where("external_id = ?", snapshot.ExternalID).First(&persisted).Error; err != nil || !jsonValuesEqual(persisted.RawAttributes, snapshot.RawAttributes) {
+		t.Fatalf("大整数属性变化未正确持久化：raw=%s err=%v", persisted.RawAttributes, err)
+	}
+}
+
 // TestSyncRoutesAssetsIntoThreeTables 验证服务器、数据库和负载均衡分别持久化专属字段。
 func TestSyncRoutesAssetsIntoThreeTables(t *testing.T) {
 	service, db, source, _ := newResourceServiceTest(t)
@@ -158,9 +373,12 @@ func TestSyncRoutesAssetsIntoThreeTables(t *testing.T) {
 
 // TestSyncFailureDoesNotMarkResourcesMissing 验证单类失败和认证失败都不能错误更新失联状态。
 func TestSyncFailureDoesNotMarkResourcesMissing(t *testing.T) {
-	service, db, source, _ := newResourceServiceTest(t)
+	service, db, source, now := newResourceServiceTest(t)
 	active := Server{AssetBase: AssetBase{ProjectID: 1, SourceID: source.ID, Provider: ProviderAWS, ResourceType: "ec2", ExternalID: "i-1", AssetStatus: AssetStatusActive, FirstSeenAt: time.Now(), LastSeenAt: time.Now()}, PrivateIPs: json.RawMessage("[]"), PublicIPs: json.RawMessage("[]")}
 	_ = db.Create(&active).Error
+	old := now.Add(-24 * time.Hour)
+	expiredLost := Server{AssetBase: AssetBase{ProjectID: 1, SourceID: source.ID, Provider: ProviderAWS, ResourceType: "ec2", ExternalID: "i-expired-lost", AssetStatus: AssetStatusLost, MissingSince: &old, FirstSeenAt: old, LastSeenAt: old}, PrivateIPs: json.RawMessage("[]"), PublicIPs: json.RawMessage("[]")}
+	_ = db.Create(&expiredLost).Error
 	service.Sync(context.Background(), source.ID, "manual", collectorStub{results: []CollectionResult{{ResourceType: "ec2", Err: errors.New("采集失败")}}})
 	_ = db.First(&active, active.ID).Error
 	if active.AssetStatus != AssetStatusActive {
@@ -170,6 +388,12 @@ func TestSyncFailureDoesNotMarkResourcesMissing(t *testing.T) {
 	_ = db.First(&active, active.ID).Error
 	if active.AssetStatus != AssetStatusActive {
 		t.Fatal("认证失败不得标记失联")
+	}
+	var remaining, deletedAudits int64
+	_ = db.Model(&Server{}).Where("external_id = ?", expiredLost.ExternalID).Count(&remaining).Error
+	_ = db.Model(&AuditLog{}).Where("action = ? AND resource_id = ?", "resource.deleted", expiredLost.ExternalID).Count(&deletedAudits).Error
+	if remaining != 1 || deletedAudits != 0 {
+		t.Fatalf("类型失败和认证失败都不得清理过期失联资源：remaining=%d audits=%d", remaining, deletedAudits)
 	}
 }
 
@@ -184,21 +408,63 @@ func TestPermissionFailureKeepsSafeJobSummary(t *testing.T) {
 	}
 }
 
-// TestPurgeLostResourcesAfterOneDay 验证仅物理删除连续失联满 24 小时的资源。
-func TestPurgeLostResourcesAfterOneDay(t *testing.T) {
+// TestSyncDeletesExpiredLostResourcesAfterRestoringSeenResources 验证删除只发生在成功类型同步中，并归入当前任务统计。
+func TestSyncDeletesExpiredLostResourcesAfterRestoringSeenResources(t *testing.T) {
 	service, db, source, now := newResourceServiceTest(t)
 	old := now.Add(-24 * time.Hour)
 	recent := now.Add(-23 * time.Hour)
-	for index, missing := range []*time.Time{&old, &recent} {
+	for index, missing := range []*time.Time{&old, &recent, &old} {
 		_ = db.Create(&Server{AssetBase: AssetBase{ProjectID: 1, SourceID: source.ID, Provider: ProviderAWS, ResourceType: "ec2", ExternalID: string(rune('a' + index)), AssetStatus: AssetStatusLost, MissingSince: missing, FirstSeenAt: old, LastSeenAt: old}, PrivateIPs: json.RawMessage("[]"), PublicIPs: json.RawMessage("[]")}).Error
 	}
-	deleted, err := service.PurgeLostResources(context.Background())
-	if err != nil || deleted != 1 {
-		t.Fatalf("一天清理数量错误：deleted=%d err=%v", deleted, err)
+	job, err := service.Sync(context.Background(), source.ID, "scheduled", collectorStub{results: []CollectionResult{{ResourceType: "ec2", Snapshots: []Snapshot{{ExternalID: "c", Name: "重新出现"}}}}})
+	if err != nil {
+		t.Fatalf("执行带过期失联资源的同步失败：%v", err)
+	}
+	if string(job.Statistics) != `{"ec2":{"added":0,"deleted":1,"failed":0,"lost":0,"restored":1,"updated":0}}` {
+		t.Fatalf("同步任务必须记录恢复和删除数量：%s", job.Statistics)
+	}
+	var deletedCount int64
+	if err := db.Model(&Server{}).Where("external_id = ?", "a").Count(&deletedCount).Error; err != nil || deletedCount != 0 {
+		t.Fatalf("持续失联满一天的资源必须被删除：count=%d err=%v", deletedCount, err)
+	}
+	var recentResource, restoredResource Server
+	if err := db.Where("external_id = ?", "b").First(&recentResource).Error; err != nil || recentResource.AssetStatus != AssetStatusLost {
+		t.Fatalf("失联不足一天的资源必须保留：resource=%+v err=%v", recentResource, err)
+	}
+	if err := db.Where("external_id = ?", "c").First(&restoredResource).Error; err != nil || restoredResource.AssetStatus != AssetStatusActive {
+		t.Fatalf("本次重新出现的资源必须先恢复而不能误删：resource=%+v err=%v", restoredResource, err)
 	}
 	var audit AuditLog
 	if err := db.Where("action = ? AND resource_id = ?", "resource.deleted", "a").First(&audit).Error; err != nil {
 		t.Fatal("物理删除资源前必须保留独立审计记录")
+	}
+}
+
+// TestSyncRollsBackEarlierTypeDeletionWhenLaterTypeWriteFails 防止失败任务留下无法归属统计的已提交删除。
+func TestSyncRollsBackEarlierTypeDeletionWhenLaterTypeWriteFails(t *testing.T) {
+	service, db, source, now := newResourceServiceTest(t)
+	old := now.Add(-24 * time.Hour)
+	resource := Server{AssetBase: AssetBase{ProjectID: 1, SourceID: source.ID, Provider: ProviderAWS, ResourceType: "ec2", ExternalID: "i-atomic-delete", AssetStatus: AssetStatusLost, MissingSince: &old, FirstSeenAt: old, LastSeenAt: old}, PrivateIPs: json.RawMessage("[]"), PublicIPs: json.RawMessage("[]")}
+	if err := db.Create(&resource).Error; err != nil {
+		t.Fatalf("准备过期失联资源失败：%v", err)
+	}
+	if err := db.Exec(`CREATE TRIGGER fail_database_insert BEFORE INSERT ON resources_databases BEGIN SELECT RAISE(ABORT, '强制数据库写入失败'); END`).Error; err != nil {
+		t.Fatalf("准备数据库失败触发器失败：%v", err)
+	}
+	_, err := service.Sync(context.Background(), source.ID, "scheduled", collectorStub{results: []CollectionResult{
+		{ResourceType: "ec2"},
+		{ResourceType: "rds", Snapshots: []Snapshot{{ExternalID: "db-fail"}}},
+	}})
+	if err == nil {
+		t.Fatal("后续资源类型写入失败必须结束当前同步")
+	}
+	var remaining int64
+	if err := db.Model(&Server{}).Where("external_id = ?", resource.ExternalID).Count(&remaining).Error; err != nil || remaining != 1 {
+		t.Fatalf("后续类型失败必须回滚先前类型的删除：count=%d err=%v", remaining, err)
+	}
+	var deletedAudits int64
+	if err := db.Model(&AuditLog{}).Where("action = ? AND resource_id = ?", "resource.deleted", resource.ExternalID).Count(&deletedAudits).Error; err != nil || deletedAudits != 0 {
+		t.Fatalf("回滚的删除不得遗留审计：count=%d err=%v", deletedAudits, err)
 	}
 }
 
