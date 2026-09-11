@@ -136,10 +136,9 @@ func (s *Service) CreateUser(ctx context.Context, input CreateUserInput) (*User,
 	if s.repository == nil {
 		return nil, ErrIdentityRepositoryUnavailable
 	}
-	input.Username = strings.TrimSpace(input.Username)
 	input.DisplayName = strings.TrimSpace(input.DisplayName)
 	input.Email = strings.TrimSpace(input.Email)
-	if input.Username == "" || input.DisplayName == "" || len(input.Password) < 12 || len(input.Password) > 72 || !validRoleAndStatus(input.GlobalRole, input.Status) || !validProjectPermissions(input.ProjectPermissions) {
+	if !ValidUsername(input.Username) || input.DisplayName == "" || len(input.Password) < 12 || len(input.Password) > 72 || !validRoleAndStatus(input.GlobalRole, input.Status) || !validProjectPermissions(input.ProjectPermissions) {
 		return nil, ErrInvalidUserInput
 	}
 	if _, err := s.repository.FindByUsername(ctx, input.Username); err == nil {

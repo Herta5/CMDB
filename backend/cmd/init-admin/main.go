@@ -8,7 +8,6 @@ import (
 	"io"
 	"os"
 	"strings"
-	"unicode/utf8"
 
 	"cmdb/internal/identity"
 	"cmdb/internal/platform/config"
@@ -44,9 +43,9 @@ func run(args []string, input io.Reader, db *gorm.DB) error {
 	if err := flags.Parse(args); err != nil || flags.NArg() != 0 {
 		return errors.New("初始化参数无效：只接受 --username，密码必须从标准输入提供")
 	}
-	name := strings.TrimSpace(*username)
-	if name == "" || utf8.RuneCountInString(name) > 64 {
-		return errors.New("初始化用户名必须为 1 至 64 个字符")
+	name := *username
+	if !identity.ValidUsername(name) {
+		return errors.New("初始化用户名必须为 1 至 64 个字符且只能包含字母、数字和下划线")
 	}
 	// 限制读取长度，拒绝超出 bcrypt 72 字节边界的密码；允许管道末尾单个换行。
 	value, err := io.ReadAll(io.LimitReader(input, 75))

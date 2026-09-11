@@ -28,9 +28,9 @@ import (
 func TestAuditQueryPermissionsAndProjectIsolation(t *testing.T) {
 	server, password, db := integrationServerWithDatabase(t)
 	admin := loginUser(t, server, "operator", password)
-	projectAdmin := loginUser(t, server, "member-a", password)
-	integrationRequest(t, server, admin, http.MethodPost, "/api/v1/users", map[string]any{"username": "member-b", "password": password, "display_name": "项目成员", "global_role": "user", "status": "active", "project_permissions": []any{}}, http.StatusCreated)
-	projectMember := loginUser(t, server, "member-b", password)
+	projectAdmin := loginUser(t, server, "member_a", password)
+	integrationRequest(t, server, admin, http.MethodPost, "/api/v1/users", map[string]any{"username": "member_b", "password": password, "display_name": "项目成员", "global_role": "user", "status": "active", "project_permissions": []any{}}, http.StatusCreated)
+	projectMember := loginUser(t, server, "member_b", password)
 	var firstProject, secondProject project.Project
 	decodeIntegration(t, integrationRequest(t, server, admin, http.MethodPost, "/api/v1/projects", map[string]any{"code": "audit-a", "name": "审计项目甲"}, http.StatusCreated), &firstProject)
 	decodeIntegration(t, integrationRequest(t, server, admin, http.MethodPost, "/api/v1/projects", map[string]any{"code": "audit-b", "name": "审计项目乙"}, http.StatusCreated), &secondProject)
@@ -78,7 +78,7 @@ func TestManagementMutationsWriteActorAudit(t *testing.T) {
 	projectPath := "/api/v1/projects/" + strconv.FormatUint(managedProject.ID, 10)
 	integrationRequest(t, server, admin, http.MethodPut, projectPath, map[string]any{"name": "审计动作项目新版", "description": "审计详情", "status": "enabled"}, http.StatusOK)
 	var managedUser identity.User
-	decodeIntegration(t, integrationRequest(t, server, admin, http.MethodPost, "/api/v1/users", map[string]any{"username": "audit-user", "password": "never-persist-this-password", "display_name": "审计用户", "global_role": "user", "status": "active", "project_permissions": []any{}}, http.StatusCreated), &managedUser)
+	decodeIntegration(t, integrationRequest(t, server, admin, http.MethodPost, "/api/v1/users", map[string]any{"username": "audit_user", "password": "never-persist-this-password", "display_name": "审计用户", "global_role": "user", "status": "active", "project_permissions": []any{}}, http.StatusCreated), &managedUser)
 	userPath := "/api/v1/users/" + strconv.FormatUint(managedUser.ID, 10)
 	integrationRequest(t, server, admin, http.MethodPut, userPath, map[string]any{"display_name": "审计用户新版", "email": "audit@example.invalid", "global_role": "user", "status": "active", "password": "another-never-persist-password", "project_permissions": []any{}}, http.StatusOK)
 	integrationRequest(t, server, admin, http.MethodPut, userPath+"/status", map[string]any{"status": "disabled"}, http.StatusOK)
@@ -116,7 +116,7 @@ func TestUserPermissionReplacementWritesProjectAudit(t *testing.T) {
 	decodeIntegration(t, integrationRequest(t, server, admin, http.MethodPost, "/api/v1/projects", map[string]any{"code": "permission-b", "name": "授权项目乙"}, http.StatusCreated), &secondProject)
 	var managedUser identity.User
 	decodeIntegration(t, integrationRequest(t, server, admin, http.MethodPost, "/api/v1/users", map[string]any{
-		"username": "permission-user", "password": "permission-user-password", "display_name": "授权用户", "global_role": "user", "status": "active",
+		"username": "permission_user", "password": "permission-user-password", "display_name": "授权用户", "global_role": "user", "status": "active",
 		"project_permissions": []map[string]any{{"project_id": firstProject.ID, "role": "member"}},
 	}, http.StatusCreated), &managedUser)
 	integrationRequest(t, server, admin, http.MethodPut, "/api/v1/users/"+strconv.FormatUint(managedUser.ID, 10), map[string]any{
@@ -140,7 +140,7 @@ func TestUserPermissionReplacementWritesProjectAudit(t *testing.T) {
 func TestProjectBoundaryEndToEnd(t *testing.T) {
 	server, password := integrationServer(t)
 	admin := loginUser(t, server, "operator", password)
-	member := loginUser(t, server, "member-a", password)
+	member := loginUser(t, server, "member_a", password)
 	first := integrationRequest(t, server, admin, "POST", "/api/v1/projects", map[string]any{"code": "cloud-a", "name": "云项目甲"}, 201)
 	second := integrationRequest(t, server, admin, "POST", "/api/v1/projects", map[string]any{"code": "cloud-b", "name": "云项目乙"}, 201)
 	var firstProject, secondProject project.Project
@@ -200,12 +200,12 @@ func TestHealthEndpoint(t *testing.T) {
 func TestSystemAdministratorManagesUsers(t *testing.T) {
 	server, password, db := integrationServerWithDatabase(t)
 	admin := loginUser(t, server, "operator", password)
-	member := loginUser(t, server, "member-a", password)
+	member := loginUser(t, server, "member_a", password)
 	var firstProject, secondProject project.Project
 	decodeIntegration(t, integrationRequest(t, server, admin, http.MethodPost, "/api/v1/projects", map[string]any{"code": "user-auth-a", "name": "用户授权甲"}, http.StatusCreated), &firstProject)
 	decodeIntegration(t, integrationRequest(t, server, admin, http.MethodPost, "/api/v1/projects", map[string]any{"code": "user-auth-b", "name": "用户授权乙"}, http.StatusCreated), &secondProject)
 	created := integrationRequest(t, server, admin, http.MethodPost, "/api/v1/users", map[string]any{
-		"username": "cloud-user", "password": "secure-user-password", "display_name": "云资源用户", "email": "cloud@example.invalid", "global_role": "user", "status": "active",
+		"username": "cloud_user", "password": "secure-user-password", "display_name": "云资源用户", "email": "cloud@example.invalid", "global_role": "user", "status": "active",
 		"project_permissions": []map[string]any{{"project_id": firstProject.ID, "role": "project_admin"}, {"project_id": secondProject.ID, "role": "member"}},
 	}, http.StatusCreated)
 	if strings.Contains(created.Body.String(), "password") {
@@ -213,7 +213,7 @@ func TestSystemAdministratorManagesUsers(t *testing.T) {
 	}
 	var user identity.User
 	decodeIntegration(t, created, &user)
-	if user.ID == 0 || user.Username != "cloud-user" || user.GlobalRole != identity.GlobalRoleUser || user.Status != "active" {
+	if user.ID == 0 || user.Username != "cloud_user" || user.GlobalRole != identity.GlobalRoleUser || user.Status != "active" {
 		t.Fatal("创建用户必须返回指定的全局角色和状态")
 	}
 	var memberships int64
@@ -226,14 +226,14 @@ func TestSystemAdministratorManagesUsers(t *testing.T) {
 		t.Fatal("用户列表必须返回项目权限和项目名称，且不得包含密码哈希")
 	}
 	integrationRequest(t, server, admin, http.MethodPut, "/api/v1/users/"+strconv.FormatUint(user.ID, 10), map[string]any{"display_name": "云资源用户", "email": "cloud@example.invalid", "global_role": "user", "status": "disabled", "project_permissions": []map[string]any{{"project_id": secondProject.ID, "role": "member"}}}, http.StatusOK)
-	integrationRequest(t, server, "", http.MethodPost, "/api/v1/auth/login", map[string]any{"username": "cloud-user", "password": "secure-user-password"}, http.StatusUnauthorized)
+	integrationRequest(t, server, "", http.MethodPost, "/api/v1/auth/login", map[string]any{"username": "cloud_user", "password": "secure-user-password"}, http.StatusUnauthorized)
 }
 
 // TestSystemAdministratorDeletesUser 验证系统管理员可删除其他用户，但不能删除当前登录身份。
 func TestSystemAdministratorDeletesUser(t *testing.T) {
 	server, password, db := integrationServerWithDatabase(t)
 	admin := loginUser(t, server, "operator", password)
-	member := loginUser(t, server, "member-a", password)
+	member := loginUser(t, server, "member_a", password)
 	if err := db.Exec("PRAGMA foreign_keys = ON").Error; err != nil {
 		t.Fatalf("启用删除副作用校验失败：%v", err)
 	}
@@ -293,12 +293,12 @@ func TestSystemAdministratorDeletesUser(t *testing.T) {
 func TestSystemAdministratorEditsUserAndCannotLockSelfOut(t *testing.T) {
 	server, password, db := integrationServerWithDatabase(t)
 	admin := loginUser(t, server, "operator", password)
-	member := loginUser(t, server, "member-a", password)
+	member := loginUser(t, server, "member_a", password)
 	var firstProject, secondProject project.Project
 	decodeIntegration(t, integrationRequest(t, server, admin, http.MethodPost, "/api/v1/projects", map[string]any{"code": "replace-a", "name": "替换前项目"}, http.StatusCreated), &firstProject)
 	decodeIntegration(t, integrationRequest(t, server, admin, http.MethodPost, "/api/v1/projects", map[string]any{"code": "replace-b", "name": "替换后项目"}, http.StatusCreated), &secondProject)
 	created := integrationRequest(t, server, admin, http.MethodPost, "/api/v1/users", map[string]any{
-		"username": "editable-user", "password": "initial-user-password", "display_name": "待编辑用户", "email": "old@example.invalid", "global_role": "user", "status": "active", "project_permissions": []map[string]any{{"project_id": firstProject.ID, "role": "member"}},
+		"username": "editable_user", "password": "initial-user-password", "display_name": "待编辑用户", "email": "old@example.invalid", "global_role": "user", "status": "active", "project_permissions": []map[string]any{{"project_id": firstProject.ID, "role": "member"}},
 	}, http.StatusCreated)
 	var user identity.User
 	decodeIntegration(t, created, &user)
@@ -313,8 +313,8 @@ func TestSystemAdministratorEditsUserAndCannotLockSelfOut(t *testing.T) {
 	if err := db.Where("user_id = ?", user.ID).Find(&roles).Error; err != nil || len(roles) != 1 || roles[0].ProjectID != secondProject.ID || roles[0].Role != project.MemberRoleMember {
 		t.Fatalf("编辑用户必须全量替换项目权限：roles=%+v err=%v", roles, err)
 	}
-	integrationRequest(t, server, "", http.MethodPost, "/api/v1/auth/login", map[string]any{"username": "editable-user", "password": "initial-user-password"}, http.StatusUnauthorized)
-	integrationRequest(t, server, "", http.MethodPost, "/api/v1/auth/login", map[string]any{"username": "editable-user", "password": "replacement-password"}, http.StatusOK)
+	integrationRequest(t, server, "", http.MethodPost, "/api/v1/auth/login", map[string]any{"username": "editable_user", "password": "initial-user-password"}, http.StatusUnauthorized)
+	integrationRequest(t, server, "", http.MethodPost, "/api/v1/auth/login", map[string]any{"username": "editable_user", "password": "replacement-password"}, http.StatusOK)
 	integrationRequest(t, server, member, http.MethodPut, path, map[string]any{"display_name": "越权修改", "email": "", "global_role": "user", "status": "active"}, http.StatusForbidden)
 	integrationRequest(t, server, admin, http.MethodPut, "/api/v1/users/1", map[string]any{"display_name": "当前管理员", "email": "", "global_role": "user", "status": "active"}, http.StatusConflict)
 	integrationRequest(t, server, admin, http.MethodPut, "/api/v1/users/1/status", map[string]any{"status": "disabled"}, http.StatusConflict)
@@ -325,11 +325,11 @@ func TestCreatingUserWithMissingProjectRollsBack(t *testing.T) {
 	server, password, db := integrationServerWithDatabase(t)
 	admin := loginUser(t, server, "operator", password)
 	integrationRequest(t, server, admin, http.MethodPost, "/api/v1/users", map[string]any{
-		"username": "rollback-user", "password": "rollback-user-password", "display_name": "回滚用户", "global_role": "user", "status": "active",
+		"username": "rollback_user", "password": "rollback-user-password", "display_name": "回滚用户", "global_role": "user", "status": "active",
 		"project_permissions": []map[string]any{{"project_id": 999999, "role": "member"}},
 	}, http.StatusBadRequest)
 	var users, memberships int64
-	if err := db.Table("users").Where("username = ?", "rollback-user").Count(&users).Error; err != nil {
+	if err := db.Table("users").Where("username = ?", "rollback_user").Count(&users).Error; err != nil {
 		t.Fatalf("查询回滚用户失败：%v", err)
 	}
 	if err := db.Table("project_members").Where("user_id NOT IN ?", []uint64{1, 2, 3}).Count(&memberships).Error; err != nil {
@@ -344,7 +344,7 @@ func TestCreatingUserWithMissingProjectRollsBack(t *testing.T) {
 func TestProjectAdministratorReadsCandidatesAndManagesMemberRoles(t *testing.T) {
 	server, password := integrationServer(t)
 	admin := loginUser(t, server, "operator", password)
-	member := loginUser(t, server, "member-a", password)
+	member := loginUser(t, server, "member_a", password)
 	var created project.Project
 	decodeIntegration(t, integrationRequest(t, server, admin, http.MethodPost, "/api/v1/projects", map[string]any{"code": "members", "name": "成员项目"}, http.StatusCreated), &created)
 	path := "/api/v1/projects/" + strconv.FormatUint(created.ID, 10)
@@ -362,7 +362,7 @@ func TestProjectAdministratorReadsCandidatesAndManagesMemberRoles(t *testing.T) 
 		t.Fatal("项目管理员必须能读取可添加用户的最小公开身份")
 	}
 	members := integrationRequest(t, server, member, http.MethodGet, path+"/members", nil, http.StatusOK)
-	if !strings.Contains(members.Body.String(), "member-a") || strings.Contains(members.Body.String(), "password") {
+	if !strings.Contains(members.Body.String(), "member_a") || strings.Contains(members.Body.String(), "password") {
 		t.Fatal("成员列表必须包含公开用户名且不得包含认证字段")
 	}
 }
@@ -371,7 +371,7 @@ func TestProjectAdministratorReadsCandidatesAndManagesMemberRoles(t *testing.T) 
 func TestProjectSourceAPINeverReturnsCredentials(t *testing.T) {
 	server, password, db := integrationServerWithDatabase(t)
 	admin := loginUser(t, server, "operator", password)
-	member := loginUser(t, server, "member-a", password)
+	member := loginUser(t, server, "member_a", password)
 	var created project.Project
 	decodeIntegration(t, integrationRequest(t, server, admin, http.MethodPost, "/api/v1/projects", map[string]any{"code": "sources", "name": "接入项目"}, http.StatusCreated), &created)
 	path := "/api/v1/projects/" + strconv.FormatUint(created.ID, 10)
@@ -546,7 +546,7 @@ func integrationServerWithDatabase(t *testing.T) (http.Handler, string, *gorm.DB
 	}
 	for _, user := range []identity.User{
 		{ID: 1, Username: "operator", PasswordHash: hash, DisplayName: "系统管理员", GlobalRole: "system_admin", Status: "active"},
-		{ID: 2, Username: "member-a", PasswordHash: hash, DisplayName: "项目查看者", GlobalRole: "user", Status: "active"},
+		{ID: 2, Username: "member_a", PasswordHash: hash, DisplayName: "项目查看者", GlobalRole: "user", Status: "active"},
 	} {
 		if err := db.Create(&user).Error; err != nil {
 			t.Fatal("准备验收身份失败")

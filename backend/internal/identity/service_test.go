@@ -4,6 +4,7 @@ package identity
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"cmdb/internal/audit"
@@ -11,6 +12,31 @@ import (
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
 )
+
+// TestCreateUserRejectsInvalidUsername 防止管理员创建不满足公开身份标识格式的用户。
+func TestCreateUserRejectsInvalidUsername(t *testing.T) {
+	db := identityUserCreationDatabase(t)
+	service := NewService(NewUserRepository(db), "identity-test-signing-key", audit.NewRepository(db))
+
+	for _, username := range []string{"user-name", "user name", "用户", strings.Repeat("a", 65)} {
+		t.Run(username, func(t *testing.T) {
+			_, err := service.CreateUser(context.Background(), CreateUserInput{
+				Username: username, Password: "long-enough-password", DisplayName: "测试用户", GlobalRole: GlobalRoleUser, Status: "active",
+			})
+			if !errors.Is(err, ErrInvalidUserInput) {
+				t.Fatalf("非法用户名必须被拒绝：%v", err)
+			}
+		})
+	}
+
+	var count int64
+	if err := db.Model(&User{}).Count(&count).Error; err != nil {
+		t.Fatalf("查询非法创建结果失败：%v", err)
+	}
+	if count != 0 {
+		t.Fatalf("非法用户名不得创建用户：%d", count)
+	}
+}
 
 // TestUpdateUserStatusStopsWhenPreviousUserCannotBeRead 防止旧状态读取失败后仍修改用户并产生不完整审计。
 func TestUpdateUserStatusStopsWhenPreviousUserCannotBeRead(t *testing.T) {
@@ -49,12 +75,12 @@ func TestCreateUserRollsBackWhenAuditWriteFails(t *testing.T) {
 	db := identityAuditFailureDatabase(t)
 	service := NewService(NewUserRepository(db), "identity-test-signing-key", audit.NewRepository(db))
 
-	_, err := service.CreateUser(context.Background(), CreateUserInput{Username: "atomic-create", Password: "long-enough-password", DisplayName: "原子创建用户", GlobalRole: GlobalRoleUser, Status: "active"})
+	_, err := service.CreateUser(context.Background(), CreateUserInput{Username: "atomic_create", Password: "long-enough-password", DisplayName: "原子创建用户", GlobalRole: GlobalRoleUser, Status: "active"})
 	if err == nil {
 		t.Fatal("审计写入失败时创建用户必须返回错误")
 	}
 	var count int64
-	if err := db.Model(&User{}).Where("username = ?", "atomic-create").Count(&count).Error; err != nil {
+	if err := db.Model(&User{}).Where("username = ?", "atomic_create").Count(&count).Error; err != nil {
 		t.Fatalf("查询创建回滚结果失败：%v", err)
 	}
 	if count != 0 {
@@ -175,6 +201,19 @@ func identityAuditFailureDatabase(t *testing.T) *gorm.DB {
 	}
 	if err := db.Exec("CREATE TABLE project_members (id integer primary key autoincrement, project_id integer not null, user_id integer not null, role text not null, created_at datetime not null, updated_at datetime not null)").Error; err != nil {
 		t.Fatalf("创建项目成员测试表失败：%v", err)
+	}
+	return db
+}
+
+// identityUserCreationDatabase 创建含审计表的身份数据库，使用户创建测试能验证真实持久化结果。
+func identityUserCreationDatabase(t *testing.T) *gorm.DB {
+	t.Helper()
+	db, err := gorm.Open(sqlite.Open("file:"+t.Name()+"?mode=memory&cache=shared"), &gorm.Config{Logger: logger.Default.LogMode(logger.Silent)})
+	if err != nil {
+		t.Fatalf("创建身份用户测试数据库失败：%v", err)
+	}
+	if err := db.AutoMigrate(&User{}, &audit.Log{}); err != nil {
+		t.Fatalf("创建身份用户测试表失败：%v", err)
 	}
 	return db
 }

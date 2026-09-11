@@ -47,6 +47,10 @@ func TestInitializeAdminRejectsUnsafeInput(t *testing.T) {
 		{"拒绝密码参数", []string{"--username", "operator", "--password", "invalid"}, ""},
 		{"拒绝缺失用户名", nil, adminPassword(t)},
 		{"拒绝空白用户名", []string{"--username", " "}, adminPassword(t)},
+		{"拒绝短横线用户名", []string{"--username", "user-name"}, adminPassword(t)},
+		{"拒绝含空格用户名", []string{"--username", "user name"}, adminPassword(t)},
+		{"拒绝非 ASCII 用户名", []string{"--username", "用户"}, adminPassword(t)},
+		{"拒绝超长用户名", []string{"--username", strings.Repeat("a", 65)}, adminPassword(t)},
 		{"拒绝过短密码", []string{"--username", "operator"}, "short"},
 		{"拒绝超出 bcrypt 长度的密码", []string{"--username", "operator"}, strings.Repeat("x", 73)},
 	} {
@@ -91,7 +95,7 @@ func TestConcurrentInitializeAdminCreatesOnlyOneUser(t *testing.T) {
 		t.Fatal("创建并发初始化身份表失败")
 	}
 	passwords := []string{adminPassword(t), adminPassword(t)}
-	names := []string{"first-operator", "second-operator"}
+	names := []string{"first_operator", "second_operator"}
 	start := make(chan struct{})
 	results := make(chan int, 2)
 	for index := range 2 {
