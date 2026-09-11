@@ -4,7 +4,6 @@ import request from '@/utils/request'
 /** AuditLog 是页面可直接展示的单条脱敏审计记录。 */
 export interface AuditLog {
   id: number
-  actorId: number | null
   actorUsername: string
   actorDisplayName: string
   projectId: number | null
@@ -22,7 +21,7 @@ export interface AuditFilter {
   page: number
   pageSize: number
   action?: string
-  actorId?: number
+  actorUsername?: string
   resourceType?: string
   resourceId?: string
   startAt?: string
@@ -35,7 +34,7 @@ export interface AuditFilter {
 export interface AuditPage { items: AuditLog[]; total: number; page: number; pageSize: number; snapshotId: number }
 
 interface AuditLogDTO {
-  id: number; actor_id: number | null; actor_username: string; actor_display_name: string
+  id: number; actor_username: string; actor_display_name: string
   project_id: number | null; project_name: string; action: string; resource_type: string
   resource_id: string; detail: Record<string, unknown> | null; request_ip: string; created_at: string
 }
@@ -45,7 +44,7 @@ interface AuditPageDTO { items: AuditLogDTO[]; total: number; page: number; page
 function compactParams(filter: AuditFilter): Record<string, string | number> {
   const params: Record<string, string | number> = { page: filter.page, page_size: filter.pageSize }
   if (filter.action) params.action = filter.action
-  if (filter.actorId) params.actor_id = filter.actorId
+  if (filter.actorUsername) params.actor_username = filter.actorUsername
   if (filter.resourceType) params.resource_type = filter.resourceType
   if (filter.resourceId) params.resource_id = filter.resourceId
   if (filter.startAt) params.start_at = filter.startAt
@@ -57,7 +56,7 @@ function compactParams(filter: AuditFilter): Record<string, string | number> {
 /** toAuditLog 只映射后端公开字段，未知详情保留为脱敏键值供抽屉展示。 */
 function toAuditLog(value: AuditLogDTO): AuditLog {
   return {
-    id: value.id, actorId: value.actor_id, actorUsername: value.actor_username ?? '', actorDisplayName: value.actor_display_name ?? '',
+    id: value.id, actorUsername: value.actor_username ?? '', actorDisplayName: value.actor_display_name ?? '',
     projectId: value.project_id, projectName: value.project_name ?? '', action: value.action,
     resourceType: value.resource_type, resourceId: value.resource_id, detail: value.detail ?? {}, requestIp: value.request_ip ?? '', createdAt: value.created_at,
   }

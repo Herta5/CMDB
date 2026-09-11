@@ -26,7 +26,7 @@ export const useAuditStore = defineStore('cmdb-audit', () => {
       return
     }
     // 项目或筛选变化会建立新快照；同一条件的后续页沿用首次响应边界。
-    const contextKey = JSON.stringify([projectId, filter.action ?? '', filter.actorId ?? 0, filter.resourceType ?? '', filter.resourceId ?? '', filter.startAt ?? '', filter.endAt ?? ''])
+    const contextKey = JSON.stringify([projectId, filter.action ?? '', filter.actorUsername ?? '', filter.resourceType ?? '', filter.resourceId ?? '', filter.startAt ?? '', filter.endAt ?? ''])
     if (filter.page === 1 || contextKey !== snapshotContext) {
       snapshotId.value = 0
       snapshotContext = contextKey

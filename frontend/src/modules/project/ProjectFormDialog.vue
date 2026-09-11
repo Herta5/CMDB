@@ -20,36 +20,36 @@ const form = reactive({
   name: props.project?.name ?? '',
   description: props.project?.description ?? '',
   status: props.project?.status ?? 'enabled' as 'enabled' | 'disabled',
-  ownerUserId: props.project?.ownerUserId?.toString() ?? '',
+  ownerUsername: props.project?.ownerUsername ?? '',
 })
 const validationError = ref('')
 
-/** 负责人为空表示未设置；填写时必须是安全的正整数用户标识。 */
-function parseOwnerUserId(): number | null | undefined {
-  if (!form.ownerUserId.trim()) return null
-  const value = Number(form.ownerUserId)
-  return Number.isSafeInteger(value) && value > 0 ? value : undefined
+/** 负责人为空表示未设置；用户名必须符合公开 API 的稳定身份格式。 */
+function parseOwnerUsername(): string | null | undefined {
+  const value = form.ownerUsername.trim()
+  if (!value) return null
+  return /^[A-Za-z0-9_]{1,64}$/.test(value) ? value : undefined
 }
 
 /** 在发出请求前完成必要校验，避免依赖浏览器实现差异产生空项目。 */
 function submit() {
   const code = form.code.trim()
   const name = form.name.trim()
-  const ownerUserId = parseOwnerUserId()
+  const ownerUsername = parseOwnerUsername()
   if ((props.mode === 'create' && !code) || !name) {
     validationError.value = '请填写项目编码和项目名称'
     return
   }
-  if (ownerUserId === undefined) {
-    validationError.value = '负责人用户 ID 必须是正整数'
+  if (ownerUsername === undefined) {
+    validationError.value = '负责人用户名只能包含字母、数字和下划线'
     return
   }
   validationError.value = ''
   if (props.mode === 'create') {
-    emit('submit', { code, name, description: form.description.trim(), ownerUserId })
+    emit('submit', { code, name, description: form.description.trim(), ownerUsername })
     return
   }
-  emit('submit', { name, description: form.description.trim(), status: form.status, ownerUserId })
+  emit('submit', { name, description: form.description.trim(), status: form.status, ownerUsername })
 }
 </script>
 
@@ -66,7 +66,7 @@ function submit() {
         <label>项目名称<span aria-hidden="true"> *</span><input :value="form.name" name="name" maxlength="128" autocomplete="off" placeholder="例如 云平台" @input="form.name = ($event.target as HTMLInputElement).value"></label>
         <label class="form-wide">项目说明<textarea :value="form.description" name="description" maxlength="500" rows="3" placeholder="说明项目用途和资源边界" @input="form.description = ($event.target as HTMLTextAreaElement).value" /></label>
         <label v-if="mode === 'edit'">项目状态<select :value="form.status" name="status" @change="form.status = ($event.target as HTMLSelectElement).value as 'enabled' | 'disabled'"><option value="enabled">已启用</option><option value="disabled">已停用</option></select></label>
-        <label>负责人用户 ID（可选）<input :value="form.ownerUserId" name="ownerUserId" inputmode="numeric" autocomplete="off" placeholder="暂不设置" @input="form.ownerUserId = ($event.target as HTMLInputElement).value"></label>
+        <label>负责人用户名（可选）<input :value="form.ownerUsername" name="ownerUsername" autocomplete="off" placeholder="暂不设置" @input="form.ownerUsername = ($event.target as HTMLInputElement).value"></label>
         <p v-if="validationError || serverError" class="form-error" role="alert">{{ validationError || serverError }}</p>
         <div class="dialog-actions form-wide">
           <button type="button" class="console-button" :disabled="submitting" @click="emit('cancel')">取消</button>

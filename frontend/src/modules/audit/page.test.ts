@@ -11,9 +11,10 @@ import { useProjectStore } from '@/modules/project/store'
 import AuditLogPage from './AuditLogPage.vue'
 
 // Node 实现 Vue 表单指令需要的最小宿主契约，页面业务逻辑仍全部执行生产代码。
-type Node = { type: string; text: string; props: Record<string, any>; children: Node[]; parent: Node | null; value?: unknown; readonly options: Node[]; addEventListener: () => void; removeEventListener: () => void }
+type Node = { type: string; text: string; props: Record<string, any>; children: Node[]; parent: Node | null; value?: unknown; readonly options: Node[]; addEventListener: () => void; removeEventListener: () => void; getRootNode: () => Node }
 const node = (type: string, text = ''): Node => {
-  const value = { type, text, props: {}, children: [], parent: null, addEventListener: () => {}, removeEventListener: () => {} } as Node
+  const value = { type, text, props: {}, children: [], parent: null, addEventListener: () => {}, removeEventListener: () => {}, getRootNode: () => undefined as unknown as Node } as Node
+  value.getRootNode = () => value
   Object.defineProperty(value, 'options', { get: () => value.children.filter(child => child.type === 'option') })
   return value
 }
@@ -40,7 +41,7 @@ async function mountAuditPage() {
   app.use(pinia).use(router)
   app.mount(root)
   const projects = useProjectStore()
-  projects.projects = [{ id: 7, code: 'cloud', name: '云项目', description: '', status: 'enabled', ownerUserId: null, createdAt: '', updatedAt: '' }]
+  projects.projects = [{ id: 7, code: 'cloud', name: '云项目', description: '', status: 'enabled', ownerUsername: null, createdAt: '', updatedAt: '' }]
   projects.listState = 'ready'; projects.selectAllProjects()
   await flush()
   return { app, root }
@@ -50,16 +51,19 @@ describe('审计日志页面', () => {
   beforeEach(() => {
     const storage = new Map<string, string>()
     vi.stubGlobal('localStorage', { getItem: (key: string) => storage.get(key) ?? null, setItem: (key: string, value: string) => storage.set(key, value), removeItem: (key: string) => storage.delete(key) })
+    vi.stubGlobal('Document', class {})
+    vi.stubGlobal('ShadowRoot', class {})
     pinia = createPinia(); setActivePinia(pinia)
-    useAuthStore().acceptSession('审计会话', { id: 1, username: 'admin', displayName: '系统管理员', globalRole: 'system_admin' })
-    get.mockReset().mockResolvedValue({ items: [{ id: 5, actor_id: null, actor_username: '', actor_display_name: '', project_id: 7, project_name: '云项目', action: 'resource.lost', resource_type: 'ec2', resource_id: 'i-lost', detail: { provider: 'aws' }, request_ip: '', created_at: '2026-09-10T08:00:00Z' }], total: 1, page: 1, page_size: 20 })
+    useAuthStore().acceptSession('审计会话', { username: 'admin', displayName: '系统管理员', globalRole: 'system_admin' })
+    get.mockReset().mockResolvedValue({ items: [{ id: 5, actor_username: 'audit_admin', actor_display_name: '审计管理员', project_id: 7, project_name: '云项目', action: 'resource.lost', resource_type: 'ec2', resource_id: 'i-lost', detail: { provider: 'aws' }, request_ip: '', created_at: '2026-09-10T08:00:00Z' }], total: 1, page: 1, page_size: 20 })
   })
 
   it('显示中文审计记录并可打开详情抽屉', async () => {
     const { app, root } = await mountAuditPage()
     expect(text(root)).toContain('审计日志')
     expect(text(root)).toContain('资源失联')
-    expect(text(root)).toContain('系统任务')
+    expect(text(root)).toContain('audit_admin')
+    expect(text(root)).toContain('审计管理员')
     await all(root).find(value => value.type === 'button' && text(value).includes('查看详情'))!.props.onClick()
     await flush()
     expect(text(root)).toContain('审计详情')
@@ -74,6 +78,16 @@ describe('审计日志页面', () => {
     await all(root).find(value => value.type === 'form')!.props.onSubmit({ preventDefault: () => {} })
     await flush()
     expect(get).toHaveBeenLastCalledWith('/audit-logs', { params: expect.objectContaining({ action: 'user.deleted', page: 1, page_size: 20 }) })
+    app.unmount()
+  })
+  it('以用户名筛选审计日志并展示用户名提示', async () => {
+    const { app, root } = await mountAuditPage()
+    const actorInput = all(root).find(value => value.type === 'input' && value.props['aria-label'] === '操作人用户名')!
+    actorInput.props['onUpdate:modelValue']('audit_admin')
+    await all(root).find(value => value.type === 'form')!.props.onSubmit({ preventDefault: () => {} })
+    await flush()
+    expect(all(root).find(value => value.type === 'input' && value.props['aria-label'] === '对象标识')?.props.placeholder).toBe('云端 ID 或用户名')
+    expect(get).toHaveBeenLastCalledWith('/audit-logs', { params: expect.objectContaining({ actor_username: 'audit_admin', page: 1, page_size: 20 }) })
     app.unmount()
   })
 })

@@ -47,7 +47,7 @@ const renderer = createRenderer<Node, Node>({
 })
 const text = (n: Node): string => n.text + n.children.map(text).join('')
 const all = (n: Node): Node[] => [n, ...n.children.flatMap(all)]
-const fixture = { id: 2, name: '平台项目', code: 'platform', description: '共享平台', status: 'enabled', owner_user_id: null, created_at: '2026-09-09T00:00:00Z', updated_at: '2026-09-09T01:00:00Z' }
+const fixture = { id: 2, name: '平台项目', code: 'platform', description: '共享平台', status: 'enabled', owner_username: null, created_at: '2026-09-09T00:00:00Z', updated_at: '2026-09-09T01:00:00Z' }
 let pinia: ReturnType<typeof createPinia>
 beforeEach(() => {
   const storage = new Map<string, string>()
@@ -56,7 +56,7 @@ beforeEach(() => {
   vi.stubGlobal('ShadowRoot', class {})
   pinia = createPinia()
   setActivePinia(pinia)
-  useAuthStore().acceptSession('测试会话', { id: 1, username: 'operator', displayName: '运维用户', globalRole: 'user' })
+  useAuthStore().acceptSession('测试会话', { username: 'operator', displayName: '运维用户', globalRole: 'user' })
   get.mockReset().mockResolvedValue([fixture])
   post.mockReset()
   put.mockReset()
@@ -92,12 +92,12 @@ async function mount(component: Component, path = '/projects') {
 describe('项目控制台页面', () => {
   // 相同地址下换用户或更新令牌都必须重新授权，不能只依赖路由变化。
   it.each([
-    [4, '用户切换后的资料'], [1, '令牌更新后的资料'],
-  ])('详情地址不变时，会话用户 %s 的有效新会话重新加载详情', async (userId, name) => {
+    ['切换用户', '用户切换后的资料'], ['更新令牌', '令牌更新后的资料'],
+  ])('详情地址不变时，会话标识 %s 的有效新会话重新加载详情', async (_sessionMarker, name) => {
     get.mockImplementation(() => Promise.resolve(useAuthStore().token === '更新后的会话' ? { ...fixture, name } : fixture))
     const { root, app, router } = await mount(ProjectDetailPage, '/projects/2')
     expect(text(root)).toContain('平台项目')
-    useAuthStore().acceptSession('更新后的会话', { id: userId as number, username: 'operator', globalRole: 'user' })
+    useAuthStore().acceptSession('更新后的会话', { username: 'operator', globalRole: 'user' })
     await flush()
     expect(router.currentRoute.value.path).toBe('/projects/2')
     expect(useProjectStore().detailState).toBe('ready')
@@ -110,7 +110,7 @@ describe('项目控制台页面', () => {
     get.mockReturnValueOnce(new Promise(resolve => { resolvePrevious = resolve })).mockResolvedValueOnce({ ...fixture, name: '新会话项目资料' })
     const { root, app } = await mount(ProjectDetailPage, '/projects/2')
     expect(useProjectStore().detailState).toBe('loading')
-    useAuthStore().acceptSession('新会话', { id: 4, username: 'member-user', globalRole: 'user' })
+    useAuthStore().acceptSession('新会话', { username: 'member_user', globalRole: 'user' })
     await flush()
     resolvePrevious(fixture)
     await flush()
@@ -212,7 +212,7 @@ describe('项目控制台页面', () => {
     app.unmount()
   })
   it('系统管理员在空状态创建项目并直接进入可用列表', async () => {
-    useAuthStore().acceptSession('管理员会话', { id: 1, username: 'admin', globalRole: 'system_admin' })
+    useAuthStore().acceptSession('管理员会话', { username: 'admin', globalRole: 'system_admin' })
     get.mockResolvedValue([])
     post.mockResolvedValue({ ...fixture, id: 5, code: 'cloud-platform' })
     const { root, app } = await mount(ProjectListPage)
@@ -225,15 +225,16 @@ describe('项目控制台页面', () => {
     input('code').props.onInput({ target: { value: 'cloud-platform' } })
     input('name').props.onInput({ target: { value: '云平台' } })
     input('description').props.onInput({ target: { value: '公有云资源归属' } })
+    input('ownerUsername').props.onInput({ target: { value: 'project_owner' } })
     await all(root).find(n => n.type === 'form' && text(n).includes('保存项目'))!.props.onSubmit({ preventDefault() {} })
     await flush()
-    expect(post).toHaveBeenCalledWith('/projects', { code: 'cloud-platform', name: '云平台', description: '公有云资源归属', owner_user_id: null })
+    expect(post).toHaveBeenCalledWith('/projects', { code: 'cloud-platform', name: '云平台', description: '公有云资源归属', owner_username: 'project_owner' })
     expect(text(root)).toContain('平台项目')
     expect(text(root)).not.toContain('新建业务项目')
     app.unmount()
   })
   it('系统管理员侧栏按资产列表和管理重组入口', async () => {
-    useAuthStore().acceptSession('管理员会话', { id: 1, username: 'admin', globalRole: 'system_admin' })
+    useAuthStore().acceptSession('管理员会话', { username: 'admin', globalRole: 'system_admin' })
     const { root, app } = await mount(ConsoleLayout)
     expect(text(root)).toContain('资产列表')
     expect(text(root)).toContain('服务器')
@@ -257,7 +258,7 @@ describe('项目控制台页面', () => {
     app.unmount()
   })
   it('系统管理员可在顶部选择所有项目', async () => {
-    useAuthStore().acceptSession('管理员会话', { id: 1, username: 'admin', globalRole: 'system_admin' })
+    useAuthStore().acceptSession('管理员会话', { username: 'admin', globalRole: 'system_admin' })
     get.mockResolvedValue([fixture, { ...fixture, id: 3, name: '支付项目' }])
     const { root, app } = await mount(ConsoleLayout, '/assets/servers')
     const switcher = all(root).find(n => n.type === 'select' && n.props['aria-label'] === '当前项目')!
@@ -304,7 +305,7 @@ describe('项目控制台页面', () => {
   })
   it('服务器资产页合并当前项目的 ECS 和 EC2', async () => {
     const projectStore = useProjectStore()
-    projectStore.projects = [{ id: 2, code: 'platform', name: '平台项目', description: '', status: 'enabled', ownerUserId: null, createdAt: '', updatedAt: '' }]
+    projectStore.projects = [{ id: 2, code: 'platform', name: '平台项目', description: '', status: 'enabled', ownerUsername: null, createdAt: '', updatedAt: '' }]
     projectStore.selectProject(2)
     get.mockImplementation((_url: string, options?: { params?: { resource_type?: string } }) => Promise.resolve({ items: [{ id: options?.params?.resource_type === 'ecs' ? 11 : 12, provider: options?.params?.resource_type === 'ecs' ? 'aliyun' : 'aws', resource_type: options?.params?.resource_type, external_id: 'asset', asset_status: 'active', endpoints: [] }], total: 1 }))
     const component = { render: () => h(AssetListPage, { category: 'server' }) }
@@ -320,11 +321,11 @@ describe('项目控制台页面', () => {
     app.unmount()
   })
   it('系统管理员选择所有项目后汇总资产并显示项目归属', async () => {
-    useAuthStore().acceptSession('管理员会话', { id: 1, username: 'admin', globalRole: 'system_admin' })
+    useAuthStore().acceptSession('管理员会话', { username: 'admin', globalRole: 'system_admin' })
     const projectStore = useProjectStore()
     projectStore.projects = [
-      { id: 2, code: 'platform', name: '平台项目', description: '', status: 'enabled', ownerUserId: null, createdAt: '', updatedAt: '' },
-      { id: 3, code: 'payment', name: '支付项目', description: '', status: 'enabled', ownerUserId: null, createdAt: '', updatedAt: '' },
+      { id: 2, code: 'platform', name: '平台项目', description: '', status: 'enabled', ownerUsername: null, createdAt: '', updatedAt: '' },
+      { id: 3, code: 'payment', name: '支付项目', description: '', status: 'enabled', ownerUsername: null, createdAt: '', updatedAt: '' },
     ]
     projectStore.selectAllProjects()
     get.mockImplementation((url: string, options?: { params?: { resource_type?: string } }) => Promise.resolve({ items: [{ id: Number(url.split('/')[2]) * 10 + (options?.params?.resource_type === 'ecs' ? 1 : 2), provider: options?.params?.resource_type === 'ecs' ? 'aliyun' : 'aws', resource_type: options?.params?.resource_type, external_id: 'asset', asset_status: 'active', endpoints: [] }], total: 1 }))
@@ -338,7 +339,7 @@ describe('项目控制台页面', () => {
   })
   it('云同步管理移除平台页签并在创建时选择云平台', async () => {
     const projectStore = useProjectStore()
-    projectStore.projects = [{ id: 2, code: 'platform', name: '平台项目', description: '', status: 'enabled', ownerUserId: null, currentRole: 'project_admin', createdAt: '', updatedAt: '' }]
+    projectStore.projects = [{ id: 2, code: 'platform', name: '平台项目', description: '', status: 'enabled', ownerUsername: null, currentRole: 'project_admin', createdAt: '', updatedAt: '' }]
     projectStore.listState = 'ready'
     projectStore.selectProject(2)
     get.mockImplementation((url: string) => Promise.resolve(url.endsWith('/sources') ? [] : { items: [], total: 0 }))
@@ -355,7 +356,7 @@ describe('项目控制台页面', () => {
   })
   it('同步成功任务在结果列展示资源统计', async () => {
     const projectStore = useProjectStore()
-    projectStore.projects = [{ id: 2, code: 'platform', name: '平台项目', description: '', status: 'enabled', ownerUserId: null, currentRole: 'project_admin', createdAt: '', updatedAt: '' }]
+    projectStore.projects = [{ id: 2, code: 'platform', name: '平台项目', description: '', status: 'enabled', ownerUsername: null, currentRole: 'project_admin', createdAt: '', updatedAt: '' }]
     projectStore.listState = 'ready'
     projectStore.selectProject(2)
     get.mockImplementation((url: string) => Promise.resolve(url.endsWith('/sources') ? [] : { items: [], total: 0 }))
@@ -437,6 +438,22 @@ describe('项目控制台页面', () => {
     expect(text(root)).toContain('用户名只能包含字母、数字和下划线')
     app.unmount()
   })
+  it('创建项目时拒绝非法负责人用户名且不提交请求', async () => {
+    useAuthStore().acceptSession('管理员会话', { username: 'admin', globalRole: 'system_admin' })
+    get.mockResolvedValue([])
+    const { root, app } = await mount(ProjectListPage)
+    await all(root).find(n => n.type === 'button' && text(n).includes('创建项目'))!.props.onClick()
+    await flush()
+    const input = (name: string) => all(root).find(n => n.props.name === name)!
+    input('code').props.onInput({ target: { value: 'cloud-platform' } })
+    input('name').props.onInput({ target: { value: '云平台' } })
+    input('ownerUsername').props.onInput({ target: { value: 'invalid-owner' } })
+    await all(root).find(n => n.type === 'form' && text(n).includes('保存项目'))!.props.onSubmit({ preventDefault() {} })
+    await flush()
+    expect(post).not.toHaveBeenCalled()
+    expect(text(root)).toContain('负责人用户名只能包含字母、数字和下划线')
+    app.unmount()
+  })
   it('普通用户没有项目创建、编辑或删除入口', async () => {
     get.mockImplementation((url: string) => Promise.resolve(url === '/projects/2' ? fixture : [fixture]))
     const list = await mount(ProjectListPage)
@@ -448,12 +465,12 @@ describe('项目控制台页面', () => {
     detail.app.unmount()
   })
   it('项目管理员不能在成员列表移除自己', async () => {
-    useAuthStore().acceptSession('项目管理员会话', { id: 7, username: 'project-admin', displayName: '项目管理员甲', globalRole: 'user' })
+    useAuthStore().acceptSession('项目管理员会话', { username: 'project_admin', displayName: '项目管理员甲', globalRole: 'user' })
     get.mockImplementation((url: string) => {
       if (url === '/projects/2') return Promise.resolve(fixture)
       if (url === '/projects/2/members') return Promise.resolve([
-        { id: 1, user_id: 7, username: 'project-admin', display_name: '项目管理员甲', role: 'project_admin' },
-        { id: 2, user_id: 8, username: 'member-user', display_name: '项目成员乙', role: 'member' },
+        { username: 'project_admin', display_name: '项目管理员甲', role: 'project_admin' },
+        { username: 'member_user', display_name: '项目成员乙', role: 'member' },
       ])
       if (url === '/projects/2/member-candidates') return Promise.resolve([])
       return Promise.resolve([fixture])
@@ -464,7 +481,7 @@ describe('项目控制台页面', () => {
     app.unmount()
   })
   it('系统管理员更新项目资料后可确认删除并返回列表', async () => {
-    useAuthStore().acceptSession('管理员会话', { id: 1, username: 'admin', globalRole: 'system_admin' })
+    useAuthStore().acceptSession('管理员会话', { username: 'admin', globalRole: 'system_admin' })
     get.mockResolvedValue(fixture)
     put.mockResolvedValue({ ...fixture, name: '平台核心', status: 'disabled' })
     remove.mockResolvedValue(undefined)

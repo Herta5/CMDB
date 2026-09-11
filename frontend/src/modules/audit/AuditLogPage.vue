@@ -9,7 +9,7 @@ import { useProjectStore } from '@/modules/project/store'
 const audit = useAuditStore()
 const projects = useProjectStore()
 const selected = ref<AuditLog | null>(null)
-const filters = reactive({ action: '', actorId: '', resourceType: '', resourceId: '', startAt: '', endAt: '' })
+const filters = reactive({ action: '', actorUsername: '', resourceType: '', resourceId: '', startAt: '', endAt: '' })
 const page = ref(1)
 const pageSize = 20
 
@@ -29,12 +29,11 @@ const totalPages = computed(() => Math.max(1, Math.ceil(audit.total / pageSize))
 
 /** toRFC3339 将本地时间控件转换为带时区的服务端时间边界。 */
 function toRFC3339(value: string) { return value ? new Date(value).toISOString() : undefined }
-/** currentFilter 生成不包含非法零值操作者的查询条件。 */
+/** currentFilter 生成不包含空操作人用户名的查询条件。 */
 function currentFilter(): AuditFilter {
-  const actorId = Number(filters.actorId)
   return {
     page: page.value, pageSize, action: filters.action || undefined,
-    actorId: Number.isSafeInteger(actorId) && actorId > 0 ? actorId : undefined,
+    actorUsername: filters.actorUsername.trim() || undefined,
     resourceType: filters.resourceType.trim() || undefined, resourceId: filters.resourceId.trim() || undefined,
     startAt: toRFC3339(filters.startAt), endAt: toRFC3339(filters.endAt),
   }
@@ -44,15 +43,15 @@ async function load() { selected.value = null; await audit.load(projects.current
 /** submitFilters 从第一页应用筛选，避免当前页超出新结果总数。 */
 async function submitFilters() { page.value = 1; await load() }
 /** resetFilters 清空全部条件并恢复第一页。 */
-async function resetFilters() { Object.assign(filters, { action: '', actorId: '', resourceType: '', resourceId: '', startAt: '', endAt: '' }); page.value = 1; await load() }
+async function resetFilters() { Object.assign(filters, { action: '', actorUsername: '', resourceType: '', resourceId: '', startAt: '', endAt: '' }); page.value = 1; await load() }
 /** changePage 只允许在真实分页范围内导航。 */
 async function changePage(next: number) { if (next < 1 || next > totalPages.value || next === page.value) return; page.value = next; await load() }
 /** actionLabel 为尚未识别的新动作保留原始契约名称。 */
 function actionLabel(value: string) { return actionLabels[value] ?? value }
 /** objectLabel 为尚未识别的云类型保留原始类型。 */
 function objectLabel(value: string) { return resourceTypeLabels[value] ?? value }
-/** actorLabel 区分人工操作者与后台系统任务。 */
-function actorLabel(value: AuditLog) { return value.actorDisplayName || value.actorUsername || '系统任务' }
+/** actorLabel 使用公开用户名作为主身份，后台系统任务没有用户名。 */
+function actorLabel(value: AuditLog) { return value.actorUsername || '系统任务' }
 /** formatTime 使用当前浏览器时区展示，原始 RFC3339 数据仍由接口保留。 */
 function formatTime(value: string) { return value ? new Date(value).toLocaleString('zh-CN', { hour12: false }) : '—' }
 /** detailEntries 按键排序以保证详情抽屉稳定易读。 */
@@ -69,9 +68,9 @@ onBeforeUnmount(() => audit.clear())
       <label>开始时间<input v-model="filters.startAt" aria-label="开始时间" type="datetime-local"></label>
       <label>结束时间<input v-model="filters.endAt" aria-label="结束时间" type="datetime-local"></label>
       <label>操作类型<select :value="filters.action" aria-label="操作类型" @change="filters.action = ($event.target as HTMLSelectElement).value"><option value="">全部操作</option><option v-for="option in actionOptions" :key="option.value" :value="option.value">{{ option.label }}</option></select></label>
-      <label>操作人 ID<input v-model="filters.actorId" aria-label="操作人 ID" inputmode="numeric" placeholder="例如 1"></label>
+      <label>操作人用户名<input v-model="filters.actorUsername" aria-label="操作人用户名" autocomplete="off" placeholder="例如 admin"></label>
       <label>对象类型<input v-model="filters.resourceType" aria-label="对象类型" placeholder="例如 ec2"></label>
-      <label>对象标识<input v-model="filters.resourceId" aria-label="对象标识" placeholder="云端 ID 或用户 ID"></label>
+      <label>对象标识<input v-model="filters.resourceId" aria-label="对象标识" placeholder="云端 ID 或用户名"></label>
       <div class="audit-filter-actions"><button class="console-button is-primary" type="submit">查询</button><button class="console-button" type="button" @click="resetFilters">重置</button></div>
     </form>
 
@@ -81,7 +80,7 @@ onBeforeUnmount(() => audit.clear())
       <div v-else-if="audit.state === 'error'" class="page-state"><span class="state-symbol" aria-hidden="true">!</span><h3>审计日志加载失败</h3><p>请稍后重试。</p><button class="console-button" @click="load">重新加载</button></div>
       <div v-else-if="audit.state === 'empty'" class="page-state"><span class="state-symbol" aria-hidden="true">◇</span><h3>暂无审计记录</h3><p>当前项目和筛选条件下没有可显示的操作。</p></div>
       <template v-else>
-        <div class="table-scroll"><table class="console-table audit-table"><thead><tr><th>时间</th><th>操作人</th><th>项目</th><th>操作</th><th>对象</th><th>来源 IP</th><th>详情</th></tr></thead><tbody><tr v-for="item in audit.items" :key="item.id"><td>{{ formatTime(item.createdAt) }}</td><td><strong>{{ actorLabel(item) }}</strong><small v-if="item.actorUsername && item.actorDisplayName">{{ item.actorUsername }}</small></td><td>{{ item.projectName || (item.projectId ? `项目 ${item.projectId}` : '全局') }}</td><td>{{ actionLabel(item.action) }}</td><td><strong>{{ objectLabel(item.resourceType) }}</strong><small>{{ item.resourceId || '—' }}</small></td><td class="monospace">{{ item.requestIp || '—' }}</td><td><button class="button-link" @click="selected = item">查看详情</button></td></tr></tbody></table></div>
+        <div class="table-scroll"><table class="console-table audit-table"><thead><tr><th>时间</th><th>操作人</th><th>项目</th><th>操作</th><th>对象</th><th>来源 IP</th><th>详情</th></tr></thead><tbody><tr v-for="item in audit.items" :key="item.id"><td>{{ formatTime(item.createdAt) }}</td><td><strong>{{ actorLabel(item) }}</strong><small v-if="item.actorUsername && item.actorDisplayName">{{ item.actorDisplayName }}</small></td><td>{{ item.projectName || (item.projectId ? `项目 ${item.projectId}` : '全局') }}</td><td>{{ actionLabel(item.action) }}</td><td><strong>{{ objectLabel(item.resourceType) }}</strong><small>{{ item.resourceId || '—' }}</small></td><td class="monospace">{{ item.requestIp || '—' }}</td><td><button class="button-link" @click="selected = item">查看详情</button></td></tr></tbody></table></div>
         <footer class="audit-pagination"><span>共 {{ audit.total }} 条</span><div><button class="console-button" :disabled="page <= 1" @click="changePage(page - 1)">上一页</button><span>第 {{ page }} / {{ totalPages }} 页</span><button class="console-button" :disabled="page >= totalPages" @click="changePage(page + 1)">下一页</button></div></footer>
       </template>
     </section>

@@ -11,12 +11,12 @@ const get = vi.mocked(request.get)
 describe('审计日志状态', () => {
   beforeEach(() => { setActivePinia(createPinia()); get.mockReset() })
 
-  it('所有项目使用全局接口并转换审计显示资料', async () => {
-    get.mockResolvedValue({ items: [{ id: 5, actor_id: 1, actor_username: 'admin', actor_display_name: '系统管理员', project_id: null, project_name: '', action: 'user.deleted', resource_type: 'user', resource_id: '8', detail: { target_username: 'removed-user' }, request_ip: '203.0.113.8', created_at: '2026-09-10T08:00:00Z' }], total: 1, page: 1, page_size: 20 })
+  it('所有项目使用操作人用户名筛选并转换公开审计资料', async () => {
+    get.mockResolvedValue({ items: [{ id: 5, actor_username: 'admin', actor_display_name: '系统管理员', project_id: null, project_name: '', action: 'user.deleted', resource_type: 'user', resource_id: 'removed_user', detail: { target_username: 'removed_user' }, request_ip: '203.0.113.8', created_at: '2026-09-10T08:00:00Z' }], total: 1, page: 1, page_size: 20 })
     const store = useAuditStore()
-    await store.load(0, { page: 1, pageSize: 20, action: 'user.deleted' })
-    expect(get).toHaveBeenCalledWith('/audit-logs', { params: { page: 1, page_size: 20, action: 'user.deleted' } })
-    expect(store.items[0]).toEqual(expect.objectContaining({ actorDisplayName: '系统管理员', action: 'user.deleted', detail: { target_username: 'removed-user' } }))
+    await store.load(0, { page: 1, pageSize: 20, action: 'user.deleted', actorUsername: 'admin' })
+    expect(get).toHaveBeenCalledWith('/audit-logs', { params: { page: 1, page_size: 20, action: 'user.deleted', actor_username: 'admin' } })
+    expect(store.items[0]).toEqual({ id: 5, actorUsername: 'admin', actorDisplayName: '系统管理员', projectId: null, projectName: '', action: 'user.deleted', resourceType: 'user', resourceId: 'removed_user', detail: { target_username: 'removed_user' }, requestIp: '203.0.113.8', createdAt: '2026-09-10T08:00:00Z' })
     expect(store.total).toBe(1)
     expect(store.state).toBe('ready')
   })

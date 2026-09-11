@@ -8,7 +8,7 @@ export interface Project {
   name: string
   description: string
   status: 'enabled' | 'disabled'
-  ownerUserId: number | null
+  ownerUsername: string | null
   createdAt: string
   updatedAt: string
   /** currentRole 只表示当前普通用户在该项目中的权限，系统管理员无需项目角色。 */
@@ -22,7 +22,7 @@ interface ProjectDTO {
   name: string
   description: string
   status: 'enabled' | 'disabled'
-  owner_user_id: number | null
+  owner_username: string | null
   created_at: string
   updated_at: string
   current_role?: 'project_admin' | 'member'
@@ -33,7 +33,7 @@ export interface CreateProjectInput {
   code: string
   name: string
   description: string
-  ownerUserId: number | null
+  ownerUsername: string | null
 }
 
 /** 更新项目不能修改稳定编码，只允许维护可变资料和生命周期状态。 */
@@ -41,21 +41,21 @@ export interface UpdateProjectInput {
   name: string
   description: string
   status: 'enabled' | 'disabled'
-  ownerUserId: number | null
+  ownerUsername: string | null
 }
 
 /** ProjectMember 是成员列表所需的项目角色与最小公开身份。 */
-export interface ProjectMember { id: number; userId: number; role: 'project_admin' | 'member'; username: string; displayName: string }
+export interface ProjectMember { username: string; displayName: string; role: 'project_admin' | 'member' }
 /** MemberCandidate 是添加成员选择器可读取的最小用户资料。 */
-export interface MemberCandidate { id: number; username: string; displayName: string }
-interface MemberDTO { id: number; user_id: number; role: ProjectMember['role']; username?: string; display_name?: string }
-interface CandidateDTO { id: number; username: string; display_name: string }
+export interface MemberCandidate { username: string; displayName: string }
+interface MemberDTO { username: string; display_name: string; role: ProjectMember['role'] }
+interface CandidateDTO { username: string; display_name: string }
 
 /** 显式映射日期和负责人字段，防止后端命名方式渗透进视图。 */
 function toProject(value: ProjectDTO): Project {
   return {
     id: value.id, code: value.code, name: value.name, description: value.description,
-    status: value.status, ownerUserId: value.owner_user_id,
+    status: value.status, ownerUsername: value.owner_username,
     createdAt: value.created_at, updatedAt: value.updated_at, currentRole: value.current_role,
   }
 }
@@ -77,7 +77,7 @@ export async function createProject(input: CreateProjectInput): Promise<Project>
     code: input.code,
     name: input.name,
     description: input.description,
-    owner_user_id: input.ownerUserId,
+    owner_username: input.ownerUsername,
   }) as ProjectDTO
   return toProject(value)
 }
@@ -88,7 +88,7 @@ export async function updateProject(id: number, input: UpdateProjectInput): Prom
     name: input.name,
     description: input.description,
     status: input.status,
-    owner_user_id: input.ownerUserId,
+    owner_username: input.ownerUsername,
   }) as ProjectDTO
   return toProject(value)
 }
@@ -101,22 +101,22 @@ export async function deleteProject(id: number): Promise<void> {
 /** 读取项目成员及其公开展示身份。 */
 export async function listMembers(projectId: number): Promise<ProjectMember[]> {
   const values = await request.get(`/projects/${projectId}/members`) as MemberDTO[]
-  return values.map(value => ({ id: value.id, userId: value.user_id, role: value.role, username: value.username ?? '', displayName: value.display_name ?? '' }))
+  return values.map(value => ({ role: value.role, username: value.username, displayName: value.display_name }))
 }
 /** 读取当前项目可选择的启用用户，不获取邮箱或全局角色。 */
 export async function listMemberCandidates(projectId: number): Promise<MemberCandidate[]> {
   const values = await request.get(`/projects/${projectId}/member-candidates`) as CandidateDTO[]
-  return values.map(value => ({ id: value.id, username: value.username, displayName: value.display_name }))
+  return values.map(value => ({ username: value.username, displayName: value.display_name }))
 }
 /** 添加项目成员并返回新成员关系。 */
-export async function addMember(projectId: number, userId: number, role: ProjectMember['role']): Promise<ProjectMember> {
-  const value = await request.post(`/projects/${projectId}/members`, { user_id: userId, role }) as MemberDTO
-  return { id: value.id, userId: value.user_id, role: value.role, username: value.username ?? '', displayName: value.display_name ?? '' }
+export async function addMember(projectId: number, username: string, role: ProjectMember['role']): Promise<ProjectMember> {
+  const value = await request.post(`/projects/${projectId}/members`, { username, role }) as MemberDTO
+  return { role: value.role, username: value.username, displayName: value.display_name }
 }
 /** 修改已有成员的项目角色。 */
-export async function updateMemberRole(projectId: number, userId: number, role: ProjectMember['role']): Promise<ProjectMember> {
-  const value = await request.put(`/projects/${projectId}/members/${userId}`, { role }) as MemberDTO
-  return { id: value.id, userId: value.user_id, role: value.role, username: value.username ?? '', displayName: value.display_name ?? '' }
+export async function updateMemberRole(projectId: number, username: string, role: ProjectMember['role']): Promise<ProjectMember> {
+  const value = await request.put(`/projects/${projectId}/members/${encodeURIComponent(username)}`, { role }) as MemberDTO
+  return { role: value.role, username: value.username, displayName: value.display_name }
 }
 /** 移除成员关系，不删除全局用户身份。 */
-export async function removeMember(projectId: number, userId: number): Promise<void> { await request.delete(`/projects/${projectId}/members/${userId}`) }
+export async function removeMember(projectId: number, username: string): Promise<void> { await request.delete(`/projects/${projectId}/members/${encodeURIComponent(username)}`) }

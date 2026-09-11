@@ -177,18 +177,18 @@ export const useProjectStore = defineStore('cmdb-project', () => {
     } catch (error) { membersState.value = failureState(error) }
   }
   /** 为候选用户添加项目角色，并补齐接口响应中未重复返回的展示资料。 */
-  async function addMember(projectId: number, userId: number, role: ProjectMember['role']) {
-    const value = await addMemberRequest(projectId, userId, role)
-    const user = memberCandidates.value.find(candidate => candidate.id === userId)
+  async function addMember(projectId: number, username: string, role: ProjectMember['role']) {
+    const value = await addMemberRequest(projectId, username, role)
+    const user = memberCandidates.value.find(candidate => candidate.username === username)
     members.value = [...members.value, { ...value, username: value.username || user?.username || '', displayName: value.displayName || user?.displayName || '' }]
   }
   /** 修改成员角色时保留已有展示身份。 */
-  async function updateMemberRole(projectId: number, userId: number, role: ProjectMember['role']) {
-    const value = await updateMemberRoleRequest(projectId, userId, role)
-    members.value = members.value.map(member => member.userId === userId ? { ...member, ...value, username: value.username || member.username, displayName: value.displayName || member.displayName } : member)
+  async function updateMemberRole(projectId: number, username: string, role: ProjectMember['role']) {
+    const value = await updateMemberRoleRequest(projectId, username, role)
+    members.value = members.value.map(member => member.username === username ? { ...member, ...value, username: value.username || member.username, displayName: value.displayName || member.displayName } : member)
   }
   /** 移除成员关系后立即从页面状态删除对应成员。 */
-  async function removeMember(projectId: number, userId: number) { await removeMemberRequest(projectId, userId); members.value = members.value.filter(member => member.userId !== userId) }
+  async function removeMember(projectId: number, username: string) { await removeMemberRequest(projectId, username); members.value = members.value.filter(member => member.username !== username) }
 
   // 同步清除可阻止同一渲染周期内出现上一身份的数据；所有在途响应同时失效。
   watch(() => auth.sessionVersion, () => {
