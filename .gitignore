@@ -30,8 +30,16 @@ Thumbs.db
 .env
 .env.local
 
-# Local documentation
-docs/
+# Project documentation
+# 仅跟踪正式项目规范；其余本地设计稿和过程文档继续忽略。
+docs/*
+!docs/project/
+docs/project/*
+!docs/project/overview.md
+!docs/project/domain-model.md
+!docs/project/resource-sync.md
+!docs/project/security.md
+!docs/project/frontend-guidelines.md
 
 # Isolated development worktrees
 .worktrees/
