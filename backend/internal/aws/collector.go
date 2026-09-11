@@ -21,10 +21,12 @@ import (
 )
 
 // Collector 是 AWS 独立平台采集器。
-type Collector struct{}
+type Collector struct {
+	newSTSClient func(awssdk.Config) awsIdentityAPI
+}
 
 // NewCollector 创建 AWS 采集器。
-func NewCollector() *Collector { return &Collector{} }
+func NewCollector() *Collector { return &Collector{newSTSClient: newAWSSTSClient} }
 
 type credential struct {
 	AccessKeyID     string `json:"access_key_id"`

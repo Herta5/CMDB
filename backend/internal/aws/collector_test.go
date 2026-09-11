@@ -19,6 +19,14 @@ import (
 	"github.com/aws/smithy-go"
 )
 
+// TestNewCollectorImplementsProviderAdapter 防止 AWS 构造器返回的采集器失去资源核心要求的平台适配器能力。
+func TestNewCollectorImplementsProviderAdapter(t *testing.T) {
+	var adapter resource.ProviderAdapter = NewCollector()
+	if adapter == nil {
+		t.Fatal("AWS 采集器必须实现平台适配器")
+	}
+}
+
 type ec2ProbeStub struct{ input *ec2.DescribeInstancesInput }
 
 func (s *ec2ProbeStub) DescribeInstances(_ context.Context, input *ec2.DescribeInstancesInput, _ ...func(*ec2.Options)) (*ec2.DescribeInstancesOutput, error) {
