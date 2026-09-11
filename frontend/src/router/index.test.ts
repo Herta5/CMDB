@@ -69,7 +69,7 @@ describe('认证路由守卫', () => {
     expect(router.currentRoute.value.path).toBe('/assets/servers')
   })
 
-  it('项目管理员可进入项目管理和云同步管理，项目成员会返回资产列表', async () => {
+  it('项目管理员可进入项目管理、云同步和审计日志，项目成员会返回资产列表', async () => {
     useAuthStore().acceptSession('token', { id: 2, username: 'project-admin', globalRole: 'user' })
     const projects = useProjectStore()
     projects.projects = [{ id: 2, code: 'cloud', name: '云项目', description: '', status: 'enabled', ownerUserId: null, currentRole: 'project_admin', createdAt: '', updatedAt: '' }]
@@ -79,9 +79,11 @@ describe('认证路由守卫', () => {
     expect(router.currentRoute.value.path).toBe('/projects')
     await router.push('/cloud-sync')
     expect(router.currentRoute.value.path).toBe('/cloud-sync')
+	await router.push('/audit-logs')
+	expect(router.currentRoute.value.path).toBe('/audit-logs')
 
     projects.projects = [{ ...projects.projects[0], currentRole: 'member' }]
-    await router.push('/projects')
+	await router.push('/audit-logs?retry=1')
     expect(router.currentRoute.value.path).toBe('/assets/servers')
   })
 

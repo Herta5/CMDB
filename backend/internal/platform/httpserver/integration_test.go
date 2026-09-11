@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"cmdb/internal/audit"
 	"cmdb/internal/identity"
 	"cmdb/internal/platform/httpserver"
 	"cmdb/internal/project"
@@ -22,6 +23,118 @@ import (
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
 )
+
+// TestAuditQueryPermissionsAndProjectIsolation 验证系统管理员、项目管理员和成员使用不同审计边界。
+func TestAuditQueryPermissionsAndProjectIsolation(t *testing.T) {
+	server, password, db := integrationServerWithDatabase(t)
+	admin := loginUser(t, server, "operator", password)
+	projectAdmin := loginUser(t, server, "member-a", password)
+	integrationRequest(t, server, admin, http.MethodPost, "/api/v1/users", map[string]any{"username": "member-b", "password": password, "display_name": "项目成员", "global_role": "user", "status": "active", "project_permissions": []any{}}, http.StatusCreated)
+	projectMember := loginUser(t, server, "member-b", password)
+	var firstProject, secondProject project.Project
+	decodeIntegration(t, integrationRequest(t, server, admin, http.MethodPost, "/api/v1/projects", map[string]any{"code": "audit-a", "name": "审计项目甲"}, http.StatusCreated), &firstProject)
+	decodeIntegration(t, integrationRequest(t, server, admin, http.MethodPost, "/api/v1/projects", map[string]any{"code": "audit-b", "name": "审计项目乙"}, http.StatusCreated), &secondProject)
+	firstPath := "/api/v1/projects/" + strconv.FormatUint(firstProject.ID, 10)
+	integrationRequest(t, server, admin, http.MethodPost, firstPath+"/members", map[string]any{"user_id": 2, "role": "project_admin"}, http.StatusCreated)
+	integrationRequest(t, server, admin, http.MethodPost, firstPath+"/members", map[string]any{"user_id": 3, "role": "member"}, http.StatusCreated)
+	if err := db.Create(&[]audit.Log{
+		{ProjectID: &firstProject.ID, Action: audit.ActionProjectUpdated, ResourceType: "project", ResourceID: strconv.FormatUint(firstProject.ID, 10), Detail: json.RawMessage(`{}`)},
+		{ProjectID: &secondProject.ID, Action: audit.ActionProjectUpdated, ResourceType: "project", ResourceID: strconv.FormatUint(secondProject.ID, 10), Detail: json.RawMessage(`{}`)},
+		{Action: audit.ActionUserUpdated, ResourceType: "user", ResourceID: "2", Detail: json.RawMessage(`{}`)},
+	}).Error; err != nil {
+		t.Fatalf("准备审计查询数据失败：%v", err)
+	}
+
+	global := integrationRequest(t, server, admin, http.MethodGet, "/api/v1/audit-logs?page=1&page_size=20", nil, http.StatusOK)
+	var globalPage audit.Page
+	decodeIntegration(t, global, &globalPage)
+	if globalPage.Total < 3 {
+		t.Fatalf("系统管理员必须看到全局和全部项目审计：%+v", globalPage)
+	}
+	projectPageResponse := integrationRequest(t, server, projectAdmin, http.MethodGet, firstPath+"/audit-logs?page=1&page_size=20", nil, http.StatusOK)
+	var projectPage audit.Page
+	decodeIntegration(t, projectPageResponse, &projectPage)
+	for _, item := range projectPage.Items {
+		if item.ProjectID == nil || *item.ProjectID != firstProject.ID {
+			t.Fatalf("项目管理员只能看到当前项目审计：%+v", item)
+		}
+	}
+	integrationRequest(t, server, projectAdmin, http.MethodGet, "/api/v1/audit-logs", nil, http.StatusForbidden)
+	integrationRequest(t, server, projectMember, http.MethodGet, firstPath+"/audit-logs", nil, http.StatusNotFound)
+	denied := integrationRequest(t, server, projectAdmin, http.MethodGet, "/api/v1/projects/"+strconv.FormatUint(secondProject.ID, 10)+"/audit-logs", nil, http.StatusNotFound)
+	missing := integrationRequest(t, server, projectAdmin, http.MethodGet, "/api/v1/projects/999999/audit-logs", nil, http.StatusNotFound)
+	if denied.Body.String() != missing.Body.String() {
+		t.Fatal("跨项目审计查询不得泄露项目是否存在")
+	}
+	integrationRequest(t, server, admin, http.MethodGet, "/api/v1/audit-logs?page=0", nil, http.StatusBadRequest)
+}
+
+// TestManagementMutationsWriteActorAudit 验证用户、项目和成员管理动作都进入统一审计且不含密码。
+func TestManagementMutationsWriteActorAudit(t *testing.T) {
+	server, password, db := integrationServerWithDatabase(t)
+	admin := loginUser(t, server, "operator", password)
+	var managedProject project.Project
+	decodeIntegration(t, integrationRequest(t, server, admin, http.MethodPost, "/api/v1/projects", map[string]any{"code": "audit-actions", "name": "审计动作项目"}, http.StatusCreated), &managedProject)
+	projectPath := "/api/v1/projects/" + strconv.FormatUint(managedProject.ID, 10)
+	integrationRequest(t, server, admin, http.MethodPut, projectPath, map[string]any{"name": "审计动作项目新版", "description": "审计详情", "status": "enabled"}, http.StatusOK)
+	var managedUser identity.User
+	decodeIntegration(t, integrationRequest(t, server, admin, http.MethodPost, "/api/v1/users", map[string]any{"username": "audit-user", "password": "never-persist-this-password", "display_name": "审计用户", "global_role": "user", "status": "active", "project_permissions": []any{}}, http.StatusCreated), &managedUser)
+	userPath := "/api/v1/users/" + strconv.FormatUint(managedUser.ID, 10)
+	integrationRequest(t, server, admin, http.MethodPut, userPath, map[string]any{"display_name": "审计用户新版", "email": "audit@example.invalid", "global_role": "user", "status": "active", "password": "another-never-persist-password", "project_permissions": []any{}}, http.StatusOK)
+	integrationRequest(t, server, admin, http.MethodPut, userPath+"/status", map[string]any{"status": "disabled"}, http.StatusOK)
+	integrationRequest(t, server, admin, http.MethodPost, projectPath+"/members", map[string]any{"user_id": managedUser.ID, "role": "member"}, http.StatusCreated)
+	integrationRequest(t, server, admin, http.MethodPut, projectPath+"/members/"+strconv.FormatUint(managedUser.ID, 10), map[string]any{"role": "project_admin"}, http.StatusOK)
+	integrationRequest(t, server, admin, http.MethodDelete, projectPath+"/members/"+strconv.FormatUint(managedUser.ID, 10), nil, http.StatusNoContent)
+	integrationRequest(t, server, admin, http.MethodDelete, projectPath, nil, http.StatusNoContent)
+
+	expectedActions := []string{
+		audit.ActionProjectCreated, audit.ActionProjectUpdated, audit.ActionUserCreated,
+		audit.ActionUserUpdated, audit.ActionUserStatusChanged, audit.ActionProjectMemberAdded,
+		audit.ActionProjectMemberRoleChanged, audit.ActionProjectMemberRemoved, audit.ActionProjectDeleted,
+	}
+	for _, action := range expectedActions {
+		var value audit.Log
+		if err := db.Where("action = ?", action).Order("id DESC").First(&value).Error; err != nil {
+			t.Fatalf("管理动作必须写入统一审计：action=%s err=%v", action, err)
+		}
+		if value.ActorID == nil || *value.ActorID != 1 || value.RequestIP != "192.0.2.1" {
+			t.Fatalf("人工管理审计必须记录真实操作者和来源 IP：action=%s value=%+v", action, value)
+		}
+		encoded := string(value.Detail)
+		if strings.Contains(encoded, "never-persist") || strings.Contains(encoded, "password") {
+			t.Fatalf("管理审计不得保存密码或密码字段：action=%s detail=%s", action, encoded)
+		}
+	}
+}
+
+// TestUserPermissionReplacementWritesProjectAudit 验证用户管理中的授权变化也对受影响项目管理员可见。
+func TestUserPermissionReplacementWritesProjectAudit(t *testing.T) {
+	server, password, db := integrationServerWithDatabase(t)
+	admin := loginUser(t, server, "operator", password)
+	var firstProject, secondProject project.Project
+	decodeIntegration(t, integrationRequest(t, server, admin, http.MethodPost, "/api/v1/projects", map[string]any{"code": "permission-a", "name": "授权项目甲"}, http.StatusCreated), &firstProject)
+	decodeIntegration(t, integrationRequest(t, server, admin, http.MethodPost, "/api/v1/projects", map[string]any{"code": "permission-b", "name": "授权项目乙"}, http.StatusCreated), &secondProject)
+	var managedUser identity.User
+	decodeIntegration(t, integrationRequest(t, server, admin, http.MethodPost, "/api/v1/users", map[string]any{
+		"username": "permission-user", "password": "permission-user-password", "display_name": "授权用户", "global_role": "user", "status": "active",
+		"project_permissions": []map[string]any{{"project_id": firstProject.ID, "role": "member"}},
+	}, http.StatusCreated), &managedUser)
+	integrationRequest(t, server, admin, http.MethodPut, "/api/v1/users/"+strconv.FormatUint(managedUser.ID, 10), map[string]any{
+		"display_name": "授权用户", "email": "", "global_role": "user", "status": "active",
+		"project_permissions": []map[string]any{{"project_id": secondProject.ID, "role": "project_admin"}},
+	}, http.StatusOK)
+
+	assertProjectMemberAudit := func(projectID uint64, action string) {
+		t.Helper()
+		var value audit.Log
+		if err := db.Where("project_id = ? AND action = ? AND resource_id = ?", projectID, action, strconv.FormatUint(managedUser.ID, 10)).First(&value).Error; err != nil {
+			t.Fatalf("用户权限变化必须产生项目审计：project=%d action=%s err=%v", projectID, action, err)
+		}
+	}
+	assertProjectMemberAudit(firstProject.ID, audit.ActionProjectMemberAdded)
+	assertProjectMemberAudit(firstProject.ID, audit.ActionProjectMemberRemoved)
+	assertProjectMemberAudit(secondProject.ID, audit.ActionProjectMemberAdded)
+}
 
 // TestProjectBoundaryEndToEnd 覆盖真实密码登录、授权、越权、成员撤销以及数据未被越权修改。
 func TestProjectBoundaryEndToEnd(t *testing.T) {
@@ -132,8 +245,8 @@ func TestSystemAdministratorDeletesUser(t *testing.T) {
 	if err := db.Create(&project.MemberRole{ProjectID: ownedProject.ID, UserID: ownerID, Role: project.MemberRoleMember}).Error; err != nil {
 		t.Fatalf("准备用户项目权限失败：%v", err)
 	}
-	audit := cloudresource.AuditLog{ActorID: &ownerID, ProjectID: &ownedProject.ID, Action: "user.fixture", ResourceType: "user", ResourceID: "2", Detail: []byte(`{}`)}
-	if err := db.Create(&audit).Error; err != nil {
+	fixtureAudit := audit.Log{ActorID: &ownerID, ProjectID: &ownedProject.ID, Action: "user.fixture", ResourceType: "user", ResourceID: "2", Detail: json.RawMessage(`{}`)}
+	if err := db.Create(&fixtureAudit).Error; err != nil {
 		t.Fatalf("准备独立审计记录失败：%v", err)
 	}
 
@@ -161,8 +274,14 @@ func TestSystemAdministratorDeletesUser(t *testing.T) {
 	if err := db.First(&ownedProject, ownedProject.ID).Error; err != nil || ownedProject.OwnerUserID != nil {
 		t.Fatalf("删除用户必须把项目负责人置空：owner=%v err=%v", ownedProject.OwnerUserID, err)
 	}
-	if err := db.Model(&cloudresource.AuditLog{}).Where("id = ?", audit.ID).Count(&audits).Error; err != nil || audits != 1 {
+	if err := db.Model(&audit.Log{}).Where("id = ?", fixtureAudit.ID).Count(&audits).Error; err != nil || audits != 1 {
 		t.Fatalf("删除用户后必须保留独立审计记录：count=%d err=%v", audits, err)
+	}
+	for _, action := range []string{audit.ActionUserDeleted, audit.ActionProjectMemberRemoved} {
+		var count int64
+		if err := db.Model(&audit.Log{}).Where("action = ? AND resource_id = ?", action, "2").Count(&count).Error; err != nil || count != 1 {
+			t.Fatalf("删除用户必须生成动作 %s：count=%d err=%v", action, count, err)
+		}
 	}
 	notFound := integrationRequest(t, server, admin, http.MethodDelete, "/api/v1/users/2", nil, http.StatusNotFound)
 	if notFound.Body.String() != `{"code":"USER_NOT_FOUND","message":"用户不存在"}` {
@@ -304,6 +423,18 @@ func TestProjectSourceAPINeverReturnsCredentials(t *testing.T) {
 	}
 	integrationRequest(t, server, admin, http.MethodDelete, path+"/sources/"+strconv.FormatUint(source.ID, 10), nil, http.StatusNoContent)
 	integrationRequest(t, server, member, http.MethodGet, path+"/sources", nil, http.StatusOK)
+	for _, action := range []string{audit.ActionSourceCreated, audit.ActionSourceConnectionTested, audit.ActionSourceSynced, audit.ActionSourceUpdated, audit.ActionSourceDeleted} {
+		var value audit.Log
+		if err := db.Where("action = ? AND resource_id = ?", action, strconv.FormatUint(source.ID, 10)).Order("id DESC").First(&value).Error; err != nil {
+			t.Fatalf("接入源动作必须写入统一审计：action=%s err=%v", action, err)
+		}
+		if value.ActorID == nil || *value.ActorID != 1 || value.RequestIP != "192.0.2.1" {
+			t.Fatalf("人工接入源审计必须保留请求操作者：action=%s value=%+v", action, value)
+		}
+		if strings.Contains(string(value.Detail), "example-id") || strings.Contains(string(value.Detail), "example-secret") {
+			t.Fatalf("接入源审计不得保存云凭证：action=%s", action)
+		}
+	}
 }
 
 type integrationCollector struct{}
@@ -401,7 +532,7 @@ func integrationServerWithDatabase(t *testing.T) (http.Handler, string, *gorm.DB
 	}
 	sqlDB.SetMaxOpenConns(1)
 	t.Cleanup(func() { _ = sqlDB.Close() })
-	if err := db.AutoMigrate(&identity.User{}, &project.Project{}, &project.MemberRole{}, &cloudresource.Source{}, &cloudresource.Server{}, &cloudresource.Database{}, &cloudresource.LoadBalancer{}, &cloudresource.SyncJob{}, &cloudresource.AuditLog{}); err != nil {
+	if err := db.AutoMigrate(&identity.User{}, &project.Project{}, &project.MemberRole{}, &cloudresource.Source{}, &cloudresource.Server{}, &cloudresource.Database{}, &cloudresource.LoadBalancer{}, &cloudresource.SyncJob{}, &audit.Log{}); err != nil {
 		t.Fatalf("创建验收表失败：%v", err)
 	}
 	secret := make([]byte, 32)
@@ -450,6 +581,8 @@ func integrationRequest(t *testing.T, server http.Handler, token, method, path s
 	}
 	request := httptest.NewRequest(method, path, bytes.NewReader(encoded))
 	request.Header.Set("Content-Type", "application/json")
+	// 公网客户端可自行伪造转发头，审计来源 IP 必须使用直连地址而不是默认信任该值。
+	request.Header.Set("X-Forwarded-For", "198.51.100.99")
 	if token != "" {
 		request.Header.Set("Authorization", "Bearer "+token)
 	}

@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"cmdb/internal/audit"
 	"cmdb/internal/identity"
 	"cmdb/internal/platform/httpserver"
 	"cmdb/internal/project"
@@ -211,7 +212,7 @@ func newProjectHTTPServerWithDatabase(t *testing.T) (http.Handler, *gorm.DB) {
 	if err != nil {
 		t.Fatalf("打开项目 HTTP 测试数据库失败：%v", err)
 	}
-	if err := db.AutoMigrate(&identity.User{}, &project.Project{}, &project.MemberRole{}); err != nil {
+	if err := db.AutoMigrate(&identity.User{}, &project.Project{}, &project.MemberRole{}, &audit.Log{}); err != nil {
 		t.Fatalf("创建项目 HTTP 测试表失败：%v", err)
 	}
 	// 所有项目接口必须验证当前账户，测试管理员也必须是真实持久化的有效身份。

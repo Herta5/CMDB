@@ -109,19 +109,3 @@ type SyncJob struct {
 	StartedAt     time.Time       `json:"started_at"`
 	FinishedAt    *time.Time      `json:"finished_at"`
 }
-
-// AuditLog 保存不含敏感信息的资源操作轨迹，资源物理删除后仍独立保留。
-type AuditLog struct {
-	ID           uint64          `gorm:"primaryKey" json:"id"`
-	ActorID      *uint64         `json:"actor_id"`
-	ProjectID    *uint64         `gorm:"index" json:"project_id"`
-	Action       string          `gorm:"size:128;not null" json:"action"`
-	ResourceType string          `gorm:"size:64;not null" json:"resource_type"`
-	ResourceID   string          `gorm:"size:255" json:"resource_id"`
-	Detail       json.RawMessage `gorm:"type:json" json:"detail"`
-	RequestIP    string          `gorm:"size:45" json:"request_ip"`
-	CreatedAt    time.Time       `json:"created_at"`
-}
-
-// TableName 复用平台基础迁移中的长期审计表。
-func (AuditLog) TableName() string { return "audit_logs" }

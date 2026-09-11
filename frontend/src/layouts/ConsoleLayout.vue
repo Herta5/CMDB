@@ -71,6 +71,7 @@ async function logout() {
           <p class="nav-parent"><ConsoleIcon name="management"/>管理</p>
           <router-link to="/projects" class="nav-item nav-child" :class="{ 'is-active': route.path.startsWith('/projects') }"><ConsoleIcon name="project"/>项目管理</router-link>
           <router-link to="/cloud-sync" class="nav-item nav-child" :class="{ 'is-active': route.path === '/cloud-sync' }"><ConsoleIcon name="cloud-sync"/>云同步管理</router-link>
+		  <router-link to="/audit-logs" class="nav-item nav-child" :class="{ 'is-active': route.path === '/audit-logs' }"><ConsoleIcon name="audit"/>审计日志</router-link>
           <router-link v-if="isSystemAdmin" to="/users" class="nav-item nav-child" :class="{ 'is-active': route.path === '/users' }"><ConsoleIcon name="user"/>用户管理</router-link>
         </template>
       </nav>
