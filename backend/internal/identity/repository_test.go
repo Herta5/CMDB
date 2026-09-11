@@ -24,7 +24,7 @@ func newUserRepositoryTestDB(t *testing.T) (*gorm.DB, *sql.DB) {
 		_ = sqlDB.Close()
 	})
 
-	db, err := gorm.Open(sqlite.Dialector{Conn: sqlDB}, &gorm.Config{Logger: logger.Default.LogMode(logger.Silent)})
+	db, err := gorm.Open(sqlite.Dialector{Conn: sqlDB}, &gorm.Config{Logger: logger.Default.LogMode(logger.Silent), TranslateError: true})
 	if err != nil {
 		t.Fatalf("打开用户仓储测试数据库失败：%v", err)
 	}
@@ -67,6 +67,23 @@ func TestUserRepositoryCreatesAndFindsUserByUsername(t *testing.T) {
 	}
 	if found.ID != user.ID || found.Username != user.Username || found.DisplayName != user.DisplayName {
 		t.Fatalf("按用户名查询到的用户与写入记录不一致：got=(id=%d username=%q display_name=%q)", found.ID, found.Username, found.DisplayName)
+	}
+}
+
+// TestUserRepositoryClassifiesDuplicateUsername 验证并发创建绕过预检查后，数据库唯一约束仍会转换为稳定业务错误。
+func TestUserRepositoryClassifiesDuplicateUsername(t *testing.T) {
+	db, _ := newUserRepositoryTestDB(t)
+	if err := db.Exec("CREATE UNIQUE INDEX uk_users_username ON users(username)").Error; err != nil {
+		t.Fatalf("准备用户名唯一约束失败：%v", err)
+	}
+	repository := NewUserRepository(db)
+	first := &User{Username: "duplicate-user", PasswordHash: "first-hash", DisplayName: "首个用户", GlobalRole: GlobalRoleUser, Status: "active"}
+	second := &User{Username: "duplicate-user", PasswordHash: "second-hash", DisplayName: "重复用户", GlobalRole: GlobalRoleUser, Status: "active"}
+	if err := repository.Create(context.Background(), first); err != nil {
+		t.Fatalf("准备首个用户失败：%v", err)
+	}
+	if err := repository.CreateWithPermissions(context.Background(), second, nil); !errors.Is(err, ErrDuplicateUsername) {
+		t.Fatalf("用户名唯一约束必须转换为重复用户名错误，实际为：%v", err)
 	}
 }
 

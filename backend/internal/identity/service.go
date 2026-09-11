@@ -24,8 +24,8 @@ var (
 	ErrDuplicateUsername = errors.New("用户名已存在")
 	// ErrUserNotFound 表示管理接口指定的用户不存在。
 	ErrUserNotFound = errors.New("用户不存在")
-	// ErrSelfProtection 表示当前管理员试图停用自己或移除自己的系统管理权限。
-	ErrSelfProtection = errors.New("不能停用或降级当前管理员")
+	// ErrSelfProtection 表示当前管理员试图删除、停用自己或移除自己的系统管理权限。
+	ErrSelfProtection = errors.New("不能删除、停用或降级当前管理员")
 )
 
 // UpdateUserInput 是系统管理员可维护的用户字段；空密码表示保持原密码。
@@ -160,6 +160,26 @@ func (s *Service) ListUsers(ctx context.Context) ([]User, error) {
 		return nil, ErrIdentityRepositoryUnavailable
 	}
 	return s.repository.List(ctx)
+}
+
+// DeleteUser 删除指定用户，并保护当前管理员不会删除自己的登录身份。
+func (s *Service) DeleteUser(ctx context.Context, actorID, id uint64) error {
+	if s.repository == nil {
+		return ErrIdentityRepositoryUnavailable
+	}
+	if actorID == 0 || id == 0 {
+		return ErrInvalidUserInput
+	}
+	if actorID == id {
+		return ErrSelfProtection
+	}
+	if err := s.repository.Delete(ctx, id); err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return ErrUserNotFound
+		}
+		return err
+	}
+	return nil
 }
 
 // UpdateUserStatus 启停用户；停用后认证中间件会在下一次请求立即使其会话失效。

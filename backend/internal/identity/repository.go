@@ -18,6 +18,7 @@ var (
 type UserRepository interface {
 	Create(ctx context.Context, user *User) error
 	CreateWithPermissions(ctx context.Context, user *User, permissions []ProjectPermission) error
+	Delete(ctx context.Context, id uint64) error
 	FindByID(ctx context.Context, id uint64) (*User, error)
 	FindByUsername(ctx context.Context, username string) (*User, error)
 	List(ctx context.Context) ([]User, error)
@@ -92,17 +93,37 @@ func NewUserRepository(db *gorm.DB) UserRepository {
 
 // Create 写入新用户，由数据库唯一索引保证用户名在全局范围内唯一。
 func (r *gormUserRepository) Create(ctx context.Context, user *User) error {
-	return r.db.WithContext(ctx).Create(user).Error
+	return normalizeUserWriteError(r.db.WithContext(ctx).Create(user).Error)
 }
 
 // CreateWithPermissions 在单一事务中创建用户和全部项目成员关系。
 func (r *gormUserRepository) CreateWithPermissions(ctx context.Context, user *User, permissions []ProjectPermission) error {
 	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		if err := tx.Create(user).Error; err != nil {
-			return err
+			return normalizeUserWriteError(err)
 		}
 		return replacePermissions(tx, user.ID, permissions)
 	})
+}
+
+// normalizeUserWriteError 将数据库唯一约束转换为稳定业务错误，覆盖并发创建绕过预检查的时序。
+func normalizeUserWriteError(err error) error {
+	if errors.Is(err, gorm.ErrDuplicatedKey) {
+		return ErrDuplicateUsername
+	}
+	return err
+}
+
+// Delete 物理删除用户；项目成员关系由数据库外键级联清理，项目负责人自动置空。
+func (r *gormUserRepository) Delete(ctx context.Context, id uint64) error {
+	result := r.db.WithContext(ctx).Delete(&User{}, id)
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected == 0 {
+		return gorm.ErrRecordNotFound
+	}
+	return nil
 }
 
 // UpdateWithPermissions 使用全量替换语义原子保存用户和项目权限。

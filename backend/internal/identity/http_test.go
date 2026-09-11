@@ -187,6 +187,21 @@ func TestCurrentUserRejectsExpiredAndWrongSignatureTokens(t *testing.T) {
 	}
 }
 
+// TestDeleteUserReportsRepositoryFailure 验证删除存储失败使用稳定服务错误，不能误报为用户不存在。
+func TestDeleteUserReportsRepositoryFailure(t *testing.T) {
+	admin := newAuthenticationFixtureUser(t, 1, "delete-admin", "active")
+	admin.GlobalRole = identity.GlobalRoleSystemAdmin
+	server := newAuthenticationServer(t, admin)
+	token := sessionToken(t, requestLogin(t, server, admin.Username, "correct-password"))
+	request := httptest.NewRequest(http.MethodDelete, "/api/v1/users/2", nil)
+	request.Header.Set("Authorization", "Bearer "+token)
+	response := httptest.NewRecorder()
+	server.ServeHTTP(response, request)
+	if response.Code != http.StatusInternalServerError || response.Body.String() != `{"code":"USER_SERVICE_UNAVAILABLE","message":"用户服务暂不可用"}` {
+		t.Fatalf("删除存储失败响应契约错误：status=%d body=%s", response.Code, response.Body.String())
+	}
+}
+
 // performLogin 使用完整 HTTP 路由发送登录请求，验证公开接口而非处理器内部细节。
 func performLogin(t *testing.T, username, password string) *httptest.ResponseRecorder {
 	t.Helper()
@@ -298,6 +313,11 @@ func (inMemoryUserRepository) Create(context.Context, *identity.User) error {
 
 // CreateWithPermissions 不属于认证测试范围，返回明确的未实现错误。
 func (inMemoryUserRepository) CreateWithPermissions(context.Context, *identity.User, []identity.ProjectPermission) error {
+	return gorm.ErrInvalidDB
+}
+
+// Delete 不属于认证接口测试范围，返回明确的未实现错误。
+func (inMemoryUserRepository) Delete(context.Context, uint64) error {
 	return gorm.ErrInvalidDB
 }
 

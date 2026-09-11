@@ -374,6 +374,26 @@ describe('项目控制台页面', () => {
     expect(all(root).some(n => n.type === 'button' && text(n) === '保存修改')).toBe(true)
     app.unmount()
   })
+  it('系统管理员确认后删除其他用户，当前用户没有删除入口', async () => {
+    useAuthStore().acceptSession('管理员会话', { id: 1, username: 'admin', displayName: '系统管理员', globalRole: 'system_admin' })
+    get.mockImplementation((url: string) => Promise.resolve(url === '/users' ? [
+      { id: 1, username: 'admin', display_name: '系统管理员', email: '', global_role: 'system_admin', status: 'active', project_permissions: [] },
+      { id: 2, username: 'cloud-user', display_name: '云资源用户', email: '', global_role: 'user', status: 'active', project_permissions: [] },
+    ] : []))
+    remove.mockResolvedValue(undefined)
+    const { root, app } = await mount(UserManagementPage, '/users')
+    const deleteButtons = all(root).filter(n => n.type === 'button' && text(n) === '删除')
+    expect(deleteButtons).toHaveLength(1)
+    await deleteButtons[0].props.onClick()
+    await flush()
+    expect(text(root)).toContain('确认删除用户')
+    await all(root).find(n => n.type === 'button' && text(n) === '确认删除')!.props.onClick()
+    await flush()
+    expect(remove).toHaveBeenCalledWith('/users/2')
+    expect(text(root)).not.toContain('云资源用户')
+    expect(text(root)).toContain('系统管理员')
+    app.unmount()
+  })
   it('普通用户没有项目创建、编辑或删除入口', async () => {
     get.mockImplementation((url: string) => Promise.resolve(url === '/projects/2' ? fixture : [fixture]))
     const list = await mount(ProjectListPage)
