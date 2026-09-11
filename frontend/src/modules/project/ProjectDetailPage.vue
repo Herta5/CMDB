@@ -5,7 +5,7 @@ import { useRoute } from 'vue-router'
 import { useRouter } from 'vue-router'
 import { useAuthStore } from '@/modules/auth/store'
 import ProjectFormDialog from './ProjectFormDialog.vue'
-import type { UpdateProjectInput } from './api'
+import type { CreateProjectInput, UpdateProjectInput } from './api'
 import { useProjectStore } from './store'
 
 const auth = useAuthStore()
@@ -49,6 +49,12 @@ async function updateProject(input: UpdateProjectInput) {
   } catch {
     formError.value = store.mutationError === 'PROJECT_INVALID_INPUT' ? '项目资料不符合要求，请检查后重试' : '项目保存失败，请稍后重试'
   }
+}
+
+/** 仅接收编辑表单事件，先收窄联合输入后交给原有更新流程。 */
+async function submitUpdateProject(input: CreateProjectInput | UpdateProjectInput) {
+  if (!('status' in input)) return
+  await updateProject(input)
 }
 
 /** 删除成功后离开已不存在的详情地址，失败时保留确认框供用户重试。 */
@@ -106,7 +112,7 @@ async function removeProjectMember(username: string) {
       <div v-else class="table-scroll"><table class="console-table"><thead><tr><th>用户</th><th>项目角色</th><th v-if="canManageMembers">操作</th></tr></thead><tbody><tr v-for="member in store.members" :key="member.username"><td><strong>{{ member.username }}</strong><span v-if="member.username === auth.currentUser?.username" class="current-user-label">当前用户</span><span v-if="member.displayName" class="project-code">{{ member.displayName }}</span></td><td><select v-if="canManageMembers" :value="member.role" @change="changeMemberRole(member.username, ($event.target as HTMLSelectElement).value as typeof member.role)"><option value="project_admin">项目管理员</option><option value="member">项目成员</option></select><span v-else>{{ member.role === 'project_admin' ? '项目管理员' : '项目成员' }}</span></td><td v-if="canManageMembers"><button v-if="canRemoveMember(member.username)" class="button-link" @click="removeProjectMember(member.username)">移除</button><span v-else class="muted">不可移除自己</span></td></tr></tbody></table></div>
     </div>
     <p v-if="store.detail" class="page-footnote">项目编码是稳定的资源归属标识。项目内云资源的访问权限由项目成员身份与角色共同决定。</p>
-    <ProjectFormDialog v-if="showEdit && store.detail" mode="edit" :project="store.detail" :submitting="store.mutationState === 'submitting'" :server-error="formError" @cancel="showEdit = false" @submit="updateProject" />
+    <ProjectFormDialog v-if="showEdit && store.detail" mode="edit" :project="store.detail" :submitting="store.mutationState === 'submitting'" :server-error="formError" @cancel="showEdit = false" @submit="submitUpdateProject" />
     <div v-if="showDelete && store.detail" class="dialog-backdrop" role="presentation" @click.self="showDelete = false">
       <section class="console-dialog is-compact" role="alertdialog" aria-modal="true" aria-labelledby="delete-project-title">
         <div class="dialog-heading"><div><p class="page-eyebrow">危险操作</p><h2 id="delete-project-title">确认删除业务项目</h2></div></div>

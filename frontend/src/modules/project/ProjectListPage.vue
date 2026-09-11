@@ -3,7 +3,7 @@
 import { computed, ref } from 'vue'
 import { useAuthStore } from '@/modules/auth/store'
 import ProjectFormDialog from './ProjectFormDialog.vue'
-import type { CreateProjectInput } from './api'
+import type { CreateProjectInput, UpdateProjectInput } from './api'
 import { useProjectStore } from './store'
 
 const auth = useAuthStore()
@@ -27,6 +27,12 @@ async function createProject(input: CreateProjectInput) {
   } catch {
     formError.value = createErrorMessage(store.mutationError)
   }
+}
+
+/** 仅接收创建表单事件，先收窄联合输入后交给原有创建流程。 */
+async function submitCreateProject(input: CreateProjectInput | UpdateProjectInput) {
+  if (!('code' in input)) return
+  await createProject(input)
 }
 </script>
 
@@ -63,6 +69,6 @@ async function createProject(input: CreateProjectInput) {
       </div>
     </div>
     <p class="page-footnote">云账号和云租户归属于唯一业务项目，其资源继承相同归属。</p>
-    <ProjectFormDialog v-if="showCreate" mode="create" :submitting="store.mutationState === 'submitting'" :server-error="formError" @cancel="showCreate = false" @submit="createProject" />
+    <ProjectFormDialog v-if="showCreate" mode="create" :submitting="store.mutationState === 'submitting'" :server-error="formError" @cancel="showCreate = false" @submit="submitCreateProject" />
   </section>
 </template>
