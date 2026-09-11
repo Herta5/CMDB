@@ -457,7 +457,11 @@ func (s *Service) applyType(ctx context.Context, tx *gorm.DB, source Source, res
 		} else {
 			businessChanges = changedBusinessColumns(existing, table, snapshot)
 			if len(businessChanges) == 0 {
-				unchangedIDs = append(unchangedIDs, existing.ID)
+				if jsonValuesEqual(existing.RawAttributes, snapshot.RawAttributes) {
+					unchangedIDs = append(unchangedIDs, existing.ID)
+				} else if err := tx.Table(table).Where("id = ?", existing.ID).Updates(map[string]any{"raw_attributes": snapshot.RawAttributes, "last_seen_at": now}).Error; err != nil {
+					return counts, err
+				}
 				continue
 			}
 			counts["updated"]++
@@ -466,6 +470,10 @@ func (s *Service) applyType(ctx context.Context, tx *gorm.DB, source Source, res
 		updates := snapshotBusinessColumns(table, snapshot)
 		if action == audit.ActionResourceUpdated {
 			updates = businessChanges
+			// 其他业务字段触发更新时，也要带上仅易变键变化的最新原始快照。
+			if !jsonValuesEqual(existing.RawAttributes, snapshot.RawAttributes) {
+				updates["raw_attributes"] = snapshot.RawAttributes
+			}
 		}
 		for key, value := range map[string]any{"asset_status": AssetStatusActive, "last_seen_at": now, "missing_since": nil, "updated_at": now} {
 			updates[key] = value

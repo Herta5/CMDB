@@ -201,7 +201,19 @@ func rdsSnapshots(output *rds.DescribeDBInstancesOutput, region string) []resour
 	}
 	for _, instance := range output.DBInstances {
 		raw, _ := json.Marshal(instance)
-		value := resource.Snapshot{ResourceType: "rds", ExternalID: awssdk.ToString(instance.DBInstanceIdentifier), Name: awssdk.ToString(instance.DBInstanceIdentifier), Region: region, Zone: awssdk.ToString(instance.AvailabilityZone), CloudStatus: awssdk.ToString(instance.DBInstanceStatus), Engine: awssdk.ToString(instance.Engine), EngineVersion: awssdk.ToString(instance.EngineVersion), RawAttributes: raw}
+		value := resource.Snapshot{
+			ResourceType:  "rds",
+			ExternalID:    awssdk.ToString(instance.DBInstanceIdentifier),
+			Name:          awssdk.ToString(instance.DBInstanceIdentifier),
+			Region:        region,
+			Zone:          awssdk.ToString(instance.AvailabilityZone),
+			CloudStatus:   awssdk.ToString(instance.DBInstanceStatus),
+			Engine:        awssdk.ToString(instance.Engine),
+			EngineVersion: awssdk.ToString(instance.EngineVersion),
+			RawAttributes: raw,
+			// AWS 会持续推进可时间点恢复的最新时间，它属于观测信息而非实例配置变化。
+			VolatileRawAttributeKeys: []string{"LatestRestorableTime"},
+		}
 		if instance.Endpoint != nil {
 			kind := "private"
 			if awssdk.ToBool(instance.PubliclyAccessible) {

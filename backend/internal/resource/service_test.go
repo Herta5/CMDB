@@ -197,6 +197,106 @@ func TestSyncUnchangedResourceOnlyRefreshesLastSeen(t *testing.T) {
 	}
 }
 
+// TestSyncVolatileRawAttributeOnlyRefreshesSnapshot 防止云端持续变化的观测字段虚增配置更新统计，同时保证原始快照保持最新。
+func TestSyncVolatileRawAttributeOnlyRefreshesSnapshot(t *testing.T) {
+	service, db, source, now := newResourceServiceTest(t)
+	firstSnapshot := Snapshot{
+		ResourceType:             "rds",
+		ExternalID:               "db-volatile",
+		Name:                     "稳定数据库",
+		RawAttributes:            []byte(`{"DBInstanceClass":"db.t4g.small","LatestRestorableTime":"2026-09-09T12:00:00Z"}`),
+		VolatileRawAttributeKeys: []string{"LatestRestorableTime"},
+	}
+	if _, err := service.Sync(context.Background(), source.ID, "manual", collectorStub{results: []CollectionResult{{ResourceType: "rds", Snapshots: []Snapshot{firstSnapshot}}}}); err != nil {
+		t.Fatalf("准备易变属性首次同步失败：%v", err)
+	}
+	var before Database
+	if err := db.Where("external_id = ?", firstSnapshot.ExternalID).First(&before).Error; err != nil {
+		t.Fatalf("读取首次同步的 RDS 失败：%v", err)
+	}
+
+	*now = now.Add(time.Hour)
+	secondSnapshot := firstSnapshot
+	secondSnapshot.RawAttributes = []byte(`{"DBInstanceClass":"db.t4g.small","LatestRestorableTime":"2026-09-09T13:00:00Z"}`)
+	job, err := service.Sync(context.Background(), source.ID, "scheduled", collectorStub{results: []CollectionResult{{ResourceType: "rds", Snapshots: []Snapshot{secondSnapshot}}}})
+	if err != nil {
+		t.Fatalf("同步易变 RDS 属性失败：%v", err)
+	}
+	if string(job.Statistics) != `{"rds":{"added":0,"deleted":0,"failed":0,"lost":0,"restored":0,"updated":0}}` {
+		t.Fatalf("仅易变属性变化不得计为资源更新：%s", job.Statistics)
+	}
+	var persisted Database
+	if err := db.Where("external_id = ?", firstSnapshot.ExternalID).First(&persisted).Error; err != nil {
+		t.Fatalf("读取易变属性同步后的 RDS 失败：%v", err)
+	}
+	if !jsonValuesEqual(persisted.RawAttributes, secondSnapshot.RawAttributes) {
+		t.Fatalf("易变属性仍须刷新到最新原始快照：raw=%s", persisted.RawAttributes)
+	}
+	if !persisted.LastSeenAt.Equal(*now) || !persisted.UpdatedAt.Equal(before.UpdatedAt) {
+		t.Fatalf("易变属性只能刷新快照和最近发现时间：before=%s updated=%s last_seen=%s", before.UpdatedAt, persisted.UpdatedAt, persisted.LastSeenAt)
+	}
+	var updatedAudits int64
+	if err := db.Model(&audit.Log{}).Where("action = ? AND resource_id = ?", audit.ActionResourceUpdated, firstSnapshot.ExternalID).Count(&updatedAudits).Error; err != nil || updatedAudits != 0 {
+		t.Fatalf("仅易变属性变化不得产生更新审计：count=%d err=%v", updatedAudits, err)
+	}
+}
+
+// TestSyncVolatileRawAttributeDoesNotHideConfigurationChange 验证易变观测值同时变化时，稳定原始配置变化仍会计入更新。
+func TestSyncVolatileRawAttributeDoesNotHideConfigurationChange(t *testing.T) {
+	service, _, source, now := newResourceServiceTest(t)
+	firstSnapshot := Snapshot{
+		ResourceType:             "rds",
+		ExternalID:               "db-config-change",
+		RawAttributes:            []byte(`{"DBInstanceClass":"db.t4g.small","LatestRestorableTime":"2026-09-09T12:00:00Z"}`),
+		VolatileRawAttributeKeys: []string{"LatestRestorableTime"},
+	}
+	if _, err := service.Sync(context.Background(), source.ID, "manual", collectorStub{results: []CollectionResult{{ResourceType: "rds", Snapshots: []Snapshot{firstSnapshot}}}}); err != nil {
+		t.Fatalf("准备 RDS 配置变化测试失败：%v", err)
+	}
+
+	*now = now.Add(time.Hour)
+	secondSnapshot := firstSnapshot
+	secondSnapshot.RawAttributes = []byte(`{"DBInstanceClass":"db.r7g.large","LatestRestorableTime":"2026-09-09T13:00:00Z"}`)
+	job, err := service.Sync(context.Background(), source.ID, "scheduled", collectorStub{results: []CollectionResult{{ResourceType: "rds", Snapshots: []Snapshot{secondSnapshot}}}})
+	if err != nil {
+		t.Fatalf("同步 RDS 配置变化失败：%v", err)
+	}
+	if string(job.Statistics) != `{"rds":{"added":0,"deleted":0,"failed":0,"lost":0,"restored":0,"updated":1}}` {
+		t.Fatalf("稳定配置变化必须计为资源更新：%s", job.Statistics)
+	}
+}
+
+// TestSyncConfigurationChangeAlsoRefreshesVolatileRawAttribute 验证独立业务字段变化时不会遗漏同时推进的最新原始观测值。
+func TestSyncConfigurationChangeAlsoRefreshesVolatileRawAttribute(t *testing.T) {
+	service, db, source, now := newResourceServiceTest(t)
+	firstSnapshot := Snapshot{
+		ResourceType:             "rds",
+		ExternalID:               "db-region-change",
+		Region:                   "cn-north-1",
+		RawAttributes:            []byte(`{"LatestRestorableTime":"2026-09-09T12:00:00Z"}`),
+		VolatileRawAttributeKeys: []string{"LatestRestorableTime"},
+	}
+	if _, err := service.Sync(context.Background(), source.ID, "manual", collectorStub{results: []CollectionResult{{ResourceType: "rds", Snapshots: []Snapshot{firstSnapshot}}}}); err != nil {
+		t.Fatalf("准备 RDS 区域变化测试失败：%v", err)
+	}
+
+	*now = now.Add(time.Hour)
+	secondSnapshot := firstSnapshot
+	secondSnapshot.Region = "cn-northwest-1"
+	secondSnapshot.RawAttributes = []byte(`{"LatestRestorableTime":"2026-09-09T13:00:00Z"}`)
+	job, err := service.Sync(context.Background(), source.ID, "scheduled", collectorStub{results: []CollectionResult{{ResourceType: "rds", Snapshots: []Snapshot{secondSnapshot}}}})
+	if err != nil {
+		t.Fatalf("同步 RDS 区域变化失败：%v", err)
+	}
+	var persisted Database
+	if err := db.Where("external_id = ?", firstSnapshot.ExternalID).First(&persisted).Error; err != nil {
+		t.Fatalf("读取区域变化后的 RDS 失败：%v", err)
+	}
+	if string(job.Statistics) != `{"rds":{"added":0,"deleted":0,"failed":0,"lost":0,"restored":0,"updated":1}}` || persisted.Region != secondSnapshot.Region || !jsonValuesEqual(persisted.RawAttributes, secondSnapshot.RawAttributes) {
+		t.Fatalf("真实配置变化必须计数并同时保存最新原始快照：statistics=%s region=%s raw=%s", job.Statistics, persisted.Region, persisted.RawAttributes)
+	}
+}
+
 // TestSyncChangedResourceRecordsOneUpdate 验证真实业务字段变化仍会持久化、计数并保留审计。
 func TestSyncChangedResourceRecordsOneUpdate(t *testing.T) {
 	service, db, source, now := newResourceServiceTest(t)

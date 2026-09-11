@@ -3,8 +3,10 @@ package aws
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"testing"
+	"time"
 
 	"cmdb/internal/resource"
 	awssdk "github.com/aws/aws-sdk-go-v2/aws"
@@ -61,6 +63,25 @@ func TestRDSAndELBSnapshotsKeepHostnamesAndPorts(t *testing.T) {
 	}
 	if elbValues[0].Endpoints[0].Kind != "public" || elbValues[0].Endpoints[0].Address != "lb.example.invalid" || elbValues[0].Endpoints[0].Port != 443 || elbValues[0].Endpoints[0].Protocol != "https" {
 		t.Fatal("公网 ELB 必须保存公网域名及监听端口")
+	}
+}
+
+// TestRDSSnapshotMarksLatestRestorableTimeVolatile 验证持续推进的恢复时间不会被当成 RDS 配置变化，原始值仍完整保留。
+func TestRDSSnapshotMarksLatestRestorableTimeVolatile(t *testing.T) {
+	latest := time.Date(2026, 9, 9, 12, 0, 0, 0, time.UTC)
+	values := rdsSnapshots(&rds.DescribeDBInstancesOutput{DBInstances: []rdstypes.DBInstance{{
+		DBInstanceIdentifier: awssdk.String("db-volatile"),
+		LatestRestorableTime: &latest,
+	}}}, "cn-north-1")
+	if len(values) != 1 {
+		t.Fatalf("AWS RDS 快照数量错误：got=%d want=1", len(values))
+	}
+	if len(values[0].VolatileRawAttributeKeys) != 1 || values[0].VolatileRawAttributeKeys[0] != "LatestRestorableTime" {
+		t.Fatalf("AWS RDS 必须只标记持续推进的恢复时间为易变属性：%v", values[0].VolatileRawAttributeKeys)
+	}
+	var raw map[string]any
+	if err := json.Unmarshal(values[0].RawAttributes, &raw); err != nil || raw["LatestRestorableTime"] == nil {
+		t.Fatalf("易变字段仍须保留在 RDS 原始属性中：preserved=%t err=%v", raw["LatestRestorableTime"] != nil, err)
 	}
 }
 
