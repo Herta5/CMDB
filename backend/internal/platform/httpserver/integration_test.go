@@ -62,6 +62,18 @@ func TestPublicUsernameContractEndToEnd(t *testing.T) {
 	if integrationObject(t, updatedProjectPayload)["owner_username"] != username {
 		t.Fatal("项目负责人必须以用户名公开")
 	}
+	otherActorToken := loginUser(t, server, "member_a", password)
+	otherActorMember := integrationRequest(t, server, token, http.MethodPost, projectPath+"/members", map[string]any{"username": "member_a", "role": "project_admin"}, http.StatusCreated)
+	var otherActorMemberPayload any
+	decodeIntegration(t, otherActorMember, &otherActorMemberPayload)
+	assertNoPublicUserNumericIdentifiers(t, otherActorMemberPayload)
+	createdByOtherActor := integrationRequest(t, server, otherActorToken, http.MethodPost, projectPath+"/members", map[string]any{"username": username, "role": "member"}, http.StatusCreated)
+	var createdByOtherActorPayload any
+	decodeIntegration(t, createdByOtherActor, &createdByOtherActorPayload)
+	assertNoPublicUserNumericIdentifiers(t, createdByOtherActorPayload)
+	if integrationObject(t, createdByOtherActorPayload)["username"] != username {
+		t.Fatal("另一操作人添加成员时必须以用户名标识目标")
+	}
 
 	for _, operation := range []struct {
 		method string
@@ -69,7 +81,6 @@ func TestPublicUsernameContractEndToEnd(t *testing.T) {
 		body   any
 		status int
 	}{
-		{http.MethodPost, projectPath + "/members", map[string]any{"username": username, "role": "member"}, http.StatusCreated},
 		{http.MethodPut, projectPath + "/members/" + username, map[string]any{"role": "project_admin"}, http.StatusOK},
 		{http.MethodDelete, projectPath + "/members/" + username, nil, http.StatusNoContent},
 	} {
@@ -89,9 +100,18 @@ func TestPublicUsernameContractEndToEnd(t *testing.T) {
 	var auditPayload any
 	decodeIntegration(t, auditResponse, &auditPayload)
 	assertNoPublicUserNumericIdentifiers(t, auditPayload)
-	for _, action := range []string{audit.ActionUserCreated, audit.ActionProjectMemberAdded, audit.ActionProjectMemberRoleChanged, audit.ActionProjectMemberRemoved} {
+	assertIntegrationAuditActors(t, auditPayload, "operator", "member_a")
+	for _, action := range []string{audit.ActionUserCreated, audit.ActionProjectMemberRoleChanged, audit.ActionProjectMemberRemoved} {
 		assertIntegrationAuditResourceID(t, auditPayload, action, username)
 	}
+	assertIntegrationAuditResourceID(t, auditPayload, audit.ActionProjectMemberAdded, "member_a")
+
+	otherActorAuditResponse := integrationRequest(t, server, token, http.MethodGet, "/api/v1/audit-logs?actor_username=member_a&page=1&page_size=100", nil, http.StatusOK)
+	var otherActorAuditPayload any
+	decodeIntegration(t, otherActorAuditResponse, &otherActorAuditPayload)
+	assertNoPublicUserNumericIdentifiers(t, otherActorAuditPayload)
+	assertIntegrationAuditActors(t, otherActorAuditPayload, "member_a", "operator")
+	assertIntegrationAuditResourceID(t, otherActorAuditPayload, audit.ActionProjectMemberAdded, username)
 }
 
 // TestAuditQueryPermissionsAndProjectIsolation 验证系统管理员、项目管理员和成员使用不同审计边界。
@@ -741,4 +761,22 @@ func assertIntegrationAuditResourceID(t *testing.T, payload any, action, usernam
 		}
 	}
 	t.Fatalf("审计查询必须返回动作 %s", action)
+}
+
+// assertIntegrationAuditActors 验证按操作人用户名筛选后的每条审计都属于预期身份，并排除已知的另一操作人。
+func assertIntegrationAuditActors(t *testing.T, payload any, expectedActor, excludedActor string) {
+	t.Helper()
+	items, ok := integrationObject(t, payload)["items"].([]any)
+	if !ok || len(items) == 0 {
+		t.Fatal("按操作人用户名筛选必须返回至少一条审计")
+	}
+	for _, item := range items {
+		actorUsername, _ := integrationObject(t, item)["actor_username"].(string)
+		if actorUsername == excludedActor {
+			t.Fatalf("操作人筛选不得返回已知另一操作人 %q", excludedActor)
+		}
+		if actorUsername != expectedActor {
+			t.Fatalf("操作人筛选只应返回 %q，实际为 %q", expectedActor, actorUsername)
+		}
+	}
 }
