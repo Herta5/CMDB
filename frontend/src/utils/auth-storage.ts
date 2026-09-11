@@ -49,6 +49,8 @@ export function readAuthSession(): StoredAuthSession | null {
       const session = { sessionId: value.sessionId, token: value.token, currentUser: publicCurrentUser(user) }
       const cleaned = JSON.stringify(session)
       legacyAuthStorageKeys.forEach(key => localStorage.removeItem(key))
+      // 清理期间另一标签页可能已经登录或退出；放弃旧快照并重新读取，不能把迁移当成登录发布。
+      if (localStorage.getItem(authSessionStorageKey) !== stored) return readAuthSession()
       // 迁移时同步清理持久化；已清理快照不重复发布，避免标签页相互触发存储事件。
       if (cleaned !== stored) localStorage.setItem(authSessionStorageKey, cleaned)
       return session

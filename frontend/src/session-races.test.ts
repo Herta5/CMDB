@@ -7,15 +7,29 @@ import { AxiosError, type AxiosResponse } from 'axios'
 
 vi.mock('element-plus', () => ({ ElMessage: { error: vi.fn() } }))
 import request from '@/utils/request'
-import { clearAuthStorage, saveAuthSession } from '@/utils/auth-storage'
+import { authSessionStorageKey, clearAuthStorage, readAuthSession, saveAuthSession } from '@/utils/auth-storage'
 import { useAuthStore } from '@/modules/auth/store'
 import { useProjectStore } from '@/modules/project/store'
 
 // 模拟浏览器存储与真实事件分发，只替换外部环境，不跳过生产会话逻辑。
 class MemoryStorage {
   private values = new Map<string, string>()
-  getItem(key: string) { return this.values.get(key) ?? null }
-  setItem(key: string, value: string) { this.values.set(key, value) }
+  // 在首次取得快照后插入另一标签页操作，稳定复现读与迁移写回之间的竞争。
+  afterNextSessionRead?: () => void
+  sessionWrites = 0
+  getItem(key: string) {
+    const value = this.values.get(key) ?? null
+    if (key === authSessionStorageKey) {
+      const afterRead = this.afterNextSessionRead
+      this.afterNextSessionRead = undefined
+      afterRead?.()
+    }
+    return value
+  }
+  setItem(key: string, value: string) {
+    if (key === authSessionStorageKey) this.sessionWrites++
+    this.values.set(key, value)
+  }
   removeItem(key: string) { this.values.delete(key) }
 }
 
@@ -63,6 +77,64 @@ function notifyStorage(key: string | null = 'cmdb.auth.session') {
 }
 
 describe('跨标签页与在途请求的身份隔离', () => {
+  it('迁移旧会话期间另一标签页登录时保留并恢复新会话', () => {
+    const storage = localStorage as unknown as MemoryStorage
+    storage.setItem(authSessionStorageKey, JSON.stringify({
+      sessionId: '0123456789abcdef0123456789abcdef', token: tokens.user_a,
+      currentUser: { ...users[0], id: 41, user_id: 41, profile: { user_id: 41 } },
+    }))
+    let newSessionId = ''
+    storage.afterNextSessionRead = () => {
+      newSessionId = saveAuthSession(tokens.user_b!, users[1]!).sessionId
+    }
+
+    const auth = useAuthStore()
+
+    const persisted = JSON.parse(storage.getItem(authSessionStorageKey) || 'null')
+    expect(persisted?.currentUser).toEqual(users[1])
+    expect(persisted?.sessionId).toBe(newSessionId)
+    expect(persisted?.token === tokens.user_b).toBe(true)
+    expect(auth.currentUser).toEqual(users[1])
+    expect(auth.sessionId).toBe(newSessionId)
+    expect(auth.token === tokens.user_b).toBe(true)
+  })
+
+  it('迁移旧会话期间另一标签页退出时不得恢复已退出身份', () => {
+    const storage = localStorage as unknown as MemoryStorage
+    storage.setItem(authSessionStorageKey, JSON.stringify({
+      sessionId: '0123456789abcdef0123456789abcdef', token: tokens.user_a,
+      currentUser: { ...users[0], id: 41, user_id: 41 },
+    }))
+    storage.afterNextSessionRead = clearAuthStorage
+
+    const auth = useAuthStore()
+
+    expect(storage.getItem(authSessionStorageKey) === null).toBe(true)
+    expect(auth.currentUser).toBeNull()
+    expect(auth.token).toBe('')
+    expect(auth.sessionId).toBeNull()
+  })
+
+  it('迁移一次后读取干净会话和处理存储事件均不重复写回', () => {
+    const storage = localStorage as unknown as MemoryStorage
+    storage.setItem(authSessionStorageKey, JSON.stringify({
+      sessionId: '0123456789abcdef0123456789abcdef', token: tokens.user_a,
+      currentUser: { ...users[0], id: 41, profile: { user_id: 41 } },
+    }))
+    const auth = useAuthStore()
+    const writesAfterMigration = storage.sessionWrites
+    expect(auth.currentUser).toEqual(users[0])
+    expect(JSON.parse(storage.getItem(authSessionStorageKey)!).currentUser).toEqual(users[0])
+
+    readAuthSession()
+    notifyStorage()
+    notifyStorage()
+
+    expect(storage.sessionWrites).toBe(writesAfterMigration)
+    expect(auth.sessionVersion).toBe(0)
+    expect(auth.currentUser).toEqual(users[0])
+  })
+
   it.each(['事件已送达', '事件未送达'])('两标签页使用相同用户和令牌重新登录后，旧 401 不得删除新会话：%s', async delivery => {
     const tabA = useAuthStore()
     await tabA.signIn('user_a', '测试输入')
