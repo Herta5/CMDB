@@ -158,12 +158,75 @@ func TestListFiltersProjectActionActorObjectAndTime(t *testing.T) {
 		t.Fatalf("准备审计数据失败：%v", err)
 	}
 	start, end := now.Add(-time.Minute), now.Add(time.Minute)
-	items, total, _, err := repository.List(context.Background(), audit.Filter{ProjectID: &projectA, Action: audit.ActionUserUpdated, ActorUsername: "admin_1", ResourceType: "user", ResourceID: "12", StartAt: &start, EndAt: &end, Page: 1, PageSize: 20})
+	items, total, _, err := repository.List(context.Background(), audit.Filter{ProjectID: &projectA, Action: audit.ActionUserUpdated, ActorUsername: "admin_1", ResourceType: "user", ResourceID: "cloud-user", StartAt: &start, EndAt: &end, Page: 1, PageSize: 20})
 	if err != nil {
 		t.Fatalf("筛选审计失败：%v", err)
 	}
 	if total != 1 || len(items) != 1 || items[0].ID != 2 {
 		t.Fatalf("筛选必须只返回完全匹配的记录：total=%d items=%+v", total, items)
+	}
+}
+
+// TestListFiltersEffectiveUserResourceID 防止通过历史内部数字 ID 查询用户审计，并保持用户名碰撞时的精确筛选。
+func TestListFiltersEffectiveUserResourceID(t *testing.T) {
+	for _, resourceType := range []string{"user", "project_member"} {
+		t.Run(resourceType, func(t *testing.T) {
+			db := auditDatabase(t)
+			createdAt := time.Date(2026, 9, 11, 8, 0, 0, 0, time.UTC)
+			logs := []audit.Log{
+				{ID: 1, ResourceType: resourceType, ResourceID: "12", Detail: json.RawMessage(`{"target_username":"member_1"}`)},
+				{ID: 2, ResourceType: resourceType, ResourceID: "12", Detail: json.RawMessage(`{}`)},
+				{ID: 3, ResourceType: resourceType, ResourceID: "12", Detail: json.RawMessage(`{"target_username":"12"}`)},
+				{ID: 4, ResourceType: resourceType, ResourceID: "99", Detail: json.RawMessage(`{"target_username":"12"}`)},
+				{ID: 5, ResourceType: resourceType, ResourceID: "new_member", Detail: json.RawMessage(`{"target_username":"ignored_snapshot"}`)},
+				{ID: 6, ResourceType: "project", ResourceID: "12", Detail: json.RawMessage(`{"target_username":"ignored_snapshot"}`)},
+				{ID: 7, ResourceType: resourceType, ResourceID: "12", Detail: json.RawMessage(`{"target_username":12}`)},
+				{ID: 8, ResourceType: resourceType, ResourceID: "45", Detail: json.RawMessage(`null`)},
+			}
+			for index := range logs {
+				logs[index].Action = audit.ActionUserUpdated
+				logs[index].CreatedAt = createdAt
+			}
+			if err := db.Create(&logs).Error; err != nil {
+				t.Fatalf("准备用户对象审计失败：%v", err)
+			}
+			for _, tt := range []struct {
+				name, resourceType, resourceID string
+				wantIDs                        []uint64
+			}{
+				{"历史对象按用户名快照查询", resourceType, "member_1", []uint64{1}},
+				{"数字用户名不会匹配相同旧内部标识", resourceType, "12", []uint64{4, 3}},
+				{"旧内部标识不能作为查询入口", resourceType, "99", nil},
+				{"无快照的数字标识不能查询", resourceType, "45", nil},
+				{"新用户名按自身查询", resourceType, "new_member", []uint64{5}},
+				{"新用户名不使用其他快照", resourceType, "ignored_snapshot", nil},
+				{"用户名不按子串匹配", resourceType, "member", nil},
+				{"其他对象保留原始标识", "project", "12", []uint64{6}},
+				{"全局对象筛选也遵守用户名边界", "", "12", []uint64{6, 4, 3}},
+			} {
+				t.Run(tt.name, func(t *testing.T) {
+					items, total, snapshot, err := audit.NewRepository(db).List(context.Background(), audit.Filter{ResourceType: tt.resourceType, ResourceID: tt.resourceID, Page: 1, PageSize: 20})
+					if err != nil {
+						t.Fatalf("按公开对象标识查询失败：%v", err)
+					}
+					if total != int64(len(tt.wantIDs)) || len(items) != len(tt.wantIDs) {
+						t.Fatalf("必须仅返回有效公开对象标识相等的记录：总数=%d，记录=%+v，期望日志 ID=%v", total, items, tt.wantIDs)
+					}
+					var wantSnapshot uint64
+					if len(tt.wantIDs) > 0 {
+						wantSnapshot = tt.wantIDs[0]
+					}
+					if snapshot != wantSnapshot {
+						t.Errorf("快照边界必须使用同一对象筛选：得到 %d，期望 %d", snapshot, wantSnapshot)
+					}
+					for index, item := range items {
+						if item.ID != tt.wantIDs[index] || item.ResourceID != tt.resourceID {
+							t.Errorf("筛选和公开输出必须采用同一对象标识：日志=%+v，查询标识=%q", item, tt.resourceID)
+						}
+					}
+				})
+			}
+		})
 	}
 }
 

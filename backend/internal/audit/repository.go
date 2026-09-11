@@ -166,7 +166,7 @@ func applyFilter(query *gorm.DB, filter Filter) *gorm.DB {
 		query = query.Where("audit_logs.resource_type = ?", filter.ResourceType)
 	}
 	if filter.ResourceID != "" {
-		query = query.Where("audit_logs.resource_id = ?", filter.ResourceID)
+		query = query.Where(effectiveResourceIDExpression(query.Dialector.Name())+" = ?", filter.ResourceID)
 	}
 	if filter.StartAt != nil {
 		query = query.Where("audit_logs.created_at >= ?", *filter.StartAt)
@@ -175,6 +175,21 @@ func applyFilter(query *gorm.DB, filter Filter) *gorm.DB {
 		query = query.Where("audit_logs.created_at <= ?", *filter.EndAt)
 	}
 	return query
+}
+
+// effectiveResourceIDExpression 让筛选与公开输出采用同一用户标识，旧内部 ID 不能成为查询入口。
+func effectiveResourceIDExpression(dialect string) string {
+	numeric := "audit_logs.resource_id ~ '^[0-9]+$'"
+	stringSnapshot := "jsonb_typeof(audit_logs.detail::jsonb -> 'target_username') = 'string'"
+	username := "audit_logs.detail ->> 'target_username'"
+	if dialect == "sqlite" {
+		numeric = "audit_logs.resource_id <> '' AND audit_logs.resource_id NOT GLOB '*[^0-9]*'"
+		stringSnapshot = "json_type(audit_logs.detail, '$.target_username') = 'text'"
+		username = "json_extract(audit_logs.detail, '$.target_username')"
+	}
+	// 数字用户名由新审计保存的同名字符串快照确认；缺失或类型错误的快照与读取路径一致返回空标识。
+	return "CASE WHEN audit_logs.resource_type IN ('user', 'project_member') AND " + numeric +
+		" THEN CASE WHEN " + stringSnapshot + " THEN " + username + " ELSE '' END ELSE audit_logs.resource_id END"
 }
 
 // actorUsernameExpression 兼容 PostgreSQL 与 SQLite，用户删除后仍可用审计快照精确筛选。
