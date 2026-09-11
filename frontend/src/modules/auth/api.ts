@@ -3,7 +3,6 @@ import request from '@/utils/request'
 
 /** 当前登录用户可安全显示的身份资料，敏感凭证不属于此类型。 */
 export interface CurrentUser {
-  id: number
   username: string
   displayName?: string
   email?: string
@@ -19,7 +18,6 @@ export interface LoginSession {
 
 /** 后端 HTTP 契约使用 snake_case；该 DTO 只存在于 API 边界，不能泄漏到页面状态。 */
 interface CurrentUserDTO {
-  id: number
   username: string
   display_name: string
   email: string
@@ -36,7 +34,6 @@ interface LoginSessionDTO {
 /** 显式转换字段命名，避免前端 camelCase 状态意外保存后端 snake_case 属性。 */
 function toCurrentUser(user: CurrentUserDTO): CurrentUser {
   return {
-    id: user.id,
     username: user.username,
     displayName: user.display_name,
     email: user.email,

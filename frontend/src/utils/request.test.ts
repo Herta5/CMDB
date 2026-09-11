@@ -38,9 +38,9 @@ beforeEach(() => {
 
 describe('请求认证失败处理', () => {
   it('401 清理所有 CMDB 新旧身份存储并保留其他设置', async () => {
-    useAuthStore().acceptSession('token-123', { id: 42, username: 'alice', globalRole: 'user' })
+    useAuthStore().acceptSession('token-123', { username: 'alice', globalRole: 'user' })
     storage.setItem('cmdb.auth.token', 'token-123')
-    storage.setItem('cmdb.auth.current-user', '{"id":42,"username":"alice","globalRole":"user"}')
+    storage.setItem('cmdb.auth.current-user', '{"username":"alice","globalRole":"user"}')
     storage.setItem('cmdb_token', 'token-123')
     storage.setItem('cmdb_user_id', '42')
     storage.setItem('cmdb_username', 'alice')
@@ -62,7 +62,7 @@ describe('请求认证失败处理', () => {
 
   it('401 时清除内存中的会话并回到登录页', async () => {
     const auth = useAuthStore()
-    auth.acceptSession('token-123', { id: 42, username: 'alice', globalRole: 'user' })
+    auth.acceptSession('token-123', { username: 'alice', globalRole: 'user' })
     await expect(request.get('/projects')).rejects.toThrow('身份认证已失效')
 
     expect(auth.token).toBe('')

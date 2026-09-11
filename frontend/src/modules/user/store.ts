@@ -13,7 +13,7 @@ export const useUserStore = defineStore('cmdb-user', () => {
   const submitting = ref(false)
   const errorCode = ref('')
   let createInFlight: Promise<User> | null = null
-  const deleteInFlight = new Map<number, Promise<void>>()
+  const deleteInFlight = new Map<string, Promise<void>>()
 
   /** 从受保护接口刷新全部公开用户资料。 */
   async function loadUsers() {
@@ -52,18 +52,18 @@ export const useUserStore = defineStore('cmdb-user', () => {
   }
 
   /** 删除成功或服务端确认记录已不存在时，移除本地公开资料并保持列表一致。 */
-  function deleteUser(id: number): Promise<void> {
-    const pending = deleteInFlight.get(id)
+  function deleteUser(username: string): Promise<void> {
+    const pending = deleteInFlight.get(username)
     if (pending) return pending
     submitting.value = true
     errorCode.value = ''
     const removeLocalUser = () => {
-      users.value = users.value.filter(user => user.id !== id)
+      users.value = users.value.filter(user => user.username !== username)
       loadState.value = users.value.length ? 'ready' : 'empty'
     }
     const operation = (async () => {
       try {
-        await deleteUserRequest(id)
+        await deleteUserRequest(username)
         removeLocalUser()
       } catch (error) {
         const code = (error as { response?: { data?: { code?: string } } })?.response?.data?.code
@@ -76,21 +76,21 @@ export const useUserStore = defineStore('cmdb-user', () => {
         errorCode.value = code ?? 'USER_SERVICE_UNAVAILABLE'
         throw error
       } finally {
-        deleteInFlight.delete(id)
+        deleteInFlight.delete(username)
         submitting.value = false
       }
     })()
-    deleteInFlight.set(id, operation)
+    deleteInFlight.set(username, operation)
     return operation
   }
 
   /** 编辑成功后仅保存服务端公开资料，提交的新密码不会进入 Pinia 状态。 */
-  async function updateUser(id: number, input: UpdateUserInput) {
+  async function updateUser(username: string, input: UpdateUserInput) {
     submitting.value = true
     errorCode.value = ''
     try {
-      const user = await updateUserRequest(id, input)
-      users.value = users.value.map(value => value.id === id ? user : value)
+      const user = await updateUserRequest(username, input)
+      users.value = users.value.map(value => value.username === username ? user : value)
       return user
     } catch (error) {
       errorCode.value = (error as { response?: { data?: { code?: string } } })?.response?.data?.code ?? 'USER_SERVICE_UNAVAILABLE'

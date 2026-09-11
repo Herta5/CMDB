@@ -36,7 +36,7 @@ beforeEach(() => {
   request.defaults.adapter = async config => {
     const response: AxiosResponse = { config, status: 200, statusText: '成功', headers: {}, data: null }
     if (config.url === '/auth/login' && config.method === 'post') {
-      response.data = { token, user: { id: 2, username: 'member-a', display_name: '项目查看者', email: '', global_role: 'user', status: 'active' } }
+      response.data = { token, user: { username: 'member_a', display_name: '项目查看者', email: '', global_role: 'user', status: 'active' } }
     } else if (expired || config.headers.Authorization !== `Bearer ${token}`) {
       response.status = 401
       response.data = { code: 'AUTH_UNAUTHORIZED', message: '身份认证已失效' }
@@ -60,7 +60,7 @@ describe('CMDB 第一阶段应用流程', () => {
     expect(router.currentRoute.value.path).toBe('/login')
     expect(router.currentRoute.value.query.redirect).toBe('/projects/1')
     const auth = useAuthStore()
-    await auth.signIn('member-a', randomBytes(24).toString('hex'))
+    await auth.signIn('member_a', randomBytes(24).toString('hex'))
     await router.replace(String(router.currentRoute.value.query.redirect))
     expect(router.currentRoute.value.path).toBe('/projects/1')
     expect(auth.currentUser?.globalRole).toBe('user')
@@ -85,7 +85,7 @@ describe('CMDB 第一阶段应用流程', () => {
 
   it('服务端会话失效时同步清除身份和项目，下一次导航必须重新登录', async () => {
     const auth = useAuthStore()
-    await auth.signIn('member-a', randomBytes(24).toString('hex'))
+    await auth.signIn('member_a', randomBytes(24).toString('hex'))
     const projects = useProjectStore()
     await projects.loadProjects()
     await projects.loadProject(1)

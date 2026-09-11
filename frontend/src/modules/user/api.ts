@@ -3,7 +3,6 @@ import request from '@/utils/request'
 
 /** User 是控制台可显示的公开身份资料，不包含任何认证凭证。 */
 export interface User {
-  id: number
   username: string
   displayName: string
   email: string
@@ -37,7 +36,6 @@ export interface UpdateUserInput {
 }
 
 interface UserDTO {
-  id: number
   username: string
   display_name: string
   email: string
@@ -48,7 +46,7 @@ interface UserDTO {
 
 /** 显式选择公开字段，即使后端意外增加字段也不会进入页面状态。 */
 function toUser(value: UserDTO): User {
-  return { id: value.id, username: value.username, displayName: value.display_name, email: value.email, globalRole: value.global_role, status: value.status, projectPermissions: (value.project_permissions ?? []).map(permission => ({ projectId: permission.project_id, projectName: permission.project_name, role: permission.role })) }
+  return { username: value.username, displayName: value.display_name, email: value.email, globalRole: value.global_role, status: value.status, projectPermissions: (value.project_permissions ?? []).map(permission => ({ projectId: permission.project_id, projectName: permission.project_name, role: permission.role })) }
 }
 
 /** 列出系统管理员可管理的全局用户。 */
@@ -64,11 +62,11 @@ export async function createUser(input: CreateUserInput): Promise<User> {
 }
 
 /** 更新用户可维护资料；响应继续通过公开字段白名单转换。 */
-export async function updateUser(id: number, input: UpdateUserInput): Promise<User> {
-  return toUser(await request.put(`/users/${id}`, { display_name: input.displayName, email: input.email, global_role: input.globalRole, status: input.status, password: input.password, project_permissions: input.projectPermissions.map(permission => ({ project_id: permission.projectId, role: permission.role })) }) as UserDTO)
+export async function updateUser(username: string, input: UpdateUserInput): Promise<User> {
+  return toUser(await request.put(`/users/${encodeURIComponent(username)}`, { display_name: input.displayName, email: input.email, global_role: input.globalRole, status: input.status, password: input.password, project_permissions: input.projectPermissions.map(permission => ({ project_id: permission.projectId, role: permission.role })) }) as UserDTO)
 }
 
 /** 删除用户身份；关联项目成员关系由服务端统一清理。 */
-export async function deleteUser(id: number): Promise<void> {
-  await request.delete(`/users/${id}`)
+export async function deleteUser(username: string): Promise<void> {
+  await request.delete(`/users/${encodeURIComponent(username)}`)
 }

@@ -10,7 +10,8 @@ const auth = useAuthStore()
 const projects = useProjectStore()
 const route = useRoute()
 const router = useRouter()
-const userName = computed(() => auth.currentUser?.displayName || auth.currentUser?.username || '当前用户')
+// 用户名是公开身份标识，显示名称只能作为辅助资料，不能遮蔽身份入口中的用户名。
+const userName = computed(() => auth.currentUser?.username || '当前用户')
 const isSystemAdmin = computed(() => auth.currentUser?.globalRole === 'system_admin')
 // 项目管理员权限随顶部当前项目切换，不能因其他项目的角色扩大当前边界。
 const isCurrentProjectAdmin = computed(() => projects.currentProject?.currentRole === 'project_admin')

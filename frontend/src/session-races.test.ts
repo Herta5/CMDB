@@ -27,11 +27,11 @@ function deferred<T>() {
 }
 
 const users = [
-  { id: 1, username: 'user-a', globalRole: 'user' as const },
-  { id: 2, username: 'user-b', globalRole: 'user' as const },
+  { username: 'user_a', globalRole: 'user' as const },
+  { username: 'user_b', globalRole: 'user' as const },
 ]
 const projectDTO = (id: number) => ({ id, code: `cloud-${id}`, name: `云项目${id}`, description: '', status: 'enabled', owner_user_id: id, created_at: '', updated_at: '' })
-let tokens: string[]
+let tokens: Record<string, string>
 let pinia: ReturnType<typeof createPinia> | undefined
 
 beforeEach(() => {
@@ -40,17 +40,18 @@ beforeEach(() => {
   vi.stubGlobal('window', Object.assign(new EventTarget(), { location: { href: '/projects', pathname: '/projects' } }))
   pinia = createPinia()
   setActivePinia(pinia)
-  tokens = [randomBytes(32).toString('hex'), randomBytes(32).toString('hex')]
+  tokens = { user_a: randomBytes(32).toString('hex'), user_b: randomBytes(32).toString('hex') }
   request.defaults.adapter = async config => {
     const response: AxiosResponse = { config, status: 200, statusText: '成功', headers: {}, data: null }
     if (config.url === '/auth/login') {
       const user = users.find(user => user.username === JSON.parse(config.data).username)!
-      response.data = { token: tokens[user.id - 1], user: { id: user.id, username: user.username, global_role: user.globalRole } }
+      response.data = { token: tokens[user.username]!, user: { username: user.username, global_role: user.globalRole } }
     } else {
-      const id = tokens.findIndex(token => config.headers.Authorization === `Bearer ${token}`) + 1
-      if (config.url === '/projects') response.data = [projectDTO(id)]
-      else if (config.url?.startsWith('/projects/')) response.data = projectDTO(id)
-      else response.data = { id, username: users[id - 1]?.username, global_role: 'user' }
+      const username = users.find(user => config.headers.Authorization === `Bearer ${tokens[user.username]}`)?.username
+      const projectID = username === 'user_a' ? 1 : 2
+      if (config.url === '/projects') response.data = [projectDTO(projectID)]
+      else if (config.url?.startsWith('/projects/')) response.data = projectDTO(projectID)
+      else response.data = { username, global_role: 'user' }
     }
     return response
   }
@@ -64,7 +65,7 @@ function notifyStorage(key: string | null = 'cmdb.auth.session') {
 describe('跨标签页与在途请求的身份隔离', () => {
   it.each(['事件已送达', '事件未送达'])('两标签页使用相同用户和令牌重新登录后，旧 401 不得删除新会话：%s', async delivery => {
     const tabA = useAuthStore()
-    await tabA.signIn('user-a', '测试输入')
+    await tabA.signIn('user_a', '测试输入')
     const projectsA = useProjectStore()
     await projectsA.loadProjects()
     await projectsA.loadProject(1)
@@ -87,9 +88,9 @@ describe('跨标签页与在途请求的身份隔离', () => {
     setActivePinia(piniaB)
     try {
       const tabB = useAuthStore()
-      await tabB.signIn('user-a', '测试输入')
+      await tabB.signIn('user_a', '测试输入')
       expect(tabB.token === tabA.token).toBe(true)
-      expect(tabB.currentUser?.id).toBe(tabA.currentUser?.id)
+      expect(tabB.currentUser?.username).toBe(tabA.currentUser?.username)
       if (delivery === '事件已送达') {
         notifyStorage()
         // 即便用户和令牌未变，新登录事件也应立即丢弃上一次项目上下文，不能等 401 才清理。
@@ -102,8 +103,8 @@ describe('跨标签页与在途请求的身份隔离', () => {
       // 先验证共享存储，直接捕获旧请求删除新登录的后果；失败时不输出会话内容。
       expect(localStorage.getItem('cmdb.auth.session') !== null).toBe(true)
       notifyStorage()
-      expect(tabA.currentUser?.id).toBe(1)
-      expect(tabB.currentUser?.id).toBe(1)
+      expect(tabA.currentUser?.username).toBe('user_a')
+      expect(tabB.currentUser?.username).toBe('user_a')
       expect(projectsA.projects).toEqual([])
       expect(projectsA.detail).toBeNull()
       expect(projectsA.currentProjectId).toBeNull()
@@ -115,7 +116,7 @@ describe('跨标签页与在途请求的身份隔离', () => {
   })
 
   it('缺少独立会话标识的旧快照必须重新登录，不能恢复不可区分的登录会话', () => {
-    localStorage.setItem('cmdb.auth.session', JSON.stringify({ token: tokens[0], currentUser: users[0] }))
+    localStorage.setItem('cmdb.auth.session', JSON.stringify({ token: tokens.user_a, currentUser: users[0] }))
     const auth = useAuthStore()
     expect(auth.currentUser).toBeNull()
     expect(auth.token.length).toBe(0)
@@ -124,15 +125,15 @@ describe('跨标签页与在途请求的身份隔离', () => {
 
   it('外部会话事件尚未送达时，请求仍使用页面正在显示的身份', async () => {
     const auth = useAuthStore()
-    await auth.signIn('user-a', '测试输入')
-    saveAuthSession(tokens[1]!, users[1]!)
-    const response = await request.get('/me') as unknown as { id: number }
-    expect(response.id).toBe(auth.currentUser?.id)
+    await auth.signIn('user_a', '测试输入')
+    saveAuthSession(tokens.user_b, users[1]!)
+    const response = await request.get('/me') as unknown as { username: string }
+    expect(response.username).toBe(auth.currentUser?.username)
   })
 
   it('外部登录原子切换身份、立即清空项目，并丢弃上一身份晚到的列表和详情', async () => {
     const auth = useAuthStore()
-    await auth.signIn('user-a', '测试输入')
+    await auth.signIn('user_a', '测试输入')
     const projects = useProjectStore()
     await projects.loadProjects()
     await projects.loadProject(1)
@@ -140,7 +141,7 @@ describe('跨标签页与在途请求的身份隔离', () => {
     const sentList = deferred<void>(), sentDetail = deferred<void>(), release = deferred<void>()
     request.defaults.adapter = async config => {
       const response = await original(config)
-      if (config.headers.Authorization === `Bearer ${tokens[0]}` && config.url?.startsWith('/projects')) {
+      if (config.headers.Authorization === `Bearer ${tokens.user_a}` && config.url?.startsWith('/projects')) {
         if (config.url === '/projects') sentList.resolve()
         else sentDetail.resolve()
         await release.promise
@@ -150,12 +151,12 @@ describe('跨标签页与在途请求的身份隔离', () => {
     const oldList = projects.loadProjects(), oldDetail = projects.loadProject(1)
     await Promise.all([sentList.promise, sentDetail.promise])
     const aligned: boolean[] = []
-    const stop = watch(() => [auth.token, auth.currentUser?.id], () => {
-      aligned.push(auth.token === tokens[(auth.currentUser?.id ?? 0) - 1])
+    const stop = watch(() => [auth.token, auth.currentUser?.username], () => {
+      aligned.push(auth.token === tokens[auth.currentUser?.username ?? ''])
     }, { flush: 'sync' })
-    saveAuthSession(tokens[1]!, users[1]!)
+    saveAuthSession(tokens.user_b, users[1]!)
     notifyStorage()
-    expect(auth.currentUser?.id).toBe(2)
+    expect(auth.currentUser?.username).toBe('user_b')
     expect(aligned.length).toBeGreaterThan(0)
     expect(aligned.every(Boolean)).toBe(true)
     expect(projects.projects).toEqual([])
@@ -173,7 +174,7 @@ describe('跨标签页与在途请求的身份隔离', () => {
 
   it.each(['新令牌', '相同令牌'])('旧请求的晚到 401 不得注销已重新登录的会话：%s', async kind => {
     const auth = useAuthStore()
-    await auth.signIn('user-a', '测试输入')
+    await auth.signIn('user_a', '测试输入')
     const projects = useProjectStore()
     const original = request.defaults.adapter as (config: any) => Promise<AxiosResponse>
     const sent = deferred<void>(), release = deferred<void>()
@@ -188,21 +189,21 @@ describe('跨标签页与在途请求的身份隔离', () => {
     }
     const pending = projects.loadProjects()
     await sent.promise
-    await auth.signIn(kind === '相同令牌' ? 'user-a' : 'user-b', '测试输入')
-    const expectedID = kind === '相同令牌' ? 1 : 2
+    await auth.signIn(kind === '相同令牌' ? 'user_a' : 'user_b', '测试输入')
+    const expectedUsername = kind === '相同令牌' ? 'user_a' : 'user_b'
     request.defaults.adapter = original
     await projects.loadProjects()
     release.resolve()
     await pending
-    expect(auth.currentUser?.id).toBe(expectedID)
+    expect(auth.currentUser?.username).toBe(expectedUsername)
     expect(auth.token.length > 0).toBe(true)
-    expect(projects.currentProjectId).toBe(expectedID)
+    expect(projects.currentProjectId).toBe(kind === '相同令牌' ? 1 : 2)
     expect(window.location.href).toBe('/projects')
   })
 
   it('旧身份的晚到资料刷新不能覆盖新的登录身份', async () => {
     const auth = useAuthStore()
-    await auth.signIn('user-a', '测试输入')
+    await auth.signIn('user_a', '测试输入')
     const original = request.defaults.adapter as (config: any) => Promise<AxiosResponse>
     const sent = deferred<void>(), release = deferred<void>()
     request.defaults.adapter = async config => {
@@ -212,15 +213,15 @@ describe('跨标签页与在途请求的身份隔离', () => {
     }
     const pending = auth.refreshCurrentUser()
     await sent.promise
-    await auth.signIn('user-b', '测试输入')
+    await auth.signIn('user_b', '测试输入')
     release.resolve()
     await pending
-    expect(auth.currentUser?.id).toBe(2)
+    expect(auth.currentUser?.username).toBe('user_b')
   })
 
   it.each(['认证失效', '资料刷新'])('存储事件尚未送达时旧响应也不能破坏另一标签页的新会话：%s', async kind => {
     const auth = useAuthStore()
-    await auth.signIn('user-a', '测试输入')
+    await auth.signIn('user_a', '测试输入')
     const original = request.defaults.adapter as (config: any) => Promise<AxiosResponse>
     const sent = deferred<void>(), release = deferred<void>()
     request.defaults.adapter = async config => {
@@ -236,17 +237,17 @@ describe('跨标签页与在途请求的身份隔离', () => {
     }
     const pending = auth.refreshCurrentUser().catch(() => undefined)
     await sent.promise
-    saveAuthSession(tokens[1]!, users[1]!)
+    saveAuthSession(tokens.user_b, users[1]!)
     release.resolve()
     await pending
     notifyStorage()
-    expect(auth.currentUser?.id).toBe(2)
+    expect(auth.currentUser?.username).toBe('user_b')
     expect(window.location.href).toBe('/projects')
   })
 
   it.each(['cmdb.auth.session', null])('外部退出或清空存储同步清除项目上下文：%s', async key => {
     const auth = useAuthStore()
-    await auth.signIn('user-a', '测试输入')
+    await auth.signIn('user_a', '测试输入')
     const projects = useProjectStore()
     await projects.loadProjects()
     await projects.loadProject(1)

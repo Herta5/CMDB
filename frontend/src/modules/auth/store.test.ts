@@ -37,7 +37,6 @@ beforeEach(() => {
 describe('认证状态', () => {
   it('恢复到缺少令牌的会话时同时清除存储和内存用户', () => {
     storage.setItem('cmdb.auth.current-user', JSON.stringify({
-      id: 1,
       username: 'admin',
       globalRole: 'system_admin',
     }))
@@ -54,7 +53,6 @@ describe('认证状态', () => {
     requestPost.mockResolvedValue({
       token: 'test-session',
       user: {
-        id: 1,
         username: 'admin',
         display_name: '管理员',
         email: 'admin@example.test',
@@ -67,7 +65,6 @@ describe('认证状态', () => {
     await auth.signIn('admin', '测试输入')
 
     expect(auth.currentUser).toEqual({
-      id: 1,
       username: 'admin',
       displayName: '管理员',
       email: 'admin@example.test',
@@ -83,7 +80,6 @@ describe('认证状态', () => {
 
   it('将后端 snake_case 的 /me 响应映射为前端当前用户', async () => {
     requestGet.mockResolvedValue({
-      id: 2,
       username: 'operator',
       display_name: '运维用户',
       email: 'operator@example.test',
@@ -92,7 +88,6 @@ describe('认证状态', () => {
     })
 
     await expect(getCurrentUser()).resolves.toEqual({
-      id: 2,
       username: 'operator',
       displayName: '运维用户',
       email: 'operator@example.test',
@@ -104,24 +99,37 @@ describe('认证状态', () => {
   it('接受会话后保存令牌和当前用户，供刷新页面后恢复身份', () => {
     const auth = useAuthStore()
 
-    auth.acceptSession('token', { id: 1, username: 'admin', globalRole: 'system_admin' })
+    auth.acceptSession('token', { username: 'admin', globalRole: 'system_admin' })
 
     expect(auth.token).toBe('token')
-    expect(auth.currentUser).toEqual({ id: 1, username: 'admin', globalRole: 'system_admin' })
+    expect(auth.currentUser).toEqual({ username: 'admin', globalRole: 'system_admin' })
     const stored = JSON.parse(storage.getItem('cmdb.auth.session') || 'null')
     expect(stored?.token === auth.token).toBe(true)
-    expect(stored?.currentUser).toEqual({ id: 1, username: 'admin', globalRole: 'system_admin' })
+    expect(stored?.currentUser).toEqual({ username: 'admin', globalRole: 'system_admin' })
     expect(storage.getItem('cmdb.auth.token')).toBeNull()
     expect(storage.getItem('cmdb.auth.current-user')).toBeNull()
   })
 
   it('登出后清除令牌和当前用户', () => {
     const auth = useAuthStore()
-    auth.acceptSession('token', { id: 1, username: 'admin', globalRole: 'system_admin' })
+    auth.acceptSession('token', { username: 'admin', globalRole: 'system_admin' })
 
     auth.logout()
 
     expect(auth.token).toBe('')
     expect(auth.currentUser).toBeNull()
+  })
+
+  it('恢复会话只接受格式正确的用户名，不使用旧用户数字 ID', () => {
+    storage.setItem('cmdb.auth.session', JSON.stringify({
+      sessionId: '0123456789abcdef0123456789abcdef',
+      token: 'test-session',
+      currentUser: { username: 'cloud-user', globalRole: 'user' },
+    }))
+
+    const auth = useAuthStore()
+
+    expect(auth.currentUser).toBeNull()
+    expect(storage.getItem('cmdb.auth.session')).toBeNull()
   })
 })

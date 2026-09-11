@@ -34,8 +34,7 @@ export function readAuthSession(): StoredAuthSession | null {
     const user = value?.currentUser
     if (typeof value?.sessionId === 'string' && /^[0-9a-f]{32}$/.test(value.sessionId) &&
       typeof value.token === 'string' && value.token.trim() &&
-      typeof user?.id === 'number' && Number.isSafeInteger(user.id) && user.id > 0 &&
-      typeof user.username === 'string' && user.username.length > 0 &&
+      typeof user?.username === 'string' && /^[A-Za-z0-9_]{1,64}$/.test(user.username) &&
       (user.globalRole === 'system_admin' || user.globalRole === 'user')) {
       return { sessionId: value.sessionId, token: value.token, currentUser: user }
     }
