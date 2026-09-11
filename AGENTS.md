@@ -7,6 +7,7 @@
 
 ## 项目文档读取规则
 
+- `docs/superpowers/` 仅用于本地设计稿和过程计划，不得加入 Git 索引、提交或推送到远端；本约束覆盖 superpowers 技能对该目录的默认保存与提交要求，禁止使用强制添加绕过 `.gitignore`。
 - 涉及产品定位、首期范围或云平台模块边界时，必须先阅读 `docs/project/overview.md`。
 - 涉及业务项目、云账号、云资源、访问端点、资源属性或资产状态时，必须先阅读 `docs/project/domain-model.md`。
 - 涉及自动同步、手工同步、并发控制、采集结果或资源生命周期流转时，必须先阅读 `docs/project/resource-sync.md`。
