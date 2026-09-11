@@ -43,7 +43,7 @@ func TestUpdateUserStatusStopsWhenPreviousUserCannotBeRead(t *testing.T) {
 	lookupFailure := errors.New("用户读取失败")
 	repository := &statusLookupFailureRepository{
 		UserRepository: nil,
-		user:           User{ID: 12, Username: "status-user", Status: "active"},
+		user:           User{ID: 12, Username: "status_user", Status: "active"},
 		err:            lookupFailure,
 	}
 	auditDB, err := gorm.Open(sqlite.Open("file:"+t.Name()+"?mode=memory&cache=shared"), &gorm.Config{Logger: logger.Default.LogMode(logger.Silent)})
@@ -55,7 +55,7 @@ func TestUpdateUserStatusStopsWhenPreviousUserCannotBeRead(t *testing.T) {
 	}
 	service := NewService(repository, "identity-test-signing-key", audit.NewRepository(auditDB))
 
-	if _, err := service.UpdateUserStatus(context.Background(), 7, repository.user.ID, "disabled"); !errors.Is(err, lookupFailure) {
+	if _, err := service.UpdateUserStatus(context.Background(), "actor_user", repository.user.Username, "disabled"); !errors.Is(err, lookupFailure) {
 		t.Fatalf("旧用户读取失败必须原样返回：%v", err)
 	}
 	if repository.user.Status != "active" {
@@ -95,13 +95,13 @@ func TestUpdateUserRollsBackProfileAndPermissionsWhenAuditWriteFails(t *testing.
 		t.Fatalf("准备项目失败：%v", err)
 	}
 	repository := NewUserRepository(db)
-	user := &User{Username: "atomic-update", PasswordHash: "test-hash", DisplayName: "原名称", GlobalRole: GlobalRoleUser, Status: "active"}
+	user := &User{Username: "atomic_update", PasswordHash: "test-hash", DisplayName: "原名称", GlobalRole: GlobalRoleUser, Status: "active"}
 	if err := repository.CreateWithPermissions(context.Background(), user, []ProjectPermission{{ProjectID: 1, Role: "member"}}); err != nil {
 		t.Fatalf("准备用户失败：%v", err)
 	}
 	service := NewService(repository, "identity-test-signing-key", audit.NewRepository(db))
 
-	_, err := service.UpdateUser(context.Background(), 99, user.ID, UpdateUserInput{DisplayName: "新名称", GlobalRole: GlobalRoleUser, Status: "active", ProjectPermissions: []ProjectPermission{{ProjectID: 1, Role: "project_admin"}}})
+	_, err := service.UpdateUser(context.Background(), "actor_user", user.Username, UpdateUserInput{DisplayName: "新名称", GlobalRole: GlobalRoleUser, Status: "active", ProjectPermissions: []ProjectPermission{{ProjectID: 1, Role: "project_admin"}}})
 	if err == nil {
 		t.Fatal("审计写入失败时编辑用户必须返回错误")
 	}
@@ -118,13 +118,13 @@ func TestUpdateUserRollsBackProfileAndPermissionsWhenAuditWriteFails(t *testing.
 func TestUpdateUserStatusRollsBackWhenAuditWriteFails(t *testing.T) {
 	db := identityAuditFailureDatabase(t)
 	repository := NewUserRepository(db)
-	user := &User{Username: "atomic-status", PasswordHash: "test-hash", DisplayName: "状态用户", GlobalRole: GlobalRoleUser, Status: "active"}
+	user := &User{Username: "atomic_status", PasswordHash: "test-hash", DisplayName: "状态用户", GlobalRole: GlobalRoleUser, Status: "active"}
 	if err := repository.Create(context.Background(), user); err != nil {
 		t.Fatalf("准备用户失败：%v", err)
 	}
 	service := NewService(repository, "identity-test-signing-key", audit.NewRepository(db))
 
-	if _, err := service.UpdateUserStatus(context.Background(), 99, user.ID, "disabled"); err == nil {
+	if _, err := service.UpdateUserStatus(context.Background(), "actor_user", user.Username, "disabled"); err == nil {
 		t.Fatal("审计写入失败时停用用户必须返回错误")
 	}
 	persisted, err := repository.FindByID(context.Background(), user.ID)
@@ -140,13 +140,13 @@ func TestUpdateUserStatusRollsBackWhenAuditWriteFails(t *testing.T) {
 func TestDeleteUserRollsBackWhenAuditWriteFails(t *testing.T) {
 	db := identityAuditFailureDatabase(t)
 	repository := NewUserRepository(db)
-	user := &User{Username: "atomic-delete", PasswordHash: "test-hash", DisplayName: "待删除用户", GlobalRole: GlobalRoleUser, Status: "active"}
+	user := &User{Username: "atomic_delete", PasswordHash: "test-hash", DisplayName: "待删除用户", GlobalRole: GlobalRoleUser, Status: "active"}
 	if err := repository.Create(context.Background(), user); err != nil {
 		t.Fatalf("准备待删除用户失败：%v", err)
 	}
 	service := NewService(repository, "identity-test-signing-key", audit.NewRepository(db))
 
-	if err := service.DeleteUser(context.Background(), 99, user.ID); err == nil {
+	if err := service.DeleteUser(context.Background(), "actor_user", user.Username); err == nil {
 		t.Fatal("审计写入失败时删除用户必须返回错误")
 	}
 	if _, err := repository.FindByID(context.Background(), user.ID); err != nil {
@@ -164,20 +164,20 @@ func TestDeleteUserAuditsUserAndProjectMemberships(t *testing.T) {
 		t.Fatalf("准备项目失败：%v", err)
 	}
 	repository := NewUserRepository(db)
-	user := &User{Username: "audited-delete", PasswordHash: "test-hash", DisplayName: "删除审计用户", GlobalRole: GlobalRoleUser, Status: "active"}
+	user := &User{Username: "audited_delete", PasswordHash: "test-hash", DisplayName: "删除审计用户", GlobalRole: GlobalRoleUser, Status: "active"}
 	permissions := []ProjectPermission{{ProjectID: 1, Role: "member"}}
 	if err := repository.CreateWithPermissions(context.Background(), user, permissions); err != nil {
 		t.Fatalf("准备带项目权限的用户失败：%v", err)
 	}
 	service := NewService(repository, "identity-test-signing-key", audit.NewRepository(db))
-	ctx := audit.WithActorProfile(context.Background(), 99, "admin", "系统管理员", "192.0.2.10")
+	ctx := audit.WithActorProfile(context.Background(), 99, "192.0.2.10", "admin", "系统管理员")
 
-	if err := service.DeleteUser(ctx, 99, user.ID); err != nil {
+	if err := service.DeleteUser(ctx, "admin", user.Username); err != nil {
 		t.Fatalf("删除用户失败：%v", err)
 	}
 	for _, action := range []string{audit.ActionUserDeleted, audit.ActionProjectMemberRemoved} {
 		var count int64
-		if err := db.Model(&audit.Log{}).Where("action = ? AND resource_id = ?", action, user.ID).Count(&count).Error; err != nil {
+		if err := db.Model(&audit.Log{}).Where("action = ? AND resource_id = ?", action, user.Username).Count(&count).Error; err != nil {
 			t.Fatalf("查询删除审计失败：%v", err)
 		}
 		if count != 1 {
@@ -232,6 +232,11 @@ func (r *statusLookupFailureRepository) WithAuditTransaction(ctx context.Context
 
 // FindByID 稳定返回注入错误，复现底层数据库读取失败。
 func (r *statusLookupFailureRepository) FindByID(context.Context, uint64) (*User, error) {
+	return nil, r.err
+}
+
+// FindByUsername 稳定返回注入错误，确保服务在按公开用户名定位目标时停止后续写入。
+func (r *statusLookupFailureRepository) FindByUsername(context.Context, string) (*User, error) {
 	return nil, r.err
 }
 

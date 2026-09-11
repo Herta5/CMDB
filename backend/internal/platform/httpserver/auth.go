@@ -39,7 +39,7 @@ func (a *Authenticator) RequireUser() gin.HandlerFunc {
 			}
 			return a.jwtSecret, nil
 		}, jwt.WithValidMethods([]string{jwt.SigningMethodHS256.Alg()}))
-		if err != nil || !token.Valid || claims.UserID == 0 {
+		if err != nil || !token.Valid || !identity.ValidUsername(claims.Username) {
 			writeAuthenticationError(c)
 			return
 		}
@@ -55,10 +55,11 @@ func (a *Authenticator) RequireUser() gin.HandlerFunc {
 			return
 		}
 		// 停用和删除已由身份服务拒绝；所有下游项目接口只消费数据库当前全局角色。
+		claims.InternalUserID = user.ID
 		claims.GlobalRole = user.GlobalRole
 		c.Set(identity.UserClaimsContextKey, claims)
 		// 只有完成实时账户校验的请求才能写入操作者审计上下文，令牌和用户资料不进入其中。
-		c.Request = c.Request.WithContext(audit.WithActorProfile(c.Request.Context(), claims.UserID, c.ClientIP(), user.Username, user.DisplayName))
+		c.Request = c.Request.WithContext(audit.WithActorProfile(c.Request.Context(), claims.InternalUserID, c.ClientIP(), user.Username, user.DisplayName))
 		c.Next()
 	}
 }

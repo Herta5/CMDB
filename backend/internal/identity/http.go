@@ -4,7 +4,6 @@ package identity
 import (
 	"errors"
 	"net/http"
-	"strconv"
 
 	"github.com/gin-gonic/gin"
 )
@@ -73,12 +72,12 @@ func (h *HTTPHandler) DeleteUser(c *gin.Context, claims UserClaims) {
 		writeError(c, http.StatusForbidden, "USER_FORBIDDEN", "无权执行该操作")
 		return
 	}
-	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
-	if err != nil || id == 0 {
+	targetUsername := c.Param("username")
+	if !ValidUsername(targetUsername) {
 		writeError(c, http.StatusBadRequest, "USER_INVALID_REQUEST", "请求格式错误")
 		return
 	}
-	err = h.service.DeleteUser(c.Request.Context(), claims.UserID, id)
+	err := h.service.DeleteUser(c.Request.Context(), claims.Username, targetUsername)
 	if errors.Is(err, ErrSelfProtection) {
 		writeError(c, http.StatusConflict, "USER_SELF_PROTECTED", "不能删除当前管理员")
 		return
@@ -100,15 +99,15 @@ func (h *HTTPHandler) UpdateUserStatus(c *gin.Context, claims UserClaims) {
 		writeError(c, http.StatusForbidden, "USER_FORBIDDEN", "无权执行该操作")
 		return
 	}
-	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
+	targetUsername := c.Param("username")
 	var request struct {
 		Status string `json:"status"`
 	}
-	if err != nil || id == 0 || c.ShouldBindJSON(&request) != nil {
+	if !ValidUsername(targetUsername) || c.ShouldBindJSON(&request) != nil {
 		writeError(c, http.StatusBadRequest, "USER_INVALID_REQUEST", "请求格式错误")
 		return
 	}
-	user, err := h.service.UpdateUserStatus(c.Request.Context(), claims.UserID, id, request.Status)
+	user, err := h.service.UpdateUserStatus(c.Request.Context(), claims.Username, targetUsername, request.Status)
 	if errors.Is(err, ErrInvalidUserInput) {
 		writeError(c, http.StatusBadRequest, "USER_INVALID_INPUT", "用户参数无效")
 		return
@@ -134,7 +133,7 @@ func (h *HTTPHandler) UpdateUser(c *gin.Context, claims UserClaims) {
 		writeError(c, http.StatusForbidden, "USER_FORBIDDEN", "无权执行该操作")
 		return
 	}
-	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
+	targetUsername := c.Param("username")
 	var request struct {
 		DisplayName        string              `json:"display_name"`
 		Email              string              `json:"email"`
@@ -143,11 +142,11 @@ func (h *HTTPHandler) UpdateUser(c *gin.Context, claims UserClaims) {
 		Password           string              `json:"password"`
 		ProjectPermissions []ProjectPermission `json:"project_permissions"`
 	}
-	if err != nil || id == 0 || c.ShouldBindJSON(&request) != nil {
+	if !ValidUsername(targetUsername) || c.ShouldBindJSON(&request) != nil {
 		writeError(c, http.StatusBadRequest, "USER_INVALID_REQUEST", "请求格式错误")
 		return
 	}
-	user, err := h.service.UpdateUser(c.Request.Context(), claims.UserID, id, UpdateUserInput{DisplayName: request.DisplayName, Email: request.Email, GlobalRole: request.GlobalRole, Status: request.Status, Password: request.Password, ProjectPermissions: request.ProjectPermissions})
+	user, err := h.service.UpdateUser(c.Request.Context(), claims.Username, targetUsername, UpdateUserInput{DisplayName: request.DisplayName, Email: request.Email, GlobalRole: request.GlobalRole, Status: request.Status, Password: request.Password, ProjectPermissions: request.ProjectPermissions})
 	if errors.Is(err, ErrInvalidUserInput) {
 		writeError(c, http.StatusBadRequest, "USER_INVALID_INPUT", "用户参数无效")
 		return
@@ -217,7 +216,6 @@ type loginResponse struct {
 
 // publicUser 明确列出可暴露给客户端的用户字段，避免模型新增敏感字段时被意外序列化。
 type publicUser struct {
-	ID                 uint64              `json:"id"`
 	Username           string              `json:"username"`
 	DisplayName        string              `json:"display_name"`
 	Email              string              `json:"email"`
@@ -229,7 +227,6 @@ type publicUser struct {
 // toPublicUser 将领域用户转为客户端可见的最小身份资料。
 func toPublicUser(user *User) publicUser {
 	return publicUser{
-		ID:                 user.ID,
 		Username:           user.Username,
 		DisplayName:        user.DisplayName,
 		Email:              user.Email,

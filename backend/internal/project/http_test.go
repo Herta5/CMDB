@@ -133,7 +133,7 @@ func TestProjectHTTPUpdateKeepsCodeImmutable(t *testing.T) {
 func TestProjectHTTPListsOnlyCurrentUserMembership(t *testing.T) {
 	server, db := newProjectHTTPServerWithDatabase(t)
 	first := createProjectThroughHTTP(t, server, `{"code":"cloud","name":"云平台"}`)
-	if err := db.Create(&identity.User{ID: 7, Username: "http-member", PasswordHash: "test-hash", DisplayName: "接口成员", GlobalRole: identity.GlobalRoleUser, Status: "active"}).Error; err != nil {
+	if err := db.Create(&identity.User{ID: 7, Username: "member_7", PasswordHash: "test-hash", DisplayName: "接口成员", GlobalRole: identity.GlobalRoleUser, Status: "active"}).Error; err != nil {
 		t.Fatalf("准备项目列表用户失败：%v", err)
 	}
 	if err := db.Create(&project.MemberRole{ProjectID: first.ID, UserID: 7, Role: project.MemberRoleMember}).Error; err != nil {
@@ -216,7 +216,7 @@ func newProjectHTTPServerWithDatabase(t *testing.T) (http.Handler, *gorm.DB) {
 		t.Fatalf("创建项目 HTTP 测试表失败：%v", err)
 	}
 	// 所有项目接口必须验证当前账户，测试管理员也必须是真实持久化的有效身份。
-	if err := db.Create(&identity.User{ID: 1, Username: "project-admin", DisplayName: "系统管理员", GlobalRole: identity.GlobalRoleSystemAdmin, Status: "active"}).Error; err != nil {
+	if err := db.Create(&identity.User{ID: 1, Username: "project_admin", DisplayName: "系统管理员", GlobalRole: identity.GlobalRoleSystemAdmin, Status: "active"}).Error; err != nil {
 		t.Fatal("准备项目管理员失败")
 	}
 	return httpserver.New(httpserver.Dependencies{Database: db, JWTSecret: "project-http-test-key"}), db
@@ -225,8 +225,12 @@ func newProjectHTTPServerWithDatabase(t *testing.T) (http.Handler, *gorm.DB) {
 // projectTestToken 仅构造已签名的最小身份声明，避免测试中通过登录接口引入密码无关因素。
 func projectTestToken(t *testing.T, userID uint64, globalRole string) string {
 	t.Helper()
+	username := "project_admin"
+	if userID != 1 {
+		username = "member_" + strconv.FormatUint(userID, 10)
+	}
 	token, err := jwt.NewWithClaims(jwt.SigningMethodHS256, identity.UserClaims{
-		UserID:     userID,
+		Username:   username,
 		GlobalRole: globalRole,
 		RegisteredClaims: jwt.RegisteredClaims{
 			ExpiresAt: jwt.NewNumericDate(time.Now().Add(time.Hour)),

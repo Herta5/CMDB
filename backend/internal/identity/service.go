@@ -4,7 +4,6 @@ package identity
 import (
 	"context"
 	"errors"
-	"strconv"
 	"strings"
 	"time"
 
@@ -52,10 +51,11 @@ const defaultTokenLifetime = 24 * time.Hour
 // missingUserPasswordHash 是仅用于补齐 bcrypt 工作量的固定有效哈希，绝不对应可登录用户或写入响应、日志。
 const missingUserPasswordHash = "$2a$10$N9qo8uLOickgx2ZMRZoMyeIjZAgcfl7p92ldGxad68LJZdL17lhWy"
 
-// UserClaims 是 JWT 中唯一允许保存的身份信息；不要向其中添加用户名或任何敏感字段。
+// UserClaims 是 JWT 中允许保存的最小身份信息；内部用户 ID 只能在认证中间件实时补全。
 type UserClaims struct {
-	UserID     uint64 `json:"user_id"`
-	GlobalRole string `json:"global_role"`
+	Username       string `json:"username"`
+	InternalUserID uint64 `json:"-"`
+	GlobalRole     string `json:"global_role"`
 	jwt.RegisteredClaims
 }
 
@@ -118,7 +118,7 @@ func (s *Service) CurrentUser(ctx context.Context, claims UserClaims) (*User, er
 		return nil, ErrIdentityRepositoryUnavailable
 	}
 
-	user, err := s.repository.FindByID(ctx, claims.UserID)
+	user, err := s.repository.FindByUsername(ctx, claims.Username)
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, ErrAuthenticatedUserNotFound
 	}
@@ -155,7 +155,7 @@ func (s *Service) CreateUser(ctx context.Context, input CreateUserInput) (*User,
 		if err := repository.CreateWithPermissions(ctx, user, input.ProjectPermissions); err != nil {
 			return err
 		}
-		if err := recordAuditWith(ctx, recorder, audit.Entry{Action: audit.ActionUserCreated, ResourceType: "user", ResourceID: strconv.FormatUint(user.ID, 10), Detail: map[string]any{
+		if err := recordAuditWith(ctx, recorder, audit.Entry{Action: audit.ActionUserCreated, ResourceType: "user", ResourceID: user.Username, Detail: map[string]any{
 			"target_username": user.Username, "target_display_name": user.DisplayName, "global_role": user.GlobalRole,
 			"status": user.Status, "project_permissions": permissionAuditValues(input.ProjectPermissions),
 		}}); err != nil {
@@ -180,26 +180,30 @@ func (s *Service) ListUsers(ctx context.Context) ([]User, error) {
 }
 
 // DeleteUser 删除指定用户，并保护当前管理员不会删除自己的登录身份。
-func (s *Service) DeleteUser(ctx context.Context, actorID, id uint64) error {
+func (s *Service) DeleteUser(ctx context.Context, actorUsername, targetUsername string) error {
 	if s.repository == nil {
 		return ErrIdentityRepositoryUnavailable
 	}
-	if actorID == 0 || id == 0 {
+	if !ValidUsername(actorUsername) || !ValidUsername(targetUsername) {
 		return ErrInvalidUserInput
 	}
-	if actorID == id {
-		return ErrSelfProtection
-	}
 	err := s.withAuditTransaction(ctx, func(repository UserRepository, recorder audit.Recorder) error {
-		user, err := repository.FindByID(ctx, id)
+		user, err := repository.FindByUsername(ctx, targetUsername)
 		if err != nil {
 			return err
 		}
 		if user == nil {
 			return gorm.ErrRecordNotFound
 		}
-		actorIDCopy := actorID
-		if err := recordAuditWith(ctx, recorder, audit.Entry{ActorID: &actorIDCopy, Action: audit.ActionUserDeleted, ResourceType: "user", ResourceID: strconv.FormatUint(id, 10), Detail: map[string]any{
+		if actorUsername == user.Username {
+			return ErrSelfProtection
+		}
+		// 按用户名定位后重新读取完整资料，删除时必须同时审计其项目成员关系。
+		user, err = repository.FindByID(ctx, user.ID)
+		if err != nil {
+			return err
+		}
+		if err := recordAuditWith(ctx, recorder, audit.Entry{Action: audit.ActionUserDeleted, ResourceType: "user", ResourceID: user.Username, Detail: map[string]any{
 			"target_username": user.Username, "target_display_name": user.DisplayName, "global_role": user.GlobalRole, "status": user.Status,
 		}}); err != nil {
 			return err
@@ -208,7 +212,7 @@ func (s *Service) DeleteUser(ctx context.Context, actorID, id uint64) error {
 		if err := recordPermissionChanges(ctx, recorder, *user, user.ProjectPermissions, nil); err != nil {
 			return err
 		}
-		return repository.Delete(ctx, id)
+		return repository.Delete(ctx, user.ID)
 	})
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -220,35 +224,35 @@ func (s *Service) DeleteUser(ctx context.Context, actorID, id uint64) error {
 }
 
 // UpdateUserStatus 启停用户；停用后认证中间件会在下一次请求立即使其会话失效。
-func (s *Service) UpdateUserStatus(ctx context.Context, actorID, id uint64, status string) (*User, error) {
+func (s *Service) UpdateUserStatus(ctx context.Context, actorUsername, targetUsername, status string) (*User, error) {
 	if s.repository == nil {
 		return nil, ErrIdentityRepositoryUnavailable
 	}
-	if actorID == 0 || id == 0 || (status != "active" && status != "disabled") {
+	if !ValidUsername(actorUsername) || !ValidUsername(targetUsername) || (status != "active" && status != "disabled") {
 		return nil, ErrInvalidUserInput
-	}
-	if actorID == id && status != "active" {
-		return nil, ErrSelfProtection
 	}
 	var updated *User
 	err := s.withAuditTransaction(ctx, func(repository UserRepository, recorder audit.Recorder) error {
 		// 旧状态、状态更新、审计及响应读取必须处于同一事务，避免并发变化造成错误快照。
-		previous, err := repository.FindByID(ctx, id)
+		previous, err := repository.FindByUsername(ctx, targetUsername)
 		if err != nil {
 			return err
 		}
 		if previous == nil {
 			return gorm.ErrRecordNotFound
 		}
-		if err := repository.UpdateStatus(ctx, id, status); err != nil {
+		if actorUsername == previous.Username && status != "active" {
+			return ErrSelfProtection
+		}
+		if err := repository.UpdateStatus(ctx, previous.ID, status); err != nil {
 			return err
 		}
-		if err := recordAuditWith(ctx, recorder, audit.Entry{Action: audit.ActionUserStatusChanged, ResourceType: "user", ResourceID: strconv.FormatUint(id, 10), Detail: map[string]any{
+		if err := recordAuditWith(ctx, recorder, audit.Entry{Action: audit.ActionUserStatusChanged, ResourceType: "user", ResourceID: previous.Username, Detail: map[string]any{
 			"target_username": previous.Username, "previous_status": previous.Status, "status": status,
 		}}); err != nil {
 			return err
 		}
-		updated, err = repository.FindByID(ctx, id)
+		updated, err = repository.FindByID(ctx, previous.ID)
 		return err
 	})
 	if err != nil {
@@ -261,24 +265,32 @@ func (s *Service) UpdateUserStatus(ctx context.Context, actorID, id uint64, stat
 }
 
 // UpdateUser 更新公开资料、全局角色、状态及可选密码，并保护当前管理员不会锁定自己。
-func (s *Service) UpdateUser(ctx context.Context, actorID, id uint64, input UpdateUserInput) (*User, error) {
+func (s *Service) UpdateUser(ctx context.Context, actorUsername, targetUsername string, input UpdateUserInput) (*User, error) {
 	if s.repository == nil {
 		return nil, ErrIdentityRepositoryUnavailable
 	}
 	input.DisplayName = strings.TrimSpace(input.DisplayName)
 	input.Email = strings.TrimSpace(input.Email)
-	if actorID == 0 || id == 0 || input.DisplayName == "" || !validRoleAndStatus(input.GlobalRole, input.Status) || !validProjectPermissions(input.ProjectPermissions) || (input.Password != "" && (len(input.Password) < 12 || len(input.Password) > 72)) {
+	if !ValidUsername(actorUsername) || !ValidUsername(targetUsername) || input.DisplayName == "" || !validRoleAndStatus(input.GlobalRole, input.Status) || !validProjectPermissions(input.ProjectPermissions) || (input.Password != "" && (len(input.Password) < 12 || len(input.Password) > 72)) {
 		return nil, ErrInvalidUserInput
 	}
-	if actorID == id && (input.GlobalRole != GlobalRoleSystemAdmin || input.Status != "active") {
-		return nil, ErrSelfProtection
-	}
-	user, err := s.repository.FindByID(ctx, id)
+	user, err := s.repository.FindByUsername(ctx, targetUsername)
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, ErrUserNotFound
 	}
 	if err != nil {
 		return nil, err
+	}
+	// 用户名只用于对外定位；编辑权限快照仍通过内部 ID 读取，避免覆盖既有项目授权。
+	user, err = s.repository.FindByID(ctx, user.ID)
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, ErrUserNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	if actorUsername == user.Username && (input.GlobalRole != GlobalRoleSystemAdmin || input.Status != "active") {
+		return nil, ErrSelfProtection
 	}
 	previous := *user
 	previousPermissions := append([]ProjectPermission(nil), user.ProjectPermissions...)
@@ -298,7 +310,7 @@ func (s *Service) UpdateUser(ctx context.Context, actorID, id uint64, input Upda
 		if err := repository.UpdateWithPermissions(ctx, user, input.ProjectPermissions); err != nil {
 			return err
 		}
-		if err := recordAuditWith(ctx, recorder, audit.Entry{Action: audit.ActionUserUpdated, ResourceType: "user", ResourceID: strconv.FormatUint(id, 10), Detail: map[string]any{
+		if err := recordAuditWith(ctx, recorder, audit.Entry{Action: audit.ActionUserUpdated, ResourceType: "user", ResourceID: previous.Username, Detail: map[string]any{
 			"target_username": previous.Username, "target_display_name": input.DisplayName,
 			"changed_fields": changedFields, "project_permissions": permissionAuditValues(input.ProjectPermissions),
 		}}); err != nil {
@@ -314,7 +326,7 @@ func (s *Service) UpdateUser(ctx context.Context, actorID, id uint64, input Upda
 		}
 		return nil, err
 	}
-	return s.repository.FindByID(ctx, id)
+	return s.repository.FindByID(ctx, user.ID)
 }
 
 // withAuditTransaction 在审计启用时强制使用仓储提供的共享事务，禁止降级为两个独立提交。
@@ -354,11 +366,11 @@ func recordPermissionChanges(ctx context.Context, recorder audit.Recorder, user 
 		nextRole, exists := after[projectID]
 		projectIDCopy := projectID
 		if !exists {
-			if err := recordAuditWith(ctx, recorder, audit.Entry{ProjectID: &projectIDCopy, Action: audit.ActionProjectMemberRemoved, ResourceType: "project_member", ResourceID: strconv.FormatUint(user.ID, 10), Detail: map[string]any{"target_user_id": user.ID, "target_username": user.Username, "previous_role": previousRole, "source": "user_management"}}); err != nil {
+			if err := recordAuditWith(ctx, recorder, audit.Entry{ProjectID: &projectIDCopy, Action: audit.ActionProjectMemberRemoved, ResourceType: "project_member", ResourceID: user.Username, Detail: map[string]any{"target_username": user.Username, "previous_role": previousRole, "source": "user_management"}}); err != nil {
 				return err
 			}
 		} else if nextRole != previousRole {
-			if err := recordAuditWith(ctx, recorder, audit.Entry{ProjectID: &projectIDCopy, Action: audit.ActionProjectMemberRoleChanged, ResourceType: "project_member", ResourceID: strconv.FormatUint(user.ID, 10), Detail: map[string]any{"target_user_id": user.ID, "target_username": user.Username, "previous_role": previousRole, "role": nextRole, "source": "user_management"}}); err != nil {
+			if err := recordAuditWith(ctx, recorder, audit.Entry{ProjectID: &projectIDCopy, Action: audit.ActionProjectMemberRoleChanged, ResourceType: "project_member", ResourceID: user.Username, Detail: map[string]any{"target_username": user.Username, "previous_role": previousRole, "role": nextRole, "source": "user_management"}}); err != nil {
 				return err
 			}
 		}
@@ -368,7 +380,7 @@ func recordPermissionChanges(ctx context.Context, recorder audit.Recorder, user 
 			continue
 		}
 		projectIDCopy := projectID
-		if err := recordAuditWith(ctx, recorder, audit.Entry{ProjectID: &projectIDCopy, Action: audit.ActionProjectMemberAdded, ResourceType: "project_member", ResourceID: strconv.FormatUint(user.ID, 10), Detail: map[string]any{"target_user_id": user.ID, "target_username": user.Username, "role": role, "source": "user_management"}}); err != nil {
+		if err := recordAuditWith(ctx, recorder, audit.Entry{ProjectID: &projectIDCopy, Action: audit.ActionProjectMemberAdded, ResourceType: "project_member", ResourceID: user.Username, Detail: map[string]any{"target_username": user.Username, "role": role, "source": "user_management"}}); err != nil {
 			return err
 		}
 	}
@@ -445,7 +457,7 @@ func validProjectPermissions(values []ProjectPermission) bool {
 // sign 使用 HS256 签发仅含最小身份声明的 JWT，令牌内容不可替代数据库中的用户资料。
 func (s *Service) sign(user *User) (string, error) {
 	claims := UserClaims{
-		UserID:     user.ID,
+		Username:   user.Username,
 		GlobalRole: user.GlobalRole,
 		RegisteredClaims: jwt.RegisteredClaims{
 			ExpiresAt: jwt.NewNumericDate(s.now().Add(defaultTokenLifetime)),

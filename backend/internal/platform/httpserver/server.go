@@ -61,9 +61,9 @@ func New(dependencies Dependencies) *gin.Engine {
 	users := engine.Group("/api/v1/users", authenticator.RequireUser())
 	users.GET("", func(c *gin.Context) { handler.ListUsers(c, CurrentUser(c)) })
 	users.POST("", func(c *gin.Context) { handler.CreateUser(c, CurrentUser(c)) })
-	users.DELETE("/:id", func(c *gin.Context) { handler.DeleteUser(c, CurrentUser(c)) })
-	users.PUT("/:id", func(c *gin.Context) { handler.UpdateUser(c, CurrentUser(c)) })
-	users.PUT("/:id/status", func(c *gin.Context) { handler.UpdateUserStatus(c, CurrentUser(c)) })
+	users.DELETE("/:username", func(c *gin.Context) { handler.DeleteUser(c, CurrentUser(c)) })
+	users.PUT("/:username", func(c *gin.Context) { handler.UpdateUser(c, CurrentUser(c)) })
+	users.PUT("/:username/status", func(c *gin.Context) { handler.UpdateUserStatus(c, CurrentUser(c)) })
 	// 全局审计包含无项目归属的用户操作，只允许系统管理员访问。
 	auditLogs := engine.Group("/api/v1/audit-logs", authenticator.RequireUser())
 	auditLogs.GET("", func(c *gin.Context) {

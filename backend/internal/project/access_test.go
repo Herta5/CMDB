@@ -177,7 +177,7 @@ func TestRequireRolePreservesRepositoryFailure(t *testing.T) {
 	repositoryFailure := &memberLookupFailureRepository{}
 	router := gin.New()
 	router.Use(func(c *gin.Context) {
-		c.Set(identity.UserClaimsContextKey, identity.UserClaims{UserID: 7, GlobalRole: identity.GlobalRoleUser})
+		c.Set(identity.UserClaimsContextKey, identity.UserClaims{InternalUserID: 7, GlobalRole: identity.GlobalRoleUser})
 	})
 	router.GET("/projects/:id", project.RequireRole(repositoryFailure, project.MemberRoleMember), func(c *gin.Context) {
 		c.Status(http.StatusOK)
@@ -201,7 +201,7 @@ func TestRequireRoleSupportsProjectIDPath(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	router := gin.New()
 	router.Use(func(c *gin.Context) {
-		c.Set(identity.UserClaimsContextKey, identity.UserClaims{UserID: member.ID, GlobalRole: identity.GlobalRoleUser})
+		c.Set(identity.UserClaimsContextKey, identity.UserClaims{InternalUserID: member.ID, GlobalRole: identity.GlobalRoleUser})
 	})
 	router.GET("/projects/:projectId/resources", project.RequireRole(project.NewRepository(db), project.MemberRoleMember), func(c *gin.Context) {
 		c.Status(http.StatusOK)
@@ -237,7 +237,7 @@ func createProjectMember(t *testing.T, db *gorm.DB, projectID, userID uint64, ro
 // createProjectUser 创建可被成员关系外键引用的普通用户。
 func createProjectUser(t *testing.T, db *gorm.DB, userID uint64) identity.User {
 	t.Helper()
-	member := identity.User{ID: userID, Username: "member-" + strconv.FormatUint(userID, 10), PasswordHash: "test-hash", DisplayName: "项目成员", GlobalRole: identity.GlobalRoleUser, Status: "active"}
+	member := identity.User{ID: userID, Username: "member_" + strconv.FormatUint(userID, 10), PasswordHash: "test-hash", DisplayName: "项目成员", GlobalRole: identity.GlobalRoleUser, Status: "active"}
 	if err := db.Create(&member).Error; err != nil {
 		t.Fatalf("准备成员用户失败：%v", err)
 	}

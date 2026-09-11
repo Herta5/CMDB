@@ -151,7 +151,7 @@ func (h *HTTPHandler) RemoveMember(c *gin.Context) {
 		return
 	}
 	// 项目管理员不能删除自己的成员关系；系统管理员仍可执行全局纠正操作。
-	if !isSystemAdmin(claims) && claims.UserID == userID {
+	if !isSystemAdmin(claims) && claims.InternalUserID == userID {
 		writeProjectError(c, http.StatusConflict, "PROJECT_MEMBER_SELF_REMOVE", "项目管理员不能移除自己")
 		return
 	}

@@ -40,7 +40,7 @@ func TestAuditQueryPermissionsAndProjectIsolation(t *testing.T) {
 	if err := db.Create(&[]audit.Log{
 		{ProjectID: &firstProject.ID, Action: audit.ActionProjectUpdated, ResourceType: "project", ResourceID: strconv.FormatUint(firstProject.ID, 10), Detail: json.RawMessage(`{}`)},
 		{ProjectID: &secondProject.ID, Action: audit.ActionProjectUpdated, ResourceType: "project", ResourceID: strconv.FormatUint(secondProject.ID, 10), Detail: json.RawMessage(`{}`)},
-		{Action: audit.ActionUserUpdated, ResourceType: "user", ResourceID: "2", Detail: json.RawMessage(`{}`)},
+		{Action: audit.ActionUserUpdated, ResourceType: "user", ResourceID: "member_a", Detail: json.RawMessage(`{}`)},
 	}).Error; err != nil {
 		t.Fatalf("准备审计查询数据失败：%v", err)
 	}
@@ -79,7 +79,10 @@ func TestManagementMutationsWriteActorAudit(t *testing.T) {
 	integrationRequest(t, server, admin, http.MethodPut, projectPath, map[string]any{"name": "审计动作项目新版", "description": "审计详情", "status": "enabled"}, http.StatusOK)
 	var managedUser identity.User
 	decodeIntegration(t, integrationRequest(t, server, admin, http.MethodPost, "/api/v1/users", map[string]any{"username": "audit_user", "password": "never-persist-this-password", "display_name": "审计用户", "global_role": "user", "status": "active", "project_permissions": []any{}}, http.StatusCreated), &managedUser)
-	userPath := "/api/v1/users/" + strconv.FormatUint(managedUser.ID, 10)
+	if err := db.Where("username = ?", "audit_user").First(&managedUser).Error; err != nil {
+		t.Fatalf("读取刚创建的用户失败：%v", err)
+	}
+	userPath := "/api/v1/users/" + managedUser.Username
 	integrationRequest(t, server, admin, http.MethodPut, userPath, map[string]any{"display_name": "审计用户新版", "email": "audit@example.invalid", "global_role": "user", "status": "active", "password": "another-never-persist-password", "project_permissions": []any{}}, http.StatusOK)
 	integrationRequest(t, server, admin, http.MethodPut, userPath+"/status", map[string]any{"status": "disabled"}, http.StatusOK)
 	integrationRequest(t, server, admin, http.MethodPost, projectPath+"/members", map[string]any{"user_id": managedUser.ID, "role": "member"}, http.StatusCreated)
@@ -119,7 +122,7 @@ func TestUserPermissionReplacementWritesProjectAudit(t *testing.T) {
 		"username": "permission_user", "password": "permission-user-password", "display_name": "授权用户", "global_role": "user", "status": "active",
 		"project_permissions": []map[string]any{{"project_id": firstProject.ID, "role": "member"}},
 	}, http.StatusCreated), &managedUser)
-	integrationRequest(t, server, admin, http.MethodPut, "/api/v1/users/"+strconv.FormatUint(managedUser.ID, 10), map[string]any{
+	integrationRequest(t, server, admin, http.MethodPut, "/api/v1/users/"+managedUser.Username, map[string]any{
 		"display_name": "授权用户", "email": "", "global_role": "user", "status": "active",
 		"project_permissions": []map[string]any{{"project_id": secondProject.ID, "role": "project_admin"}},
 	}, http.StatusOK)
@@ -127,7 +130,7 @@ func TestUserPermissionReplacementWritesProjectAudit(t *testing.T) {
 	assertProjectMemberAudit := func(projectID uint64, action string) {
 		t.Helper()
 		var value audit.Log
-		if err := db.Where("project_id = ? AND action = ? AND resource_id = ?", projectID, action, strconv.FormatUint(managedUser.ID, 10)).First(&value).Error; err != nil {
+		if err := db.Where("project_id = ? AND action = ? AND resource_id = ?", projectID, action, managedUser.Username).First(&value).Error; err != nil {
 			t.Fatalf("用户权限变化必须产生项目审计：project=%d action=%s err=%v", projectID, action, err)
 		}
 	}
@@ -152,7 +155,7 @@ func TestProjectBoundaryEndToEnd(t *testing.T) {
 
 	var me map[string]any
 	decodeIntegration(t, integrationRequest(t, server, member, "GET", "/api/v1/me", nil, 200), &me)
-	if me["id"] != float64(2) || me["password_hash"] != nil || me["password"] != nil {
+	if me["username"] != "member_a" || me["id"] != nil || me["user_id"] != nil || me["password_hash"] != nil || me["password"] != nil {
 		t.Fatal("当前身份必须只包含已登录用户的公开资料")
 	}
 	var projects []project.Project
@@ -213,8 +216,11 @@ func TestSystemAdministratorManagesUsers(t *testing.T) {
 	}
 	var user identity.User
 	decodeIntegration(t, created, &user)
-	if user.ID == 0 || user.Username != "cloud_user" || user.GlobalRole != identity.GlobalRoleUser || user.Status != "active" {
+	if user.Username != "cloud_user" || user.GlobalRole != identity.GlobalRoleUser || user.Status != "active" {
 		t.Fatal("创建用户必须返回指定的全局角色和状态")
+	}
+	if err := db.Where("username = ?", user.Username).First(&user).Error; err != nil {
+		t.Fatalf("读取刚创建的用户失败：%v", err)
 	}
 	var memberships int64
 	if err := db.Table("project_members").Where("user_id = ?", user.ID).Count(&memberships).Error; err != nil || memberships != 2 {
@@ -225,7 +231,7 @@ func TestSystemAdministratorManagesUsers(t *testing.T) {
 	if strings.Contains(listed.Body.String(), "password_hash") || !strings.Contains(listed.Body.String(), "用户授权甲") || !strings.Contains(listed.Body.String(), "project_admin") {
 		t.Fatal("用户列表必须返回项目权限和项目名称，且不得包含密码哈希")
 	}
-	integrationRequest(t, server, admin, http.MethodPut, "/api/v1/users/"+strconv.FormatUint(user.ID, 10), map[string]any{"display_name": "云资源用户", "email": "cloud@example.invalid", "global_role": "user", "status": "disabled", "project_permissions": []map[string]any{{"project_id": secondProject.ID, "role": "member"}}}, http.StatusOK)
+	integrationRequest(t, server, admin, http.MethodPut, "/api/v1/users/"+user.Username, map[string]any{"display_name": "云资源用户", "email": "cloud@example.invalid", "global_role": "user", "status": "disabled", "project_permissions": []map[string]any{{"project_id": secondProject.ID, "role": "member"}}}, http.StatusOK)
 	integrationRequest(t, server, "", http.MethodPost, "/api/v1/auth/login", map[string]any{"username": "cloud_user", "password": "secure-user-password"}, http.StatusUnauthorized)
 }
 
@@ -245,16 +251,16 @@ func TestSystemAdministratorDeletesUser(t *testing.T) {
 	if err := db.Create(&project.MemberRole{ProjectID: ownedProject.ID, UserID: ownerID, Role: project.MemberRoleMember}).Error; err != nil {
 		t.Fatalf("准备用户项目权限失败：%v", err)
 	}
-	fixtureAudit := audit.Log{ActorID: &ownerID, ProjectID: &ownedProject.ID, Action: "user.fixture", ResourceType: "user", ResourceID: "2", Detail: json.RawMessage(`{}`)}
+	fixtureAudit := audit.Log{ActorID: &ownerID, ProjectID: &ownedProject.ID, Action: "user.fixture", ResourceType: "user", ResourceID: "member_a", Detail: json.RawMessage(`{}`)}
 	if err := db.Create(&fixtureAudit).Error; err != nil {
 		t.Fatalf("准备独立审计记录失败：%v", err)
 	}
 
-	forbidden := integrationRequest(t, server, member, http.MethodDelete, "/api/v1/users/2", nil, http.StatusForbidden)
+	forbidden := integrationRequest(t, server, member, http.MethodDelete, "/api/v1/users/member_a", nil, http.StatusForbidden)
 	if forbidden.Body.String() != `{"code":"USER_FORBIDDEN","message":"无权执行该操作"}` {
 		t.Fatalf("普通用户删除响应契约错误：%s", forbidden.Body.String())
 	}
-	protected := integrationRequest(t, server, admin, http.MethodDelete, "/api/v1/users/1", nil, http.StatusConflict)
+	protected := integrationRequest(t, server, admin, http.MethodDelete, "/api/v1/users/operator", nil, http.StatusConflict)
 	if protected.Body.String() != `{"code":"USER_SELF_PROTECTED","message":"不能删除当前管理员"}` {
 		t.Fatalf("管理员自删保护响应契约错误：%s", protected.Body.String())
 	}
@@ -262,7 +268,7 @@ func TestSystemAdministratorDeletesUser(t *testing.T) {
 	if invalid.Body.String() != `{"code":"USER_INVALID_REQUEST","message":"请求格式错误"}` {
 		t.Fatalf("无效用户标识响应契约错误：%s", invalid.Body.String())
 	}
-	integrationRequest(t, server, admin, http.MethodDelete, "/api/v1/users/2", nil, http.StatusNoContent)
+	integrationRequest(t, server, admin, http.MethodDelete, "/api/v1/users/member_a", nil, http.StatusNoContent)
 
 	var remaining, memberships, audits int64
 	if err := db.Model(&identity.User{}).Where("id = ?", 2).Count(&remaining).Error; err != nil || remaining != 0 {
@@ -279,11 +285,11 @@ func TestSystemAdministratorDeletesUser(t *testing.T) {
 	}
 	for _, action := range []string{audit.ActionUserDeleted, audit.ActionProjectMemberRemoved} {
 		var count int64
-		if err := db.Model(&audit.Log{}).Where("action = ? AND resource_id = ?", action, "2").Count(&count).Error; err != nil || count != 1 {
+		if err := db.Model(&audit.Log{}).Where("action = ? AND resource_id = ?", action, "member_a").Count(&count).Error; err != nil || count != 1 {
 			t.Fatalf("删除用户必须生成动作 %s：count=%d err=%v", action, count, err)
 		}
 	}
-	notFound := integrationRequest(t, server, admin, http.MethodDelete, "/api/v1/users/2", nil, http.StatusNotFound)
+	notFound := integrationRequest(t, server, admin, http.MethodDelete, "/api/v1/users/member_a", nil, http.StatusNotFound)
 	if notFound.Body.String() != `{"code":"USER_NOT_FOUND","message":"用户不存在"}` {
 		t.Fatalf("重复删除响应契约错误：%s", notFound.Body.String())
 	}
@@ -302,12 +308,15 @@ func TestSystemAdministratorEditsUserAndCannotLockSelfOut(t *testing.T) {
 	}, http.StatusCreated)
 	var user identity.User
 	decodeIntegration(t, created, &user)
-	path := "/api/v1/users/" + strconv.FormatUint(user.ID, 10)
+	path := "/api/v1/users/" + user.Username
 	updated := integrationRequest(t, server, admin, http.MethodPut, path, map[string]any{
 		"display_name": "已编辑用户", "email": "new@example.invalid", "global_role": "system_admin", "status": "active", "password": "replacement-password", "project_permissions": []map[string]any{{"project_id": secondProject.ID, "role": "member"}},
 	}, http.StatusOK)
 	if strings.Contains(updated.Body.String(), "password") || !strings.Contains(updated.Body.String(), "已编辑用户") || !strings.Contains(updated.Body.String(), "system_admin") {
 		t.Fatal("编辑响应必须返回更新后的公开资料且不得包含密码")
+	}
+	if err := db.Where("username = ?", user.Username).First(&user).Error; err != nil {
+		t.Fatalf("读取编辑用户失败：%v", err)
 	}
 	var roles []project.MemberRole
 	if err := db.Where("user_id = ?", user.ID).Find(&roles).Error; err != nil || len(roles) != 1 || roles[0].ProjectID != secondProject.ID || roles[0].Role != project.MemberRoleMember {
@@ -316,8 +325,8 @@ func TestSystemAdministratorEditsUserAndCannotLockSelfOut(t *testing.T) {
 	integrationRequest(t, server, "", http.MethodPost, "/api/v1/auth/login", map[string]any{"username": "editable_user", "password": "initial-user-password"}, http.StatusUnauthorized)
 	integrationRequest(t, server, "", http.MethodPost, "/api/v1/auth/login", map[string]any{"username": "editable_user", "password": "replacement-password"}, http.StatusOK)
 	integrationRequest(t, server, member, http.MethodPut, path, map[string]any{"display_name": "越权修改", "email": "", "global_role": "user", "status": "active"}, http.StatusForbidden)
-	integrationRequest(t, server, admin, http.MethodPut, "/api/v1/users/1", map[string]any{"display_name": "当前管理员", "email": "", "global_role": "user", "status": "active"}, http.StatusConflict)
-	integrationRequest(t, server, admin, http.MethodPut, "/api/v1/users/1/status", map[string]any{"status": "disabled"}, http.StatusConflict)
+	integrationRequest(t, server, admin, http.MethodPut, "/api/v1/users/operator", map[string]any{"display_name": "当前管理员", "email": "", "global_role": "user", "status": "active"}, http.StatusConflict)
+	integrationRequest(t, server, admin, http.MethodPut, "/api/v1/users/operator/status", map[string]any{"status": "disabled"}, http.StatusConflict)
 }
 
 // TestCreatingUserWithMissingProjectRollsBack 验证无效项目授权不会留下孤立用户或部分成员关系。

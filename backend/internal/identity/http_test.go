@@ -26,28 +26,28 @@ func TestLoginDoesNotRevealWhetherUserExists(t *testing.T) {
 
 // TestLoginRejectsWrongPassword 防止已存在用户的错误密码被错误地接受或获得不同错误响应。
 func TestLoginRejectsWrongPassword(t *testing.T) {
-	user := newAuthenticationFixtureUser(t, 11, "wrong-password-user", "active")
+	user := newAuthenticationFixtureUser(t, 11, "wrong_password_user", "active")
 	response := requestLogin(t, newAuthenticationServer(t, user), user.Username, "incorrect-password")
 	assertAuthenticationFailure(t, response)
 }
 
 // TestLoginRejectsInactiveUser 防止已停用账户以正确凭证取得新的 JWT 会话。
 func TestLoginRejectsInactiveUser(t *testing.T) {
-	user := newAuthenticationFixtureUser(t, 12, "inactive-login-user", "disabled")
+	user := newAuthenticationFixtureUser(t, 12, "inactive_login_user", "disabled")
 	response := requestLogin(t, newAuthenticationServer(t, user), user.Username, "correct-password")
 	assertAuthenticationFailure(t, response)
 }
 
 // TestLoginMissingUserPerformsComparableBcryptWork 防止不存在用户绕过 bcrypt 造成可观测的用户名枚举时差。
 func TestLoginMissingUserPerformsComparableBcryptWork(t *testing.T) {
-	user := newAuthenticationFixtureUser(t, 13, "timing-user", "active")
-	inactiveUser := newAuthenticationFixtureUser(t, 16, "inactive-timing-user", "disabled")
+	user := newAuthenticationFixtureUser(t, 13, "timing_user", "active")
+	inactiveUser := newAuthenticationFixtureUser(t, 16, "inactive_timing_user", "disabled")
 	server := newAuthenticationServer(t, user, inactiveUser)
 
 	var missingElapsed, wrongPasswordElapsed, inactiveElapsed time.Duration
 	for range 2 {
 		missingStartedAt := time.Now()
-		assertAuthenticationFailure(t, requestLogin(t, server, "missing-timing-user", "incorrect-password"))
+		assertAuthenticationFailure(t, requestLogin(t, server, "missing_timing_user", "incorrect-password"))
 		missingElapsed += time.Since(missingStartedAt)
 
 		wrongPasswordStartedAt := time.Now()
@@ -66,7 +66,7 @@ func TestLoginMissingUserPerformsComparableBcryptWork(t *testing.T) {
 	}
 }
 
-// TestLoginIssuesJWTWithOnlyIdentityClaims 防止令牌携带用户名、密码哈希等不必要身份数据。
+// TestLoginIssuesJWTWithOnlyIdentityClaims 防止 JWT 或公开响应泄露内部用户数字 ID。
 func TestLoginIssuesJWTWithOnlyIdentityClaims(t *testing.T) {
 	hash, err := identity.HashPassword("correct-password")
 	if err != nil {
@@ -90,15 +90,18 @@ func TestLoginIssuesJWTWithOnlyIdentityClaims(t *testing.T) {
 	var payload struct {
 		Token string `json:"token"`
 		User  struct {
-			ID         uint64 `json:"id"`
+			Username   string `json:"username"`
 			GlobalRole string `json:"global_role"`
 		} `json:"user"`
 	}
 	if err := json.Unmarshal(response.Body.Bytes(), &payload); err != nil {
 		t.Fatalf("登录成功响应不是有效 JSON：%v", err)
 	}
-	if payload.Token == "" || payload.User.ID != user.ID || payload.User.GlobalRole != identity.GlobalRoleSystemAdmin {
+	if payload.Token == "" || payload.User.Username != user.Username || payload.User.GlobalRole != identity.GlobalRoleSystemAdmin {
 		t.Fatal("登录成功响应必须提供令牌和必要的公开用户信息")
+	}
+	if strings.Contains(response.Body.String(), `"id"`) || strings.Contains(response.Body.String(), `"user_id"`) {
+		t.Fatalf("公开身份响应不得包含用户数字 ID：%s", response.Body.String())
 	}
 
 	claims := jwt.MapClaims{}
@@ -108,8 +111,8 @@ func TestLoginIssuesJWTWithOnlyIdentityClaims(t *testing.T) {
 	if err != nil || !parsed.Valid {
 		t.Fatal("登录签发的令牌必须可由服务签名密钥验证")
 	}
-	if len(claims) != 3 || claims["user_id"] != float64(user.ID) || claims["global_role"] != identity.GlobalRoleSystemAdmin {
-		t.Fatal("JWT 只能包含用户标识、全局角色和过期时间")
+	if len(claims) != 3 || claims["username"] != user.Username || claims["user_id"] != nil || claims["global_role"] != identity.GlobalRoleSystemAdmin {
+		t.Fatal("JWT 必须只用用户名标识当前用户")
 	}
 	if _, ok := claims["exp"].(float64); !ok {
 		t.Fatal("JWT 必须包含过期时间")
@@ -124,7 +127,7 @@ func TestCurrentUserRequiresJWTAndReturnsPublicIdentity(t *testing.T) {
 	}
 	user := &identity.User{
 		ID:           9,
-		Username:     "me-user",
+		Username:     "me_user",
 		PasswordHash: hash,
 		DisplayName:  "当前用户",
 		Email:        "me@example.invalid",
@@ -150,14 +153,14 @@ func TestCurrentUserRequiresJWTAndReturnsPublicIdentity(t *testing.T) {
 	request.Header.Set("Authorization", "Bearer "+session.Token)
 	response := httptest.NewRecorder()
 	server.ServeHTTP(response, request)
-	if response.Code != http.StatusOK || strings.Contains(response.Body.String(), "password_hash") {
+	if response.Code != http.StatusOK || strings.Contains(response.Body.String(), "password_hash") || strings.Contains(response.Body.String(), `"id"`) || strings.Contains(response.Body.String(), `"user_id"`) || !strings.Contains(response.Body.String(), `"username":"me_user"`) {
 		t.Fatalf("当前用户接口必须仅返回公开身份信息：status=%d", response.Code)
 	}
 }
 
 // TestCurrentUserRejectsUserDisabledAfterTokenIssued 防止用户停用后仍可继续使用先前签发的 JWT。
 func TestCurrentUserRejectsUserDisabledAfterTokenIssued(t *testing.T) {
-	user := newAuthenticationFixtureUser(t, 14, "disabled-session-user", "active")
+	user := newAuthenticationFixtureUser(t, 14, "disabled_session_user", "active")
 	server := newAuthenticationServer(t, user)
 	login := requestLogin(t, server, user.Username, "correct-password")
 	token := sessionToken(t, login)
@@ -169,7 +172,7 @@ func TestCurrentUserRejectsUserDisabledAfterTokenIssued(t *testing.T) {
 
 // TestCurrentUserRejectsExpiredAndWrongSignatureTokens 验证中间件拒绝已过期及非本服务签发的 JWT。
 func TestCurrentUserRejectsExpiredAndWrongSignatureTokens(t *testing.T) {
-	user := newAuthenticationFixtureUser(t, 15, "invalid-token-user", "active")
+	user := newAuthenticationFixtureUser(t, 15, "invalid_token_user", "active")
 	server := newAuthenticationServer(t, user)
 
 	for _, testCase := range []struct {
@@ -187,13 +190,60 @@ func TestCurrentUserRejectsExpiredAndWrongSignatureTokens(t *testing.T) {
 	}
 }
 
+// TestCurrentUserRejectsLegacyUserIDToken 防止旧版 JWT 在用户名身份迁移后继续得到授权。
+func TestCurrentUserRejectsLegacyUserIDToken(t *testing.T) {
+	user := newAuthenticationFixtureUser(t, 17, "legacy_token_user", "active")
+	server := newAuthenticationServer(t, user)
+	legacyToken, err := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
+		"user_id":     user.ID,
+		"global_role": user.GlobalRole,
+		"exp":         time.Now().Add(time.Hour).Unix(),
+	}).SignedString([]byte("identity-test-signing-key"))
+	if err != nil {
+		t.Fatal("构造旧版认证令牌失败")
+	}
+	assertUnauthorized(t, requestCurrentUser(t, server, legacyToken))
+}
+
+// TestUserWriteRoutesUseUsername 防止用户管理写接口继续把路径参数解释为内部数字 ID。
+func TestUserWriteRoutesUseUsername(t *testing.T) {
+	admin := newAuthenticationFixtureUser(t, 1, "write_admin", "active")
+	admin.GlobalRole = identity.GlobalRoleSystemAdmin
+	target := newAuthenticationFixtureUser(t, 2, "target_user", "active")
+	server := newAuthenticationServer(t, admin, target)
+	token := sessionToken(t, requestLogin(t, server, admin.Username, "correct-password"))
+
+	for _, testCase := range []struct {
+		name   string
+		method string
+		path   string
+		body   string
+	}{
+		{name: "编辑", method: http.MethodPut, path: "/api/v1/users/target_user", body: `{"display_name":"目标用户","global_role":"user","status":"active"}`},
+		{name: "停用", method: http.MethodPut, path: "/api/v1/users/target_user/status", body: `{"status":"disabled"}`},
+		{name: "删除", method: http.MethodDelete, path: "/api/v1/users/target_user"},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			request := httptest.NewRequest(testCase.method, testCase.path, strings.NewReader(testCase.body))
+			request.Header.Set("Authorization", "Bearer "+token)
+			request.Header.Set("Content-Type", "application/json")
+			response := httptest.NewRecorder()
+			server.ServeHTTP(response, request)
+			if response.Code != http.StatusInternalServerError {
+				t.Fatalf("用户名目标必须先通过路径和用户查询，存储写入失败应返回服务错误：status=%d body=%s", response.Code, response.Body.String())
+			}
+		})
+	}
+}
+
 // TestDeleteUserReportsRepositoryFailure 验证删除存储失败使用稳定服务错误，不能误报为用户不存在。
 func TestDeleteUserReportsRepositoryFailure(t *testing.T) {
-	admin := newAuthenticationFixtureUser(t, 1, "delete-admin", "active")
+	admin := newAuthenticationFixtureUser(t, 1, "delete_admin", "active")
 	admin.GlobalRole = identity.GlobalRoleSystemAdmin
-	server := newAuthenticationServer(t, admin)
+	target := newAuthenticationFixtureUser(t, 2, "target_user", "active")
+	server := newAuthenticationServer(t, admin, target)
 	token := sessionToken(t, requestLogin(t, server, admin.Username, "correct-password"))
-	request := httptest.NewRequest(http.MethodDelete, "/api/v1/users/2", nil)
+	request := httptest.NewRequest(http.MethodDelete, "/api/v1/users/target_user", nil)
 	request.Header.Set("Authorization", "Bearer "+token)
 	response := httptest.NewRecorder()
 	server.ServeHTTP(response, request)
@@ -272,12 +322,10 @@ func sessionToken(t *testing.T, response *httptest.ResponseRecorder) string {
 // signedTestToken 仅为中间件边界测试构造指定过期时间和签名密钥的 JWT。
 func signedTestToken(t *testing.T, user *identity.User, expiresAt time.Time, signingKey string) string {
 	t.Helper()
-	token, err := jwt.NewWithClaims(jwt.SigningMethodHS256, identity.UserClaims{
-		UserID:     user.ID,
-		GlobalRole: user.GlobalRole,
-		RegisteredClaims: jwt.RegisteredClaims{
-			ExpiresAt: jwt.NewNumericDate(expiresAt),
-		},
+	token, err := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
+		"username":    user.Username,
+		"global_role": user.GlobalRole,
+		"exp":         expiresAt.Unix(),
 	}).SignedString([]byte(signingKey))
 	if err != nil {
 		t.Fatal("构造认证测试令牌失败")

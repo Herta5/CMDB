@@ -31,7 +31,7 @@ func RequireRole(repository Repository, roles ...string) gin.HandlerFunc {
 			abortProjectError(c, http.StatusInternalServerError, "PROJECT_SERVICE_UNAVAILABLE", "项目服务暂不可用")
 			return
 		}
-		member, err := repository.FindMemberRole(c.Request.Context(), projectID, claims.UserID)
+		member, err := repository.FindMemberRole(c.Request.Context(), projectID, claims.InternalUserID)
 		if err != nil {
 			if errors.Is(err, gorm.ErrRecordNotFound) {
 				abortProjectNotFound(c)

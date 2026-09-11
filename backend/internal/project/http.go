@@ -101,7 +101,7 @@ func (h *HTTPHandler) Update(c *gin.Context, claims identity.UserClaims) {
 
 // List 返回当前用户可见的项目集合；普通用户只能得到成员关系允许的结果。
 func (h *HTTPHandler) List(c *gin.Context, claims identity.UserClaims) {
-	projects, err := h.service.ListForUser(c.Request.Context(), claims.UserID, claims.GlobalRole)
+	projects, err := h.service.ListForUser(c.Request.Context(), claims.InternalUserID, claims.GlobalRole)
 	if err != nil {
 		writeProjectError(c, http.StatusInternalServerError, "PROJECT_SERVICE_UNAVAILABLE", "项目服务暂不可用")
 		return
