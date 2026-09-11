@@ -16,10 +16,12 @@ import (
 )
 
 // Collector 是阿里云独立平台采集器。
-type Collector struct{}
+type Collector struct {
+	newSTSClient stsClientFactory
+}
 
 // NewCollector 创建阿里云采集器。
-func NewCollector() *Collector { return &Collector{} }
+func NewCollector() *Collector { return &Collector{newSTSClient: newAliyunSTSClient} }
 
 type credential struct {
 	AccessKeyID     string `json:"access_key_id"`
