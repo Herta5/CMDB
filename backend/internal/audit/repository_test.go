@@ -26,7 +26,7 @@ func TestRecordUsesActorContextAndFiltersSensitiveDetail(t *testing.T) {
 		ResourceType: "user",
 		ResourceID:   "12",
 		Detail: map[string]any{
-			"target_username": "cloud-user",
+			"target_username": "cloud_user",
 			"password":        "never-store-me",
 			"nested": map[string]any{
 				"access_key_id":     "never-store-key",
@@ -63,7 +63,7 @@ func TestRecordUsesActorContextAndFiltersSensitiveDetail(t *testing.T) {
 	if encoded == "" || containsAny(encoded, "never-store-me", "never-store-key", "never-store-aliyun-secret", "never-store-session", "never-store-api-key", "never-store-client-secret", "never-store-authorization", "password", "access_key_id", "access_key_secret", "session_token", "api_key", "client_secret", "authorization") {
 		t.Fatalf("审计详情必须递归过滤敏感字段：%s", encoded)
 	}
-	if !containsAny(encoded, "cloud-user", "第一层安全值", "第二层安全值") {
+	if !containsAny(encoded, "cloud_user", "第一层安全值", "第二层安全值") {
 		t.Fatalf("审计详情必须保留允许展示的目标快照：%s", encoded)
 	}
 }
@@ -151,14 +151,14 @@ func TestListFiltersProjectActionActorObjectAndTime(t *testing.T) {
 	now := time.Date(2026, 9, 10, 8, 0, 0, 0, time.UTC)
 	logs := []audit.Log{
 		{ID: 1, ActorID: &actor, ProjectID: &projectA, Action: audit.ActionProjectUpdated, ResourceType: "project", ResourceID: "9", Detail: json.RawMessage(`{"name":"平台项目"}`), CreatedAt: now.Add(-time.Hour)},
-		{ID: 2, ActorID: &actor, ProjectID: &projectA, Action: audit.ActionUserUpdated, ResourceType: "user", ResourceID: "12", Detail: json.RawMessage(`{"target_username":"cloud-user"}`), CreatedAt: now},
+		{ID: 2, ActorID: &actor, ProjectID: &projectA, Action: audit.ActionUserUpdated, ResourceType: "user", ResourceID: "12", Detail: json.RawMessage(`{"target_username":"cloud_user"}`), CreatedAt: now},
 		{ID: 3, ProjectID: &projectB, Action: audit.ActionResourceCreated, ResourceType: "ec2", ResourceID: "i-other", Detail: json.RawMessage(`{}`), CreatedAt: now.Add(time.Hour)},
 	}
 	if err := db.Create(&logs).Error; err != nil {
 		t.Fatalf("准备审计数据失败：%v", err)
 	}
 	start, end := now.Add(-time.Minute), now.Add(time.Minute)
-	items, total, _, err := repository.List(context.Background(), audit.Filter{ProjectID: &projectA, Action: audit.ActionUserUpdated, ActorUsername: "admin_1", ResourceType: "user", ResourceID: "cloud-user", StartAt: &start, EndAt: &end, Page: 1, PageSize: 20})
+	items, total, _, err := repository.List(context.Background(), audit.Filter{ProjectID: &projectA, Action: audit.ActionUserUpdated, ActorUsername: "admin_1", ResourceType: "user", ResourceID: "cloud_user", StartAt: &start, EndAt: &end, Page: 1, PageSize: 20})
 	if err != nil {
 		t.Fatalf("筛选审计失败：%v", err)
 	}

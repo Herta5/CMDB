@@ -23,7 +23,7 @@ class MemoryStorage {
   removeItem(key: string) { this.values.delete(key) }
 }
 
-const project = { id: 1, code: 'cloud-a', name: '云项目甲', description: '业务项目', status: 'enabled', owner_user_id: 1, created_at: '2026-09-09T00:00:00Z', updated_at: '2026-09-09T00:00:00Z' }
+const project = { id: 1, code: 'cloud-a', name: '云项目甲', description: '业务项目', status: 'enabled', owner_username: 'project_owner', created_at: '2026-09-09T00:00:00Z', updated_at: '2026-09-09T00:00:00Z' }
 let expired = false
 
 beforeEach(() => {
@@ -69,7 +69,7 @@ describe('CMDB 第一阶段应用流程', () => {
     await projects.loadProjects()
     await projects.loadProject(1)
     expect(projects.currentProject?.name).toBe('云项目甲')
-    expect(projects.detail?.ownerUserId).toBe(1)
+    expect(projects.detail?.ownerUsername).toBe('project_owner')
     expect(projects.selectProject(2)).toBe(false)
     await projects.loadProject(2)
     expect(projects.detail).toBeNull()

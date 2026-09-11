@@ -30,7 +30,7 @@ const users = [
   { username: 'user_a', globalRole: 'user' as const },
   { username: 'user_b', globalRole: 'user' as const },
 ]
-const projectDTO = (id: number) => ({ id, code: `cloud-${id}`, name: `云项目${id}`, description: '', status: 'enabled', owner_user_id: id, created_at: '', updated_at: '' })
+const projectDTO = (id: number) => ({ id, code: `cloud-${id}`, name: `云项目${id}`, description: '', status: 'enabled', owner_username: `project_owner_${id}`, created_at: '', updated_at: '' })
 let tokens: Record<string, string>
 let pinia: ReturnType<typeof createPinia> | undefined
 

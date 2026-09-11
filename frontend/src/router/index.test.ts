@@ -62,7 +62,7 @@ describe('认证路由守卫', () => {
   })
 
   it('已登录用户访问登录页时回到受保护入口', async () => {
-    useAuthStore().acceptSession('token', { id: 1, username: 'admin', globalRole: 'system_admin' })
+    useAuthStore().acceptSession('token', { username: 'admin', globalRole: 'system_admin' })
 
     await router.push('/login')
 
@@ -70,9 +70,9 @@ describe('认证路由守卫', () => {
   })
 
   it('项目管理员可进入项目管理、云同步和审计日志，项目成员会返回资产列表', async () => {
-    useAuthStore().acceptSession('token', { id: 2, username: 'project-admin', globalRole: 'user' })
+    useAuthStore().acceptSession('token', { username: 'project_admin', globalRole: 'user' })
     const projects = useProjectStore()
-    projects.projects = [{ id: 2, code: 'cloud', name: '云项目', description: '', status: 'enabled', ownerUserId: null, currentRole: 'project_admin', createdAt: '', updatedAt: '' }]
+    projects.projects = [{ id: 2, code: 'cloud', name: '云项目', description: '', status: 'enabled', ownerUsername: null, currentRole: 'project_admin', createdAt: '', updatedAt: '' }]
     projects.listState = 'ready'
     projects.selectProject(2)
     await router.push('/projects')

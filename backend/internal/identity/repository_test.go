@@ -46,7 +46,7 @@ func TestUserRepositoryCreatesAndFindsUserByUsername(t *testing.T) {
 	db, _ := newUserRepositoryTestDB(t)
 	repository := NewUserRepository(db)
 	user := &User{
-		Username:     "repository-user",
+		Username:     "repository_user",
 		PasswordHash: "bcrypt-hash-for-test-only",
 		DisplayName:  "仓储测试用户",
 		GlobalRole:   GlobalRoleUser,
@@ -84,8 +84,8 @@ func TestUserRepositoryClassifiesDuplicateUsername(t *testing.T) {
 		t.Fatalf("准备用户名唯一约束失败：%v", err)
 	}
 	repository := NewUserRepository(db)
-	first := &User{Username: "duplicate-user", PasswordHash: "first-hash", DisplayName: "首个用户", GlobalRole: GlobalRoleUser, Status: "active"}
-	second := &User{Username: "duplicate-user", PasswordHash: "second-hash", DisplayName: "重复用户", GlobalRole: GlobalRoleUser, Status: "active"}
+	first := &User{Username: "duplicate_user", PasswordHash: "first-hash", DisplayName: "首个用户", GlobalRole: GlobalRoleUser, Status: "active"}
+	second := &User{Username: "duplicate_user", PasswordHash: "second-hash", DisplayName: "重复用户", GlobalRole: GlobalRoleUser, Status: "active"}
 	if err := repository.Create(context.Background(), first); err != nil {
 		t.Fatalf("准备首个用户失败：%v", err)
 	}
@@ -102,7 +102,7 @@ func TestUserRepositoryPropagatesDatabaseError(t *testing.T) {
 		t.Fatalf("关闭测试数据库失败：%v", err)
 	}
 
-	_, err := repository.FindByUsername(context.Background(), "unavailable-user")
+	_, err := repository.FindByUsername(context.Background(), "unavailable_user")
 	if err == nil {
 		t.Fatal("数据库连接关闭后查询必须返回错误")
 	}

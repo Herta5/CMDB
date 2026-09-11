@@ -175,7 +175,7 @@ func TestListForUserRestrictsRegularUserToMembership(t *testing.T) {
 	if _, err := service.Create(context.Background(), CreateInput{Name: "数据平台", Code: "data"}); err != nil {
 		t.Fatalf("创建第二个项目失败：%v", err)
 	}
-	if err := db.Create(&identity.User{ID: 7, Username: "project-member", PasswordHash: "test-hash", DisplayName: "项目成员", GlobalRole: identity.GlobalRoleUser, Status: "active"}).Error; err != nil {
+	if err := db.Create(&identity.User{ID: 7, Username: "project_member", PasswordHash: "test-hash", DisplayName: "项目成员", GlobalRole: identity.GlobalRoleUser, Status: "active"}).Error; err != nil {
 		t.Fatalf("准备项目成员用户失败：%v", err)
 	}
 	if err := db.Create(&MemberRole{ProjectID: first.ID, UserID: 7, Role: MemberRoleMember}).Error; err != nil {

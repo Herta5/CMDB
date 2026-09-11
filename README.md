@@ -53,18 +53,18 @@ unset CMDB_INITIAL_PASSWORD
 | GET | `/api/v1/me` | 当前登录身份 |
 | GET | `/api/v1/users` | 系统管理员查看用户列表 |
 | POST | `/api/v1/users` | 系统管理员创建用户，并原子设置全局角色、状态和多项目权限 |
-| DELETE | `/api/v1/users/:id` | 系统管理员删除其他用户及其项目成员关系 |
-| PUT | `/api/v1/users/:id/status` | 系统管理员启用或停用用户 |
-| PUT | `/api/v1/users/:id` | 系统管理员编辑显示名称、邮箱、全局角色、状态、可选新密码及全量项目权限；用户名不可修改 |
+| DELETE | `/api/v1/users/:username` | 系统管理员删除其他用户及其项目成员关系 |
+| PUT | `/api/v1/users/:username/status` | 系统管理员启用或停用用户 |
+| PUT | `/api/v1/users/:username` | 系统管理员编辑显示名称、邮箱、全局角色、状态、可选新密码及全量项目权限；用户名不可修改 |
 | GET | `/api/v1/projects` | 系统管理员查看全部；普通用户仅查看所属项目 |
-| POST | `/api/v1/projects` | 系统管理员创建项目，必填 `code`、`name` |
-| GET | `/api/v1/projects/:id` | 系统管理员或该项目成员查看详情 |
-| PUT | `/api/v1/projects/:id` | 系统管理员修改项目；`code` 创建后不可变 |
+| POST | `/api/v1/projects` | 系统管理员创建项目，必填 `code`、`name`，可选 `owner_username` 指定负责人 |
+| GET | `/api/v1/projects/:id` | 系统管理员或该项目成员查看详情，负责人字段为 `owner_username` |
+| PUT | `/api/v1/projects/:id` | 系统管理员修改项目，可用 `owner_username` 调整负责人；`code` 创建后不可变 |
 | DELETE | `/api/v1/projects/:id` | 系统管理员删除项目 |
 | GET | `/api/v1/projects/:id/members` | 系统管理员或该项目成员查看成员 |
-| POST | `/api/v1/projects/:id/members` | 系统管理员或项目管理员添加成员，提供 `user_id`、`role` |
-| PUT | `/api/v1/projects/:id/members/:user_id` | 系统管理员或项目管理员修改 `role` |
-| DELETE | `/api/v1/projects/:id/members/:user_id` | 系统管理员或项目管理员移除成员 |
+| POST | `/api/v1/projects/:id/members` | 系统管理员或项目管理员添加成员，提供 `username`、`role` |
+| PUT | `/api/v1/projects/:id/members/:username` | 系统管理员或项目管理员修改 `role` |
+| DELETE | `/api/v1/projects/:id/members/:username` | 系统管理员或项目管理员移除成员 |
 | GET | `/api/v1/projects/:id/member-candidates` | 系统管理员或项目管理员查询可添加用户的最小公开资料 |
 | GET / POST | `/api/v1/projects/:id/sources` | 项目成员查询；系统或项目管理员创建接入源 |
 | PUT / DELETE | `/api/v1/projects/:id/sources/:sourceId` | 系统或项目管理员更新、启停或删除接入源 |
@@ -75,6 +75,10 @@ unset CMDB_INITIAL_PASSWORD
 | POST | `/api/v1/projects/:id/sync-jobs/:jobId/retry` | 系统或项目管理员重试失败或部分成功任务 |
 
 全局角色为 `system_admin`、`user`；项目角色为 `project_admin`、`member`。系统管理员是显式全局权限例外；普通用户必须具有对应项目成员关系，前端切换项目不授予权限。项目管理员可以查看资产并管理本项目成员、接入源及同步任务，项目成员仅可查看项目和资产。未授权项目与不存在项目返回相同错误以隐藏目标存在性，移除成员后原会话的项目权限立即失效。
+
+用户名是用户唯一且不可修改的公开标识，长度为 1 至 64 个字符，只能包含 ASCII 字母、数字和下划线（`^[A-Za-z0-9_]+$`）。所有用户路径参数、项目负责人、项目成员和审计操作人筛选均使用用户名；JWT 仅携带用户名等公开身份声明，不携带用户数字 ID。
+
+部署数据库仍以 `users.id`、`project_members.user_id`、`projects.owner_user_id` 和 `audit_logs.actor_id` 维护内部主键、外键与审计关联。这些字段只在服务端和数据库内部使用，不是公开 API、页面、浏览器存储或 JWT 契约的一部分。
 
 接入凭证由 `CMDB_ENCRYPTION_KEY` 派生的 AES-256-GCM 密钥加密，接口、同步任务和审计均不返回凭证明文或完整密文。手工同步先返回排队任务，页面自动刷新运行状态；服务重启会恢复排队任务并结束异常中断任务。资源首次从成功采集结果中缺失时标记“已失联”，重新出现时恢复原记录，连续失联满 24 小时后物理删除；认证失败和类型级采集失败不会触发错误失联。
 

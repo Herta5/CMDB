@@ -24,6 +24,76 @@ import (
 	"gorm.io/gorm/logger"
 )
 
+// TestPublicUsernameContractEndToEnd 验证公开身份链路始终以用户名传递，内部用户主键不会穿透 HTTP 边界。
+func TestPublicUsernameContractEndToEnd(t *testing.T) {
+	server, password := integrationServer(t)
+	login := integrationRequest(t, server, "", http.MethodPost, "/api/v1/auth/login", map[string]any{"username": "operator", "password": password}, http.StatusOK)
+	var loginPayload any
+	decodeIntegration(t, login, &loginPayload)
+	assertNoPublicUserNumericIdentifiers(t, loginPayload)
+	loginObject := integrationObject(t, loginPayload)
+	token, _ := loginObject["token"].(string)
+	if token == "" {
+		t.Fatal("登录公开响应必须包含会话令牌")
+	}
+
+	const username = "contract_user"
+	createdUser := integrationRequest(t, server, token, http.MethodPost, "/api/v1/users", map[string]any{
+		"username": username, "password": password, "display_name": "公开契约用户", "global_role": "user", "status": "active", "project_permissions": []any{},
+	}, http.StatusCreated)
+	var createdUserPayload any
+	decodeIntegration(t, createdUser, &createdUserPayload)
+	assertNoPublicUserNumericIdentifiers(t, createdUserPayload)
+	if integrationObject(t, createdUserPayload)["username"] != username {
+		t.Fatal("创建用户响应必须以用户名标识新用户")
+	}
+
+	createdProject := integrationRequest(t, server, token, http.MethodPost, "/api/v1/projects", map[string]any{"code": "contract", "name": "公开契约项目"}, http.StatusCreated)
+	var createdProjectPayload any
+	decodeIntegration(t, createdProject, &createdProjectPayload)
+	assertNoPublicUserNumericIdentifiers(t, createdProjectPayload)
+	projectID := integrationNumericID(t, integrationObject(t, createdProjectPayload)["id"])
+	projectPath := "/api/v1/projects/" + strconv.FormatUint(projectID, 10)
+
+	updatedProject := integrationRequest(t, server, token, http.MethodPut, projectPath, map[string]any{"name": "公开契约项目", "description": "", "status": "enabled", "owner_username": username}, http.StatusOK)
+	var updatedProjectPayload any
+	decodeIntegration(t, updatedProject, &updatedProjectPayload)
+	assertNoPublicUserNumericIdentifiers(t, updatedProjectPayload)
+	if integrationObject(t, updatedProjectPayload)["owner_username"] != username {
+		t.Fatal("项目负责人必须以用户名公开")
+	}
+
+	for _, operation := range []struct {
+		method string
+		path   string
+		body   any
+		status int
+	}{
+		{http.MethodPost, projectPath + "/members", map[string]any{"username": username, "role": "member"}, http.StatusCreated},
+		{http.MethodPut, projectPath + "/members/" + username, map[string]any{"role": "project_admin"}, http.StatusOK},
+		{http.MethodDelete, projectPath + "/members/" + username, nil, http.StatusNoContent},
+	} {
+		response := integrationRequest(t, server, token, operation.method, operation.path, operation.body, operation.status)
+		if operation.method == http.MethodDelete {
+			continue
+		}
+		var payload any
+		decodeIntegration(t, response, &payload)
+		assertNoPublicUserNumericIdentifiers(t, payload)
+		if integrationObject(t, payload)["username"] != username {
+			t.Fatalf("成员 %s 响应必须以用户名标识目标", operation.method)
+		}
+	}
+
+	auditResponse := integrationRequest(t, server, token, http.MethodGet, "/api/v1/audit-logs?actor_username=operator&page=1&page_size=100", nil, http.StatusOK)
+	var auditPayload any
+	decodeIntegration(t, auditResponse, &auditPayload)
+	assertNoPublicUserNumericIdentifiers(t, auditPayload)
+	for _, action := range []string{audit.ActionUserCreated, audit.ActionProjectMemberAdded, audit.ActionProjectMemberRoleChanged, audit.ActionProjectMemberRemoved} {
+		assertIntegrationAuditResourceID(t, auditPayload, action, username)
+	}
+}
+
 // TestAuditQueryPermissionsAndProjectIsolation 验证系统管理员、项目管理员和成员使用不同审计边界。
 func TestAuditQueryPermissionsAndProjectIsolation(t *testing.T) {
 	server, password, db := integrationServerWithDatabase(t)
@@ -614,4 +684,61 @@ func decodeIntegration(t *testing.T, response *httptest.ResponseRecorder, target
 	if err := json.Unmarshal(response.Body.Bytes(), target); err != nil {
 		t.Fatal("验收响应不是有效 JSON")
 	}
+}
+
+// assertNoPublicUserNumericIdentifiers 递归检查公开 JSON，不允许任何层级暴露用户内部数字标识。
+func assertNoPublicUserNumericIdentifiers(t *testing.T, value any) {
+	t.Helper()
+	switch current := value.(type) {
+	case map[string]any:
+		for key, child := range current {
+			if key == "user_id" || key == "owner_user_id" || key == "actor_id" {
+				t.Fatalf("公开响应不得包含用户数字标识字段 %q", key)
+			}
+			assertNoPublicUserNumericIdentifiers(t, child)
+		}
+	case []any:
+		for _, child := range current {
+			assertNoPublicUserNumericIdentifiers(t, child)
+		}
+	}
+}
+
+// integrationObject 将已解码的公开 JSON 对象收窄为映射，避免测试重新使用领域模型绕开传输契约。
+func integrationObject(t *testing.T, value any) map[string]any {
+	t.Helper()
+	object, ok := value.(map[string]any)
+	if !ok {
+		t.Fatalf("公开响应必须是 JSON 对象，实际为 %T", value)
+	}
+	return object
+}
+
+// integrationNumericID 提取允许公开的项目标识，项目 ID 不属于用户内部标识。
+func integrationNumericID(t *testing.T, value any) uint64 {
+	t.Helper()
+	number, ok := value.(float64)
+	if !ok || number <= 0 || number != float64(uint64(number)) {
+		t.Fatalf("公开项目响应缺少有效项目标识：%v", value)
+	}
+	return uint64(number)
+}
+
+// assertIntegrationAuditResourceID 验证用户及成员审计资源标识沿用公开用户名而非数据库主键。
+func assertIntegrationAuditResourceID(t *testing.T, payload any, action, username string) {
+	t.Helper()
+	items, ok := integrationObject(t, payload)["items"].([]any)
+	if !ok {
+		t.Fatal("审计公开响应必须包含项目数组")
+	}
+	for _, item := range items {
+		entry := integrationObject(t, item)
+		if entry["action"] == action {
+			if entry["resource_id"] != username {
+				t.Fatalf("审计动作 %s 的资源标识必须为用户名 %q，实际为 %v", action, username, entry["resource_id"])
+			}
+			return
+		}
+	}
+	t.Fatalf("审计查询必须返回动作 %s", action)
 }
