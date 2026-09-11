@@ -70,6 +70,7 @@ async function mount(component: Component, path = '/projects') {
     { path: '/assets/databases', component: { render: () => null } },
     { path: '/assets/load-balancers', component: { render: () => null } },
     { path: '/cloud-sync', component: { render: () => null }, meta: { requiresProjectAdmin: true } },
+	{ path: '/audit-logs', component: { render: () => null }, meta: { requiresProjectAdmin: true } },
     // 控制台导航需要这些真实目标，页面测试不渲染对应内容但不能留下路由警告。
     { path: '/aliyun', component: { render: () => null } },
     { path: '/aws', component: { render: () => null } },
@@ -269,6 +270,7 @@ describe('项目控制台页面', () => {
     expect(text(administrator.root)).toContain('管理')
     expect(text(administrator.root)).toContain('项目管理')
     expect(text(administrator.root)).toContain('云同步管理')
+	expect(text(administrator.root)).toContain('审计日志')
     expect(text(administrator.root)).not.toContain('用户管理')
     administrator.app.unmount()
 
@@ -276,6 +278,7 @@ describe('项目控制台页面', () => {
     const member = await mount(ConsoleLayout, '/assets/servers')
     expect(text(member.root)).not.toContain('项目管理')
     expect(text(member.root)).not.toContain('云同步管理')
+	expect(text(member.root)).not.toContain('审计日志')
     member.app.unmount()
   })
   it('从管理员项目切换到成员项目时退出云同步管理', async () => {

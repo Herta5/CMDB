@@ -9,10 +9,111 @@ import (
 	"testing"
 	"time"
 
+	"cmdb/internal/audit"
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
 )
+
+// TestSourceMutationsRollBackWhenAuditWriteFails 防止接入源新增、编辑或删除与审计分开提交。
+func TestSourceMutationsRollBackWhenAuditWriteFails(t *testing.T) {
+	for _, operation := range []string{"新增", "编辑", "删除"} {
+		t.Run(operation, func(t *testing.T) {
+			db := sourceAuditFailureDatabase(t)
+			repository := NewRepository(db)
+			cipher := NewCredentialCipher("source-atomic-key")
+			setup := NewService(repository, cipher)
+			var source *Source
+			if operation != "新增" {
+				var err error
+				source, err = setup.CreateSource(context.Background(), CreateSourceInput{ProjectID: 3, Provider: ProviderAWS, Name: "原接入源", Credential: json.RawMessage(`{"access_key_id":"id","secret_access_key":"secret"}`)})
+				if err != nil {
+					t.Fatalf("准备接入源失败：%v", err)
+				}
+			}
+			service := NewService(repository, cipher, audit.NewRepository(db))
+			var err error
+			switch operation {
+			case "新增":
+				_, err = service.CreateSource(context.Background(), CreateSourceInput{ProjectID: 3, Provider: ProviderAWS, Name: "新接入源", Credential: json.RawMessage(`{"access_key_id":"id","secret_access_key":"secret"}`)})
+			case "编辑":
+				_, err = service.UpdateSource(context.Background(), 3, source.ID, UpdateSourceInput{Name: "新名称", Enabled: true, SyncIntervalMinutes: 60})
+			case "删除":
+				err = service.DeleteSource(context.Background(), 3, source.ID)
+			}
+			if err == nil {
+				t.Fatalf("审计写入失败时接入源%s必须返回错误", operation)
+			}
+			var values []Source
+			if err := db.Order("id ASC").Find(&values).Error; err != nil {
+				t.Fatalf("查询接入源回滚结果失败：%v", err)
+			}
+			switch operation {
+			case "新增":
+				if len(values) != 0 {
+					t.Fatalf("审计写入失败时必须回滚接入源新增：%+v", values)
+				}
+			case "编辑":
+				if len(values) != 1 || values[0].Name != "原接入源" {
+					t.Fatalf("审计写入失败时必须回滚接入源编辑：%+v", values)
+				}
+			case "删除":
+				if len(values) != 1 || values[0].ID != source.ID {
+					t.Fatalf("审计写入失败时必须回滚接入源删除：%+v", values)
+				}
+			}
+		})
+	}
+}
+
+// TestDeleteSourceDoesNotKeepAuditWhenBusinessDeleteFails 防止删除失败却留下“已删除”审计。
+func TestDeleteSourceDoesNotKeepAuditWhenBusinessDeleteFails(t *testing.T) {
+	db := sourceAuditFailureDatabase(t)
+	if err := db.AutoMigrate(&audit.Log{}); err != nil {
+		t.Fatalf("创建审计测试表失败：%v", err)
+	}
+	repository := NewRepository(db)
+	cipher := NewCredentialCipher("source-delete-failure-key")
+	setup := NewService(repository, cipher)
+	source, err := setup.CreateSource(context.Background(), CreateSourceInput{ProjectID: 3, Provider: ProviderAWS, Name: "删除失败接入源", Credential: json.RawMessage(`{"access_key_id":"id","secret_access_key":"secret"}`)})
+	if err != nil {
+		t.Fatalf("准备接入源失败：%v", err)
+	}
+	if err := db.Exec("CREATE TRIGGER prevent_source_delete BEFORE DELETE ON resource_sources BEGIN SELECT RAISE(ABORT, '禁止测试删除'); END").Error; err != nil {
+		t.Fatalf("创建删除失败触发器失败：%v", err)
+	}
+	service := NewService(repository, cipher, audit.NewRepository(db))
+
+	if err := service.DeleteSource(context.Background(), 3, source.ID); err == nil {
+		t.Fatal("底层删除失败必须返回错误")
+	}
+	var count int64
+	if err := db.Model(&audit.Log{}).Where("action = ? AND resource_id = ?", audit.ActionSourceDeleted, source.ID).Count(&count).Error; err != nil {
+		t.Fatalf("查询删除审计失败：%v", err)
+	}
+	if count != 0 {
+		t.Fatalf("接入源未删除时不得保留删除审计：%d", count)
+	}
+}
+
+// sourceAuditFailureDatabase 创建缺少 audit_logs 的真实数据库，只让审计写入在事务末端失败。
+func sourceAuditFailureDatabase(t *testing.T) *gorm.DB {
+	t.Helper()
+	db, err := gorm.Open(sqlite.Open("file:"+t.Name()+"?mode=memory&cache=shared"), &gorm.Config{Logger: logger.Default.LogMode(logger.Silent)})
+	if err != nil {
+		t.Fatalf("创建接入源事务测试数据库失败：%v", err)
+	}
+	if err := db.AutoMigrate(&Source{}); err != nil {
+		t.Fatalf("创建接入源测试表失败：%v", err)
+	}
+	if err := db.Exec("CREATE TABLE projects (id integer primary key, name text)").Error; err != nil {
+		t.Fatalf("创建项目测试表失败：%v", err)
+	}
+	if err := db.Exec("INSERT INTO projects (id, name) VALUES (?, ?)", 3, "事务项目").Error; err != nil {
+		t.Fatalf("准备项目快照失败：%v", err)
+	}
+	return db
+}
 
 // TestCreateSourceEncryptsCredentialAndDefaultsInterval 验证凭证不以明文落库且同步周期默认为一小时。
 func TestCreateSourceEncryptsCredentialAndDefaultsInterval(t *testing.T) {
@@ -53,7 +154,7 @@ func TestCreateSourceRejectsRemovedKubernetesProvider(t *testing.T) {
 func TestUpdateSourceKeepsCredentialAndDeleteCascades(t *testing.T) {
 	db, _ := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{Logger: logger.Default.LogMode(logger.Silent)})
 	_ = db.Exec("PRAGMA foreign_keys = ON").Error
-	_ = db.AutoMigrate(&Source{}, &Server{}, &Database{}, &LoadBalancer{}, &SyncJob{}, &AuditLog{})
+	_ = db.AutoMigrate(&Source{}, &Server{}, &Database{}, &LoadBalancer{}, &SyncJob{}, &audit.Log{})
 	service := NewService(NewRepository(db), NewCredentialCipher("source-update-key"))
 	created, err := service.CreateSource(context.Background(), CreateSourceInput{ProjectID: 3, Provider: ProviderAWS, Name: "旧名称", Credential: json.RawMessage(`{"token":"old"}`)})
 	if err != nil {

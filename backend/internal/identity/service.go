@@ -4,9 +4,11 @@ package identity
 import (
 	"context"
 	"errors"
+	"strconv"
 	"strings"
 	"time"
 
+	"cmdb/internal/audit"
 	"github.com/golang-jwt/jwt/v5"
 	"gorm.io/gorm"
 )
@@ -59,18 +61,23 @@ type UserClaims struct {
 
 // Service 协调用户仓储与 JWT 签名，避免 HTTP 层直接处理密码哈希或签名密钥。
 type Service struct {
-	repository UserRepository
-	jwtSecret  []byte
-	now        func() time.Time
+	repository    UserRepository
+	jwtSecret     []byte
+	now           func() time.Time
+	auditRecorder audit.Recorder
 }
 
 // NewService 创建身份服务；令牌时限固定为一天，后续如需配置化必须保持过期声明存在。
-func NewService(repository UserRepository, jwtSecret string) *Service {
-	return &Service{
+func NewService(repository UserRepository, jwtSecret string, recorders ...audit.Recorder) *Service {
+	service := &Service{
 		repository: repository,
 		jwtSecret:  []byte(jwtSecret),
 		now:        time.Now,
 	}
+	if len(recorders) > 0 {
+		service.auditRecorder = recorders[0]
+	}
+	return service
 }
 
 // Login 验证凭证并签发会话令牌；仓储未找到和密码不匹配都返回同一业务错误。
@@ -145,7 +152,18 @@ func (s *Service) CreateUser(ctx context.Context, input CreateUserInput) (*User,
 		return nil, err
 	}
 	user := &User{Username: input.Username, PasswordHash: hash, DisplayName: input.DisplayName, Email: input.Email, GlobalRole: input.GlobalRole, Status: input.Status}
-	if err := s.repository.CreateWithPermissions(ctx, user, input.ProjectPermissions); err != nil {
+	if err := s.withAuditTransaction(ctx, func(repository UserRepository, recorder audit.Recorder) error {
+		if err := repository.CreateWithPermissions(ctx, user, input.ProjectPermissions); err != nil {
+			return err
+		}
+		if err := recordAuditWith(ctx, recorder, audit.Entry{Action: audit.ActionUserCreated, ResourceType: "user", ResourceID: strconv.FormatUint(user.ID, 10), Detail: map[string]any{
+			"target_username": user.Username, "target_display_name": user.DisplayName, "global_role": user.GlobalRole,
+			"status": user.Status, "project_permissions": permissionAuditValues(input.ProjectPermissions),
+		}}); err != nil {
+			return err
+		}
+		return recordPermissionChanges(ctx, recorder, *user, nil, input.ProjectPermissions)
+	}); err != nil {
 		if errors.Is(err, ErrProjectPermissionInvalid) {
 			return nil, ErrInvalidUserInput
 		}
@@ -173,13 +191,34 @@ func (s *Service) UpdateUserStatus(ctx context.Context, actorID, id uint64, stat
 	if actorID == id && status != "active" {
 		return nil, ErrSelfProtection
 	}
-	if err := s.repository.UpdateStatus(ctx, id, status); err != nil {
+	var updated *User
+	err := s.withAuditTransaction(ctx, func(repository UserRepository, recorder audit.Recorder) error {
+		// 旧状态、状态更新、审计及响应读取必须处于同一事务，避免并发变化造成错误快照。
+		previous, err := repository.FindByID(ctx, id)
+		if err != nil {
+			return err
+		}
+		if previous == nil {
+			return gorm.ErrRecordNotFound
+		}
+		if err := repository.UpdateStatus(ctx, id, status); err != nil {
+			return err
+		}
+		if err := recordAuditWith(ctx, recorder, audit.Entry{Action: audit.ActionUserStatusChanged, ResourceType: "user", ResourceID: strconv.FormatUint(id, 10), Detail: map[string]any{
+			"target_username": previous.Username, "previous_status": previous.Status, "status": status,
+		}}); err != nil {
+			return err
+		}
+		updated, err = repository.FindByID(ctx, id)
+		return err
+	})
+	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, ErrUserNotFound
 		}
 		return nil, err
 	}
-	return s.repository.FindByID(ctx, id)
+	return updated, nil
 }
 
 // UpdateUser 更新公开资料、全局角色、状态及可选密码，并保护当前管理员不会锁定自己。
@@ -202,6 +241,8 @@ func (s *Service) UpdateUser(ctx context.Context, actorID, id uint64, input Upda
 	if err != nil {
 		return nil, err
 	}
+	previous := *user
+	previousPermissions := append([]ProjectPermission(nil), user.ProjectPermissions...)
 	user.DisplayName = input.DisplayName
 	user.Email = input.Email
 	user.GlobalRole = input.GlobalRole
@@ -213,7 +254,19 @@ func (s *Service) UpdateUser(ctx context.Context, actorID, id uint64, input Upda
 		}
 		user.PasswordHash = hash
 	}
-	if err := s.repository.UpdateWithPermissions(ctx, user, input.ProjectPermissions); err != nil {
+	changedFields := changedUserFields(previous, previousPermissions, input)
+	if err := s.withAuditTransaction(ctx, func(repository UserRepository, recorder audit.Recorder) error {
+		if err := repository.UpdateWithPermissions(ctx, user, input.ProjectPermissions); err != nil {
+			return err
+		}
+		if err := recordAuditWith(ctx, recorder, audit.Entry{Action: audit.ActionUserUpdated, ResourceType: "user", ResourceID: strconv.FormatUint(id, 10), Detail: map[string]any{
+			"target_username": previous.Username, "target_display_name": input.DisplayName,
+			"changed_fields": changedFields, "project_permissions": permissionAuditValues(input.ProjectPermissions),
+		}}); err != nil {
+			return err
+		}
+		return recordPermissionChanges(ctx, recorder, previous, previousPermissions, input.ProjectPermissions)
+	}); err != nil {
 		if errors.Is(err, ErrProjectPermissionInvalid) {
 			return nil, ErrInvalidUserInput
 		}
@@ -223,6 +276,111 @@ func (s *Service) UpdateUser(ctx context.Context, actorID, id uint64, input Upda
 		return nil, err
 	}
 	return s.repository.FindByID(ctx, id)
+}
+
+// withAuditTransaction 在审计启用时强制使用仓储提供的共享事务，禁止降级为两个独立提交。
+func (s *Service) withAuditTransaction(ctx context.Context, operation func(UserRepository, audit.Recorder) error) error {
+	if s.auditRecorder == nil {
+		return operation(s.repository, nil)
+	}
+	repository, ok := s.repository.(auditTransactionUserRepository)
+	if !ok {
+		return ErrIdentityRepositoryUnavailable
+	}
+	return repository.WithAuditTransaction(ctx, operation)
+}
+
+// recordAuditWith 将 nil 记录器视为未启用审计，仅供不装配数据库的轻量领域测试使用。
+func recordAuditWith(ctx context.Context, recorder audit.Recorder, entry audit.Entry) error {
+	if recorder == nil {
+		return nil
+	}
+	return recorder.Record(ctx, entry)
+}
+
+// permissionAuditValues 只保留项目标识和角色，不把项目或用户模型整体写入审计。
+func permissionAuditValues(values []ProjectPermission) []map[string]any {
+	result := make([]map[string]any, 0, len(values))
+	for _, value := range values {
+		result = append(result, map[string]any{"project_id": value.ProjectID, "role": value.Role})
+	}
+	return result
+}
+
+// recordPermissionChanges 把用户管理中的授权替换拆成项目级动作，让受影响项目管理员也能审计。
+func recordPermissionChanges(ctx context.Context, recorder audit.Recorder, user User, previous, next []ProjectPermission) error {
+	before := permissionMap(previous)
+	after := permissionMap(next)
+	for projectID, previousRole := range before {
+		nextRole, exists := after[projectID]
+		projectIDCopy := projectID
+		if !exists {
+			if err := recordAuditWith(ctx, recorder, audit.Entry{ProjectID: &projectIDCopy, Action: audit.ActionProjectMemberRemoved, ResourceType: "project_member", ResourceID: strconv.FormatUint(user.ID, 10), Detail: map[string]any{"target_user_id": user.ID, "target_username": user.Username, "previous_role": previousRole, "source": "user_management"}}); err != nil {
+				return err
+			}
+		} else if nextRole != previousRole {
+			if err := recordAuditWith(ctx, recorder, audit.Entry{ProjectID: &projectIDCopy, Action: audit.ActionProjectMemberRoleChanged, ResourceType: "project_member", ResourceID: strconv.FormatUint(user.ID, 10), Detail: map[string]any{"target_user_id": user.ID, "target_username": user.Username, "previous_role": previousRole, "role": nextRole, "source": "user_management"}}); err != nil {
+				return err
+			}
+		}
+	}
+	for projectID, role := range after {
+		if _, exists := before[projectID]; exists {
+			continue
+		}
+		projectIDCopy := projectID
+		if err := recordAuditWith(ctx, recorder, audit.Entry{ProjectID: &projectIDCopy, Action: audit.ActionProjectMemberAdded, ResourceType: "project_member", ResourceID: strconv.FormatUint(user.ID, 10), Detail: map[string]any{"target_user_id": user.ID, "target_username": user.Username, "role": role, "source": "user_management"}}); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// permissionMap 用项目标识和角色比较授权，忽略仅供页面显示的项目名称。
+func permissionMap(values []ProjectPermission) map[uint64]string {
+	result := make(map[uint64]string, len(values))
+	for _, value := range values {
+		result[value.ProjectID] = value.Role
+	}
+	return result
+}
+
+// changedUserFields 只记录发生变化的字段名称；密码内容及哈希永远不进入详情。
+func changedUserFields(previous User, previousPermissions []ProjectPermission, input UpdateUserInput) []string {
+	fields := make([]string, 0, 6)
+	if previous.DisplayName != input.DisplayName {
+		fields = append(fields, "display_name")
+	}
+	if previous.Email != input.Email {
+		fields = append(fields, "email")
+	}
+	if previous.GlobalRole != input.GlobalRole {
+		fields = append(fields, "global_role")
+	}
+	if previous.Status != input.Status {
+		fields = append(fields, "status")
+	}
+	if !permissionMapsEqual(permissionMap(previousPermissions), permissionMap(input.ProjectPermissions)) {
+		fields = append(fields, "project_permissions")
+	}
+	if input.Password != "" {
+		// 只表达认证凭据发生替换，字段名也不复用敏感请求键，避免审计扫描产生歧义。
+		fields = append(fields, "login_secret_replaced")
+	}
+	return fields
+}
+
+// permissionMapsEqual 判断项目角色集合是否相同，顺序变化不应被误报为授权变更。
+func permissionMapsEqual(left, right map[uint64]string) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for projectID, role := range left {
+		if right[projectID] != role {
+			return false
+		}
+	}
+	return true
 }
 
 // validRoleAndStatus 统一校验全局角色和账号状态，创建与编辑保持同一契约。

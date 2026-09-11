@@ -5,6 +5,7 @@ import (
 	"context"
 	"time"
 
+	"cmdb/internal/audit"
 	"cmdb/internal/identity"
 	"gorm.io/gorm"
 )
@@ -26,6 +27,11 @@ type Repository interface {
 	DeleteMember(ctx context.Context, projectID, userID uint64) error
 }
 
+// auditTransactionRepository 是启用审计时项目仓储必须提供的共享事务能力。
+type auditTransactionRepository interface {
+	WithAuditTransaction(ctx context.Context, operation func(Repository, audit.Recorder) error) error
+}
+
 // gormRepository 是 Repository 的 GORM 实现，所有查询都明确落在新版项目表。
 type gormRepository struct {
 	db *gorm.DB
@@ -34,6 +40,13 @@ type gormRepository struct {
 // NewRepository 创建项目仓储，数据库连接必须由平台层统一装配。
 func NewRepository(db *gorm.DB) Repository {
 	return &gormRepository{db: db}
+}
+
+// WithAuditTransaction 将项目、成员关系和审计日志绑定到同一数据库事务。
+func (r *gormRepository) WithAuditTransaction(ctx context.Context, operation func(Repository, audit.Recorder) error) error {
+	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		return operation(&gormRepository{db: tx}, audit.NewRepository(tx))
+	})
 }
 
 // Create 写入项目，数据库唯一索引用于并发场景下最终保障项目编码唯一。

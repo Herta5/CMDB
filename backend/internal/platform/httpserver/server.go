@@ -4,6 +4,7 @@ package httpserver
 import (
 	"net/http"
 
+	"cmdb/internal/audit"
 	"cmdb/internal/identity"
 	"cmdb/internal/project"
 	cloudresource "cmdb/internal/resource"
@@ -25,6 +26,8 @@ type Dependencies struct {
 // 用户仓储允许测试替换，生产环境则统一由平台层数据库创建，避免领域模块自行管理连接。
 func New(dependencies Dependencies) *gin.Engine {
 	engine := gin.New()
+	// 当前单体直接对外提供 HTTP，不信任客户端自报的转发头，避免伪造审计来源 IP。
+	_ = engine.SetTrustedProxies(nil)
 	engine.Use(gin.Recovery())
 	// 健康检查只报告进程存活，不暴露数据库配置，也不要求部署探针持有用户凭证。
 	engine.GET("/health", func(c *gin.Context) {
@@ -39,13 +42,16 @@ func New(dependencies Dependencies) *gin.Engine {
 	if dependencies.Database != nil {
 		projectRepository = project.NewRepository(dependencies.Database)
 	}
-	identityService := identity.NewService(repository, dependencies.JWTSecret)
+	// 全部领域共享同一个审计仓储，平台模块不得复制审计表写入逻辑。
+	auditRepository := audit.NewRepository(dependencies.Database)
+	identityService := identity.NewService(repository, dependencies.JWTSecret, auditRepository)
 	authenticator := NewAuthenticator(identityService, dependencies.JWTSecret)
 	handler := identity.NewHTTPHandler(identityService)
-	projectHandler := project.NewHTTPHandler(project.NewService(projectRepository))
+	projectHandler := project.NewHTTPHandler(project.NewService(projectRepository, auditRepository))
+	auditHandler := audit.NewHTTPHandler(audit.NewService(auditRepository))
 	resourceService := dependencies.ResourceService
 	if resourceService == nil {
-		resourceService = cloudresource.NewService(cloudresource.NewRepository(dependencies.Database), cloudresource.NewCredentialCipher(dependencies.EncryptionKey))
+		resourceService = cloudresource.NewService(cloudresource.NewRepository(dependencies.Database), cloudresource.NewCredentialCipher(dependencies.EncryptionKey), auditRepository)
 	}
 	resourceHandler := cloudresource.NewHTTPHandler(resourceService, dependencies.Collectors)
 	engine.POST("/api/v1/auth/login", handler.Login)
@@ -57,6 +63,15 @@ func New(dependencies Dependencies) *gin.Engine {
 	users.POST("", func(c *gin.Context) { handler.CreateUser(c, CurrentUser(c)) })
 	users.PUT("/:id", func(c *gin.Context) { handler.UpdateUser(c, CurrentUser(c)) })
 	users.PUT("/:id/status", func(c *gin.Context) { handler.UpdateUserStatus(c, CurrentUser(c)) })
+	// 全局审计包含无项目归属的用户操作，只允许系统管理员访问。
+	auditLogs := engine.Group("/api/v1/audit-logs", authenticator.RequireUser())
+	auditLogs.GET("", func(c *gin.Context) {
+		if CurrentUser(c).GlobalRole != identity.GlobalRoleSystemAdmin {
+			c.JSON(http.StatusForbidden, gin.H{"code": "AUDIT_FORBIDDEN", "message": "无权查看审计日志"})
+			return
+		}
+		auditHandler.ListGlobal(c)
+	})
 	projects := engine.Group("/api/v1/projects")
 	projects.Use(authenticator.RequireUser())
 	projects.GET("", func(c *gin.Context) {
@@ -79,6 +94,7 @@ func New(dependencies Dependencies) *gin.Engine {
 	members.PUT("/:user_id", project.RequireRole(projectRepository, project.MemberRoleProjectAdmin), projectHandler.UpdateMemberRole)
 	members.DELETE("/:user_id", project.RequireRole(projectRepository, project.MemberRoleProjectAdmin), projectHandler.RemoveMember)
 	projects.GET("/:id/member-candidates", project.RequireRole(projectRepository, project.MemberRoleProjectAdmin), projectHandler.ListMemberCandidates)
+	projects.GET("/:id/audit-logs", project.RequireRole(projectRepository, project.MemberRoleProjectAdmin), auditHandler.ListProject)
 	sources := projects.Group("/:id/sources", project.RequireRole(projectRepository, projectReadRoles...))
 	sources.GET("", resourceHandler.ListSources)
 	sources.POST("", project.RequireRole(projectRepository, project.MemberRoleProjectAdmin), resourceHandler.CreateSource)

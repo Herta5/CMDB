@@ -5,18 +5,21 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strconv"
 	"sync"
 	"time"
 
+	"cmdb/internal/audit"
 	"gorm.io/gorm"
 )
 
 // Service 协调采集快照与统一资源仓储。
 type Service struct {
-	repository  *Repository
-	cipher      *CredentialCipher
-	now         func() time.Time
-	sourceLocks sync.Map
+	repository    *Repository
+	cipher        *CredentialCipher
+	now           func() time.Time
+	sourceLocks   sync.Map
+	auditRecorder audit.Recorder
 }
 
 // ErrSyncAlreadyRunning 表示同一接入源已有同步任务正在执行。
@@ -50,8 +53,12 @@ type ConnectionTestResult struct {
 }
 
 // NewService 创建资源服务，调用方必须提供部署密钥派生的凭证加密器。
-func NewService(repository *Repository, cipher *CredentialCipher) *Service {
-	return &Service{repository: repository, cipher: cipher, now: time.Now}
+func NewService(repository *Repository, cipher *CredentialCipher, recorders ...audit.Recorder) *Service {
+	service := &Service{repository: repository, cipher: cipher, now: time.Now}
+	if len(recorders) > 0 {
+		service.auditRecorder = recorders[0]
+	}
+	return service
 }
 
 // CreateSource 校验平台配置并在进入仓储前加密凭证。
@@ -82,10 +89,15 @@ func (s *Service) CreateSource(ctx context.Context, input CreateSourceInput) (*S
 	}
 	next := s.now().Add(time.Duration(interval) * time.Minute)
 	source := &Source{ProjectID: input.ProjectID, Provider: input.Provider, Name: input.Name, Region: input.Region, EncryptedCredential: encrypted, CredentialHint: "已安全配置", Config: config, Enabled: true, SyncIntervalMinutes: interval, NextSyncAt: &next}
-	if err := s.repository.CreateSource(ctx, source); err != nil {
+	projectID := source.ProjectID
+	if err := s.withAuditTransaction(ctx, func(repository *Repository, recorder audit.Recorder) error {
+		if err := repository.CreateSource(ctx, source); err != nil {
+			return err
+		}
+		return recordAuditWith(ctx, recorder, audit.Entry{ProjectID: &projectID, Action: audit.ActionSourceCreated, ResourceType: "resource_source", ResourceID: strconv.FormatUint(source.ID, 10), Detail: map[string]any{"provider": source.Provider, "name": source.Name}})
+	}); err != nil {
 		return nil, err
 	}
-	_ = s.repository.CreateAudit(ctx, source.ProjectID, "source.created", "resource_source", source.ID, map[string]any{"provider": source.Provider, "name": source.Name})
 	return source, nil
 }
 
@@ -114,10 +126,15 @@ func (s *Service) UpdateSource(ctx context.Context, projectID, sourceID uint64, 
 		updates["encrypted_credential"] = encrypted
 		updates["credential_hint"] = "已安全配置"
 	}
-	if err := s.repository.UpdateSource(ctx, source, updates); err != nil {
+	projectIDCopy := projectID
+	if err := s.withAuditTransaction(ctx, func(repository *Repository, recorder audit.Recorder) error {
+		if err := repository.UpdateSource(ctx, source, updates); err != nil {
+			return err
+		}
+		return recordAuditWith(ctx, recorder, audit.Entry{ProjectID: &projectIDCopy, Action: audit.ActionSourceUpdated, ResourceType: "resource_source", ResourceID: strconv.FormatUint(sourceID, 10), Detail: map[string]any{"provider": source.Provider, "name": input.Name, "credential_replaced": len(input.Credential) > 0}})
+	}); err != nil {
 		return nil, err
 	}
-	_ = s.repository.CreateAudit(ctx, projectID, "source.updated", "resource_source", sourceID, map[string]any{"provider": source.Provider, "name": input.Name, "credential_replaced": len(input.Credential) > 0})
 	return s.repository.FindSource(ctx, sourceID)
 }
 
@@ -127,10 +144,14 @@ func (s *Service) DeleteSource(ctx context.Context, projectID, sourceID uint64) 
 	if err != nil {
 		return err
 	}
-	if err := s.repository.CreateAudit(ctx, projectID, "source.deleted", "resource_source", sourceID, map[string]any{"provider": source.Provider, "name": source.Name}); err != nil {
-		return err
-	}
-	return s.repository.DeleteSource(ctx, source)
+	projectIDCopy := projectID
+	return s.withAuditTransaction(ctx, func(repository *Repository, recorder audit.Recorder) error {
+		// 删除审计先在事务中保存接入源快照；业务删除失败时该审计也随事务回滚。
+		if err := recordAuditWith(ctx, recorder, audit.Entry{ProjectID: &projectIDCopy, Action: audit.ActionSourceDeleted, ResourceType: "resource_source", ResourceID: strconv.FormatUint(sourceID, 10), Detail: map[string]any{"provider": source.Provider, "name": source.Name}}); err != nil {
+			return err
+		}
+		return repository.DeleteSource(ctx, source)
+	})
 }
 
 // ListSources 仅返回指定项目和平台的接入源，密文字段受 JSON 标签保护。
@@ -222,10 +243,11 @@ func (s *Service) enqueueSync(ctx context.Context, sourceID uint64, trigger stri
 	}
 	// 后台工作器使用独立快照，避免与 HTTP 正在序列化的 queued 返回值发生数据竞争。
 	workerJob := *job
+	workerContext := audit.DetachedContext(ctx)
 	go func() {
 		defer lock.Unlock()
 		// HTTP 请求结束会取消原上下文，后台任务使用独立上下文完成状态落库。
-		_, _ = s.executeSync(context.Background(), sourceID, trigger, collector, &workerJob)
+		_, _ = s.executeSync(workerContext, sourceID, trigger, collector, &workerJob)
 	}()
 	return job, nil
 }
@@ -267,6 +289,10 @@ func (s *Service) TestConnection(ctx context.Context, projectID, sourceID uint64
 	}()
 	results, err := collector.Probe(ctx, *source, credential)
 	if err != nil {
+		projectIDCopy := projectID
+		if auditErr := s.recordAudit(ctx, audit.Entry{ProjectID: &projectIDCopy, Action: audit.ActionSourceConnectionTested, ResourceType: "resource_source", ResourceID: strconv.FormatUint(sourceID, 10), Detail: map[string]any{"status": "failed", "error_code": safeConnectionErrorCode(err)}}); auditErr != nil {
+			return nil, auditErr
+		}
 		return nil, err
 	}
 	// 空集合也必须编码为 JSON 数组，避免前端把 null 当作数组读取时误报连接失败。
@@ -278,8 +304,22 @@ func (s *Service) TestConnection(ctx context.Context, projectID, sourceID uint64
 			value.FailedTypes = append(value.FailedTypes, result.ResourceType)
 		}
 	}
-	_ = s.repository.CreateAudit(ctx, projectID, "source.connection_tested", "resource_source", sourceID, map[string]any{"reachable_types": value.ReachableTypes, "failed_types": value.FailedTypes})
+	projectIDCopy := projectID
+	if err := s.recordAudit(ctx, audit.Entry{ProjectID: &projectIDCopy, Action: audit.ActionSourceConnectionTested, ResourceType: "resource_source", ResourceID: strconv.FormatUint(sourceID, 10), Detail: map[string]any{"reachable_types": value.ReachableTypes, "failed_types": value.FailedTypes}}); err != nil {
+		return nil, err
+	}
 	return value, nil
+}
+
+// safeConnectionErrorCode 将云 SDK 错误收敛为有限分类，底层响应文本不得进入审计。
+func safeConnectionErrorCode(err error) string {
+	if errors.Is(err, ErrAuthenticationFailed) {
+		return "authentication_failed"
+	}
+	if errors.Is(err, ErrPermissionDenied) {
+		return "permission_denied"
+	}
+	return "connection_failed"
 }
 
 // trySourceLock 非阻塞占用单个接入源，不影响其他接入源并行。
@@ -351,13 +391,18 @@ func (s *Service) executeSync(ctx context.Context, sourceID uint64, trigger stri
 	source.LastSyncAt = &finished
 	next := finished.Add(time.Duration(source.SyncIntervalMinutes) * time.Minute)
 	source.NextSyncAt = &next
-	if err := s.repository.SaveJob(ctx, job); err != nil {
+	projectID := source.ProjectID
+	if err := s.withAuditTransaction(ctx, func(repository *Repository, recorder audit.Recorder) error {
+		if err := repository.SaveJob(ctx, job); err != nil {
+			return err
+		}
+		if err := repository.UpdateSourceSchedule(ctx, source); err != nil {
+			return err
+		}
+		return recordAuditWith(ctx, recorder, audit.Entry{ProjectID: &projectID, Action: audit.ActionSourceSynced, ResourceType: "resource_source", ResourceID: strconv.FormatUint(source.ID, 10), Detail: map[string]any{"trigger": trigger, "status": job.Status, "statistics": statistics}})
+	}); err != nil {
 		return nil, err
 	}
-	if err := s.repository.UpdateSourceSchedule(ctx, source); err != nil {
-		return nil, err
-	}
-	_ = s.repository.CreateAudit(ctx, source.ProjectID, "source.synced", "resource_source", source.ID, map[string]any{"trigger": trigger, "status": job.Status, "statistics": statistics})
 	return job, nil
 }
 
@@ -367,8 +412,14 @@ func (s *Service) finishFailed(ctx context.Context, job *SyncJob, summary string
 	job.ErrorSummary = summary
 	finished := s.now()
 	job.FinishedAt = &finished
-	if err := s.repository.SaveJob(ctx, job); err != nil {
-		return nil, err
+	projectID := job.ProjectID
+	if err := s.withAuditTransaction(ctx, func(repository *Repository, recorder audit.Recorder) error {
+		if err := repository.SaveJob(ctx, job); err != nil {
+			return err
+		}
+		return recordAuditWith(ctx, recorder, audit.Entry{ProjectID: &projectID, Action: audit.ActionSourceSynced, ResourceType: "resource_source", ResourceID: strconv.FormatUint(job.SourceID, 10), Detail: map[string]any{"trigger": job.Trigger, "status": job.Status, "error_summary": summary}})
+	}); err != nil {
+		return job, err
 	}
 	if errors.Is(cause, ErrAuthenticationFailed) || errors.Is(cause, ErrPermissionDenied) {
 		return job, nil
@@ -389,15 +440,15 @@ func (s *Service) applyType(ctx context.Context, source Source, resourceType str
 			seen = append(seen, snapshot.ExternalID)
 			var existing assetRow
 			lookupErr := tx.Table(table).Where("source_id = ? AND resource_type = ? AND external_id = ?", source.ID, resourceType, snapshot.ExternalID).First(&existing).Error
-			action := "resource.updated"
+			action := audit.ActionResourceUpdated
 			if errors.Is(lookupErr, gorm.ErrRecordNotFound) {
 				counts["added"]++
-				action = "resource.created"
+				action = audit.ActionResourceCreated
 			} else if lookupErr != nil {
 				return lookupErr
 			} else if existing.AssetStatus == AssetStatusLost {
 				counts["restored"]++
-				action = "resource.restored"
+				action = audit.ActionResourceRestored
 			} else {
 				counts["updated"]++
 			}
@@ -422,8 +473,7 @@ func (s *Service) applyType(ctx context.Context, source Source, resourceType str
 				return err
 			}
 			projectID := source.ProjectID
-			detail, _ := json.Marshal(map[string]any{"source_id": source.ID, "provider": source.Provider, "resource_type": resourceType, "external_id": snapshot.ExternalID})
-			if err := tx.Create(&AuditLog{ProjectID: &projectID, Action: action, ResourceType: resourceType, ResourceID: snapshot.ExternalID, Detail: detail}).Error; err != nil {
+			if err := audit.RecordInTransaction(ctx, tx, audit.Entry{ProjectID: &projectID, Action: action, ResourceType: resourceType, ResourceID: snapshot.ExternalID, Detail: map[string]any{"source_id": source.ID, "provider": source.Provider, "resource_type": resourceType, "external_id": snapshot.ExternalID}}); err != nil {
 				return err
 			}
 		}
@@ -446,8 +496,7 @@ func (s *Service) applyType(ctx context.Context, source Source, resourceType str
 		}
 		for _, value := range missing {
 			projectID := source.ProjectID
-			detail, _ := json.Marshal(map[string]any{"source_id": source.ID, "provider": source.Provider, "resource_type": resourceType})
-			if err := tx.Create(&AuditLog{ProjectID: &projectID, Action: "resource.lost", ResourceType: resourceType, ResourceID: value.ExternalID, Detail: detail}).Error; err != nil {
+			if err := audit.RecordInTransaction(ctx, tx, audit.Entry{ProjectID: &projectID, Action: audit.ActionResourceLost, ResourceType: resourceType, ResourceID: value.ExternalID, Detail: map[string]any{"source_id": source.ID, "provider": source.Provider, "resource_type": resourceType}}); err != nil {
 				return err
 			}
 		}
@@ -459,6 +508,30 @@ func (s *Service) applyType(ctx context.Context, source Source, resourceType str
 // PurgeLostResources 物理删除连续失联满 24 小时的资源。
 func (s *Service) PurgeLostResources(ctx context.Context) (int64, error) {
 	return s.repository.PurgeLostBefore(ctx, s.now().Add(-24*time.Hour))
+}
+
+// withAuditTransaction 在启用审计时把接入源变更和审计绑定到同一数据库事务。
+func (s *Service) withAuditTransaction(ctx context.Context, operation func(*Repository, audit.Recorder) error) error {
+	if s.auditRecorder == nil {
+		return operation(s.repository, nil)
+	}
+	return s.repository.WithAuditTransaction(ctx, operation)
+}
+
+// recordAuditWith 将 nil 记录器视为轻量测试未启用审计，生产路径始终收到事务记录器。
+func recordAuditWith(ctx context.Context, recorder audit.Recorder, entry audit.Entry) error {
+	if recorder == nil {
+		return nil
+	}
+	return recorder.Record(ctx, entry)
+}
+
+// recordAudit 将非业务变更事件交给统一记录器；资源生命周期事务仍直接使用统一审计模型。
+func (s *Service) recordAudit(ctx context.Context, entry audit.Entry) error {
+	if s.auditRecorder == nil {
+		return nil
+	}
+	return s.auditRecorder.Record(ctx, entry)
 }
 
 // SyncDueSources 并行执行所有已到期接入源；同源互斥仍由 Sync 统一保证。

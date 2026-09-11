@@ -4,8 +4,10 @@ package project
 import (
 	"context"
 	"errors"
+	"strconv"
 	"strings"
 
+	"cmdb/internal/audit"
 	"cmdb/internal/identity"
 	"github.com/jackc/pgx/v5/pgconn"
 	"gorm.io/gorm"
@@ -48,12 +50,17 @@ type UpdateInput struct {
 
 // Service 协调项目仓储与领域规则，HTTP 授权仍由边界层根据当前 JWT 声明执行。
 type Service struct {
-	repository Repository
+	repository    Repository
+	auditRecorder audit.Recorder
 }
 
 // NewService 创建项目领域服务。
-func NewService(repository Repository) *Service {
-	return &Service{repository: repository}
+func NewService(repository Repository, recorders ...audit.Recorder) *Service {
+	service := &Service{repository: repository}
+	if len(recorders) > 0 {
+		service.auditRecorder = recorders[0]
+	}
+	return service
 }
 
 // Create 创建默认启用的业务项目，并在写入前返回稳定的重复编码错误。
@@ -77,7 +84,15 @@ func (s *Service) Create(ctx context.Context, input CreateInput) (*Project, erro
 		Status:      ProjectStatusEnabled,
 		OwnerUserID: input.OwnerUserID,
 	}
-	if err := s.repository.Create(ctx, project); err != nil {
+	if err := s.withAuditTransaction(ctx, func(repository Repository, recorder audit.Recorder) error {
+		if err := repository.Create(ctx, project); err != nil {
+			return err
+		}
+		projectID := project.ID
+		return recordAuditWith(ctx, recorder, audit.Entry{ProjectID: &projectID, Action: audit.ActionProjectCreated, ResourceType: "project", ResourceID: strconv.FormatUint(project.ID, 10), Detail: map[string]any{
+			"project_code": project.Code, "project_name": project.Name, "owner_user_id": project.OwnerUserID,
+		}})
+	}); err != nil {
 		if isDuplicateCodeError(err) {
 			return nil, ErrDuplicateCode
 		}
@@ -107,11 +122,21 @@ func (s *Service) Update(ctx context.Context, id uint64, input UpdateInput) (*Pr
 	if project == nil {
 		return nil, ErrProjectNotFound
 	}
+	previousName, previousStatus, previousOwner := project.Name, project.Status, project.OwnerUserID
 	project.Name = input.Name
 	project.Description = input.Description
 	project.Status = input.Status
 	project.OwnerUserID = input.OwnerUserID
-	if err := s.repository.Update(ctx, project); err != nil {
+	if err := s.withAuditTransaction(ctx, func(repository Repository, recorder audit.Recorder) error {
+		if err := repository.Update(ctx, project); err != nil {
+			return err
+		}
+		projectID := project.ID
+		return recordAuditWith(ctx, recorder, audit.Entry{ProjectID: &projectID, Action: audit.ActionProjectUpdated, ResourceType: "project", ResourceID: strconv.FormatUint(project.ID, 10), Detail: map[string]any{
+			"project_code": project.Code, "project_name": project.Name, "previous_name": previousName,
+			"previous_status": previousStatus, "status": project.Status, "previous_owner_user_id": previousOwner, "owner_user_id": project.OwnerUserID,
+		}})
+	}); err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, ErrProjectNotFound
 		}
@@ -185,7 +210,15 @@ func (s *Service) AddMember(ctx context.Context, projectID, userID uint64, role 
 		return nil, err
 	}
 	member := &MemberRole{ProjectID: projectID, UserID: userID, Role: role}
-	if err := s.repository.CreateMember(ctx, member); err != nil {
+	if err := s.withAuditTransaction(ctx, func(repository Repository, recorder audit.Recorder) error {
+		if err := repository.CreateMember(ctx, member); err != nil {
+			return err
+		}
+		projectIDCopy := projectID
+		return recordAuditWith(ctx, recorder, audit.Entry{ProjectID: &projectIDCopy, Action: audit.ActionProjectMemberAdded, ResourceType: "project_member", ResourceID: strconv.FormatUint(userID, 10), Detail: map[string]any{
+			"target_user_id": userID, "role": role,
+		}})
+	}); err != nil {
 		if isDuplicateCodeError(err) {
 			return nil, ErrMemberAlreadyExists
 		}
@@ -202,22 +235,36 @@ func (s *Service) UpdateMemberRole(ctx context.Context, projectID, userID uint64
 	if projectID == 0 || userID == 0 || !validMemberRole(role) {
 		return nil, ErrInvalidMemberInput
 	}
-	if err := s.repository.UpdateMemberRole(ctx, projectID, userID, role); err != nil {
+	previous, previousErr := s.repository.FindMemberRole(ctx, projectID, userID)
+	if previousErr != nil {
+		if errors.Is(previousErr, gorm.ErrRecordNotFound) {
+			return nil, ErrMemberNotFound
+		}
+		return nil, previousErr
+	}
+	var member *MemberRole
+	if err := s.withAuditTransaction(ctx, func(repository Repository, recorder audit.Recorder) error {
+		if err := repository.UpdateMemberRole(ctx, projectID, userID, role); err != nil {
+			return err
+		}
+		// 更新后在同一事务内读取，响应和审计必须对应已提交的同一成员版本。
+		var err error
+		member, err = repository.FindMemberRole(ctx, projectID, userID)
+		if err != nil {
+			return err
+		}
+		if member == nil {
+			return gorm.ErrRecordNotFound
+		}
+		projectIDCopy := projectID
+		return recordAuditWith(ctx, recorder, audit.Entry{ProjectID: &projectIDCopy, Action: audit.ActionProjectMemberRoleChanged, ResourceType: "project_member", ResourceID: strconv.FormatUint(userID, 10), Detail: map[string]any{
+			"target_user_id": userID, "previous_role": previous.Role, "role": role,
+		}})
+	}); err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, ErrMemberNotFound
 		}
 		return nil, err
-	}
-	// 更新后重新读取，响应必须保留数据库生成的成员标识和创建时间，不能伪造零值成员对象。
-	member, err := s.repository.FindMemberRole(ctx, projectID, userID)
-	if err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return nil, ErrMemberNotFound
-		}
-		return nil, err
-	}
-	if member == nil {
-		return nil, ErrMemberNotFound
 	}
 	return member, nil
 }
@@ -230,7 +277,22 @@ func (s *Service) RemoveMember(ctx context.Context, projectID, userID uint64) er
 	if projectID == 0 || userID == 0 {
 		return ErrInvalidMemberInput
 	}
-	if err := s.repository.DeleteMember(ctx, projectID, userID); err != nil {
+	previous, previousErr := s.repository.FindMemberRole(ctx, projectID, userID)
+	if previousErr != nil {
+		if errors.Is(previousErr, gorm.ErrRecordNotFound) {
+			return ErrMemberNotFound
+		}
+		return previousErr
+	}
+	if err := s.withAuditTransaction(ctx, func(repository Repository, recorder audit.Recorder) error {
+		if err := repository.DeleteMember(ctx, projectID, userID); err != nil {
+			return err
+		}
+		projectIDCopy := projectID
+		return recordAuditWith(ctx, recorder, audit.Entry{ProjectID: &projectIDCopy, Action: audit.ActionProjectMemberRemoved, ResourceType: "project_member", ResourceID: strconv.FormatUint(userID, 10), Detail: map[string]any{
+			"target_user_id": userID, "previous_role": previous.Role,
+		}})
+	}); err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return ErrMemberNotFound
 		}
@@ -257,7 +319,36 @@ func (s *Service) Delete(ctx context.Context, id uint64) error {
 	if project == nil {
 		return ErrProjectNotFound
 	}
-	return s.repository.Delete(ctx, id)
+	projectID := project.ID
+	return s.withAuditTransaction(ctx, func(repository Repository, recorder audit.Recorder) error {
+		// 删除审计先在事务内读取项目名称快照；后续删除失败时整个事务仍会回滚。
+		if err := recordAuditWith(ctx, recorder, audit.Entry{ProjectID: &projectID, Action: audit.ActionProjectDeleted, ResourceType: "project", ResourceID: strconv.FormatUint(project.ID, 10), Detail: map[string]any{
+			"project_code": project.Code, "project_name": project.Name,
+		}}); err != nil {
+			return err
+		}
+		return repository.Delete(ctx, id)
+	})
+}
+
+// withAuditTransaction 在审计启用时强制使用项目仓储提供的共享事务能力。
+func (s *Service) withAuditTransaction(ctx context.Context, operation func(Repository, audit.Recorder) error) error {
+	if s.auditRecorder == nil {
+		return operation(s.repository, nil)
+	}
+	repository, ok := s.repository.(auditTransactionRepository)
+	if !ok {
+		return ErrProjectRepositoryUnavailable
+	}
+	return repository.WithAuditTransaction(ctx, operation)
+}
+
+// recordAuditWith 将 nil 记录器视为轻量测试未启用审计，生产路径始终收到事务记录器。
+func recordAuditWith(ctx context.Context, recorder audit.Recorder, entry audit.Entry) error {
+	if recorder == nil {
+		return nil
+	}
+	return recorder.Record(ctx, entry)
 }
 
 // isDuplicateCodeError 兼容 GORM 已翻译错误和未启用 TranslateError 时原样返回的 PostgreSQL 23505。

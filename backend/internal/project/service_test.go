@@ -7,12 +7,116 @@ import (
 	"errors"
 	"testing"
 
+	"cmdb/internal/audit"
 	"cmdb/internal/identity"
 	"github.com/jackc/pgx/v5/pgconn"
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
 )
+
+// TestCreateProjectRollsBackWhenAuditWriteFails 防止项目先创建而审计记录缺失。
+func TestCreateProjectRollsBackWhenAuditWriteFails(t *testing.T) {
+	_, db := newProjectServiceWithDatabase(t)
+	service := NewService(NewRepository(db), audit.NewRepository(db))
+
+	if _, err := service.Create(context.Background(), CreateInput{Name: "事务项目", Code: "atomic-project"}); err == nil {
+		t.Fatal("审计写入失败时创建项目必须返回错误")
+	}
+	var count int64
+	if err := db.Model(&Project{}).Where("code = ?", "atomic-project").Count(&count).Error; err != nil {
+		t.Fatalf("查询项目创建回滚结果失败：%v", err)
+	}
+	if count != 0 {
+		t.Fatalf("审计写入失败时必须回滚新项目：%d", count)
+	}
+}
+
+// TestProjectUpdateAndDeleteRollBackWhenAuditWriteFails 防止项目编辑或删除与审计分开提交。
+func TestProjectUpdateAndDeleteRollBackWhenAuditWriteFails(t *testing.T) {
+	t.Run("编辑项目", func(t *testing.T) {
+		setup, db := newProjectServiceWithDatabase(t)
+		project, err := setup.Create(context.Background(), CreateInput{Name: "原项目", Code: "atomic-update"})
+		if err != nil {
+			t.Fatalf("准备项目失败：%v", err)
+		}
+		service := NewService(NewRepository(db), audit.NewRepository(db))
+		if _, err := service.Update(context.Background(), project.ID, UpdateInput{Name: "新项目", Status: ProjectStatusDisabled}); err == nil {
+			t.Fatal("审计写入失败时编辑项目必须返回错误")
+		}
+		var persisted Project
+		if err := db.First(&persisted, project.ID).Error; err != nil {
+			t.Fatalf("读取项目编辑回滚结果失败：%v", err)
+		}
+		if persisted.Name != "原项目" || persisted.Status != ProjectStatusEnabled {
+			t.Fatalf("审计写入失败时必须回滚项目编辑：%+v", persisted)
+		}
+	})
+
+	t.Run("删除项目", func(t *testing.T) {
+		setup, db := newProjectServiceWithDatabase(t)
+		project, err := setup.Create(context.Background(), CreateInput{Name: "待删除项目", Code: "atomic-delete"})
+		if err != nil {
+			t.Fatalf("准备项目失败：%v", err)
+		}
+		service := NewService(NewRepository(db), audit.NewRepository(db))
+		if err := service.Delete(context.Background(), project.ID); err == nil {
+			t.Fatal("审计写入失败时删除项目必须返回错误")
+		}
+		var count int64
+		if err := db.Model(&Project{}).Where("id = ?", project.ID).Count(&count).Error; err != nil {
+			t.Fatalf("查询项目删除回滚结果失败：%v", err)
+		}
+		if count != 1 {
+			t.Fatalf("审计写入失败时必须恢复被删除项目：%d", count)
+		}
+	})
+}
+
+// TestProjectMemberMutationsRollBackWhenAuditWriteFails 防止成员新增、改角或移除产生无审计变更。
+func TestProjectMemberMutationsRollBackWhenAuditWriteFails(t *testing.T) {
+	for _, operation := range []string{"新增", "改角", "移除"} {
+		t.Run(operation, func(t *testing.T) {
+			setup, db := newProjectServiceWithDatabase(t)
+			project, err := setup.Create(context.Background(), CreateInput{Name: "成员项目", Code: "member-" + operation})
+			if err != nil {
+				t.Fatalf("准备项目失败：%v", err)
+			}
+			userID := uint64(7)
+			if err := db.Create(&identity.User{ID: userID, Username: "member-" + operation, PasswordHash: "test-hash", DisplayName: "成员用户", GlobalRole: identity.GlobalRoleUser, Status: "active"}).Error; err != nil {
+				t.Fatalf("准备成员用户失败：%v", err)
+			}
+			if operation != "新增" {
+				if _, err := setup.AddMember(context.Background(), project.ID, userID, MemberRoleMember); err != nil {
+					t.Fatalf("准备成员关系失败：%v", err)
+				}
+			}
+			service := NewService(NewRepository(db), audit.NewRepository(db))
+			switch operation {
+			case "新增":
+				_, err = service.AddMember(context.Background(), project.ID, userID, MemberRoleMember)
+			case "改角":
+				_, err = service.UpdateMemberRole(context.Background(), project.ID, userID, MemberRoleProjectAdmin)
+			case "移除":
+				err = service.RemoveMember(context.Background(), project.ID, userID)
+			}
+			if err == nil {
+				t.Fatalf("审计写入失败时成员%s必须返回错误", operation)
+			}
+			var member MemberRole
+			findErr := db.Where("project_id = ? AND user_id = ?", project.ID, userID).First(&member).Error
+			if operation == "新增" {
+				if !errors.Is(findErr, gorm.ErrRecordNotFound) {
+					t.Fatalf("审计写入失败时必须回滚成员新增：%v", findErr)
+				}
+				return
+			}
+			if findErr != nil || member.Role != MemberRoleMember {
+				t.Fatalf("审计写入失败时必须回滚成员%s：member=%+v err=%v", operation, member, findErr)
+			}
+		})
+	}
+}
 
 // TestCreateProjectAllowsEmptyOwnerAndRejectsDuplicateCode 防止未指定负责人时创建失败，或重复项目编码绕过全局唯一边界。
 func TestCreateProjectAllowsEmptyOwnerAndRejectsDuplicateCode(t *testing.T) {

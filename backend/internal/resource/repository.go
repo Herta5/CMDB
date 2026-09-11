@@ -3,11 +3,10 @@ package resource
 
 import (
 	"context"
-	"encoding/json"
 	"sort"
-	"strconv"
 	"time"
 
+	"cmdb/internal/audit"
 	"gorm.io/gorm"
 )
 
@@ -51,12 +50,6 @@ func (r *Repository) ListDueSources(ctx context.Context, now time.Time) ([]Sourc
 	var sources []Source
 	err := r.db.WithContext(ctx).Where("enabled = ? AND (next_sync_at IS NULL OR next_sync_at <= ?)", true, now).Find(&sources).Error
 	return sources, err
-}
-
-// CreateAudit 写入已经过调用方白名单化的审计内容。
-func (r *Repository) CreateAudit(ctx context.Context, projectID uint64, action, resourceType string, resourceID uint64, detail map[string]any) error {
-	encoded, _ := json.Marshal(detail)
-	return r.db.WithContext(ctx).Create(&AuditLog{ProjectID: &projectID, Action: action, ResourceType: resourceType, ResourceID: strconv.FormatUint(resourceID, 10), Detail: encoded}).Error
 }
 
 // ListSources 按项目和可选平台过滤接入源。
@@ -125,6 +118,13 @@ func (r *Repository) Transaction(ctx context.Context, operation func(*gorm.DB) e
 	return r.db.WithContext(ctx).Transaction(operation)
 }
 
+// WithAuditTransaction 将人工接入源变更和对应审计绑定到同一数据库事务。
+func (r *Repository) WithAuditTransaction(ctx context.Context, operation func(*Repository, audit.Recorder) error) error {
+	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		return operation(&Repository{db: tx}, audit.NewRepository(tx))
+	})
+}
+
 // FindSource 读取接入源，密文只交给同步服务解密。
 func (r *Repository) FindSource(ctx context.Context, id uint64) (*Source, error) {
 	var source Source
@@ -181,8 +181,7 @@ func (r *Repository) PurgeLostBefore(ctx context.Context, cutoff time.Time) (int
 			}
 			for _, value := range resources {
 				projectID := value.ProjectID
-				detail, _ := json.Marshal(map[string]any{"source_id": value.SourceID, "provider": value.Provider, "resource_type": value.ResourceType})
-				if err := tx.Create(&AuditLog{ProjectID: &projectID, Action: "resource.deleted", ResourceType: value.ResourceType, ResourceID: value.ExternalID, Detail: detail}).Error; err != nil {
+				if err := audit.RecordInTransaction(ctx, tx, audit.Entry{ProjectID: &projectID, Action: audit.ActionResourceDeleted, ResourceType: value.ResourceType, ResourceID: value.ExternalID, Detail: map[string]any{"source_id": value.SourceID, "provider": value.Provider, "resource_type": value.ResourceType}}); err != nil {
 					return err
 				}
 			}

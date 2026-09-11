@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"cmdb/internal/audit"
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
@@ -65,8 +66,12 @@ func newResourceServiceTest(t *testing.T) (*Service, *gorm.DB, *Source, *time.Ti
 		t.Fatal("获取资源测试数据库连接失败")
 	}
 	sqlDB.SetMaxOpenConns(1)
-	if err := db.AutoMigrate(&Source{}, &Server{}, &Database{}, &LoadBalancer{}, &SyncJob{}, &AuditLog{}); err != nil {
+	if err := db.AutoMigrate(&Source{}, &Server{}, &Database{}, &LoadBalancer{}, &SyncJob{}, &audit.Log{}); err != nil {
 		t.Fatal("创建资源测试表失败")
+	}
+	// 统一审计会读取项目名称快照，资源测试只建立必要的最小关联表。
+	if err := db.Exec("CREATE TABLE projects (id integer primary key, name text)").Error; err != nil {
+		t.Fatal("创建审计项目关联表失败")
 	}
 	cipher := NewCredentialCipher("resource-service-test-key")
 	encrypted, _ := cipher.Encrypt([]byte(`{"token":"example"}`))
@@ -75,7 +80,7 @@ func newResourceServiceTest(t *testing.T) (*Service, *gorm.DB, *Source, *time.Ti
 		t.Fatal("准备接入源失败")
 	}
 	now := time.Date(2026, 9, 9, 12, 0, 0, 0, time.UTC)
-	service := NewService(NewRepository(db), cipher)
+	service := NewService(NewRepository(db), cipher, audit.NewRepository(db))
 	service.now = func() time.Time { return now }
 	return service, db, source, &now
 }
@@ -87,7 +92,7 @@ func TestSyncAuditContainsChangesButNeverCredential(t *testing.T) {
 	if err != nil {
 		t.Fatalf("同步审计准备失败：%v", err)
 	}
-	var audits []AuditLog
+	var audits []audit.Log
 	_ = db.Order("id ASC").Find(&audits).Error
 	encoded, _ := json.Marshal(audits)
 	if !strings.Contains(string(encoded), "resource.created") || strings.Contains(string(encoded), "example") || strings.Contains(string(encoded), "token") {
@@ -182,6 +187,83 @@ func TestPermissionFailureKeepsSafeJobSummary(t *testing.T) {
 	if persisted.Status != "failed" || persisted.ErrorSummary != "云账号权限不足，请授予资源只读权限" {
 		t.Fatalf("权限失败摘要不正确：status=%s summary=%s", persisted.Status, persisted.ErrorSummary)
 	}
+	var auditEntry audit.Log
+	if err := db.Where("action = ? AND resource_id = ?", audit.ActionSourceSynced, source.ID).Order("id DESC").First(&auditEntry).Error; err != nil {
+		t.Fatalf("失败同步也必须进入审计：%v", err)
+	}
+	if !strings.Contains(string(auditEntry.Detail), `"status":"failed"`) || strings.Contains(string(auditEntry.Detail), "example") {
+		t.Fatalf("失败同步审计必须只有安全状态摘要：%s", auditEntry.Detail)
+	}
+}
+
+// TestSyncFinalStateRollsBackWhenAuditWriteFails 防止同步最终状态和调度时间先于汇总审计提交。
+func TestSyncFinalStateRollsBackWhenAuditWriteFails(t *testing.T) {
+	for _, testCase := range []struct {
+		name      string
+		collector collectorStub
+	}{
+		{name: "成功同步", collector: collectorStub{results: []CollectionResult{}}},
+		{name: "失败同步", collector: collectorStub{err: ErrAuthenticationFailed}},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			db, err := gorm.Open(sqlite.Open("file:"+t.Name()+"?mode=memory&cache=shared"), &gorm.Config{Logger: logger.Default.LogMode(logger.Silent)})
+			if err != nil {
+				t.Fatalf("创建同步事务测试数据库失败：%v", err)
+			}
+			if err := db.AutoMigrate(&Source{}, &SyncJob{}); err != nil {
+				t.Fatalf("创建同步测试表失败：%v", err)
+			}
+			if err := db.Exec("CREATE TABLE projects (id integer primary key, name text)").Error; err != nil {
+				t.Fatalf("创建项目测试表失败：%v", err)
+			}
+			if err := db.Exec("INSERT INTO projects (id, name) VALUES (?, ?)", 1, "同步项目").Error; err != nil {
+				t.Fatalf("准备项目快照失败：%v", err)
+			}
+			cipher := NewCredentialCipher("sync-atomic-key")
+			encrypted, encryptErr := cipher.Encrypt([]byte(`{"token":"example"}`))
+			if encryptErr != nil {
+				t.Fatalf("准备同步凭证失败：%v", encryptErr)
+			}
+			source := &Source{ProjectID: 1, Provider: ProviderAWS, Name: "同步接入源", EncryptedCredential: encrypted, Enabled: true, SyncIntervalMinutes: 60}
+			if err := db.Create(source).Error; err != nil {
+				t.Fatalf("准备同步接入源失败：%v", err)
+			}
+			service := NewService(NewRepository(db), cipher, audit.NewRepository(db))
+
+			if _, err := service.Sync(context.Background(), source.ID, "manual", testCase.collector); err == nil {
+				t.Fatal("汇总审计写入失败时同步必须返回错误")
+			}
+			var persistedJob SyncJob
+			if err := db.Order("id DESC").First(&persistedJob).Error; err != nil {
+				t.Fatalf("读取同步任务回滚结果失败：%v", err)
+			}
+			if persistedJob.Status != "running" || persistedJob.FinishedAt != nil {
+				t.Fatalf("汇总审计失败时不得提交同步最终状态：%+v", persistedJob)
+			}
+			var persistedSource Source
+			if err := db.First(&persistedSource, source.ID).Error; err != nil {
+				t.Fatalf("读取接入源调度回滚结果失败：%v", err)
+			}
+			if persistedSource.LastSyncAt != nil || persistedSource.NextSyncAt != nil {
+				t.Fatalf("汇总审计失败时不得提交新的调度时间：%+v", persistedSource)
+			}
+		})
+	}
+}
+
+// TestConnectionFailureWritesSafeAudit 验证失败连接测试可追溯，但审计不保存云端底层错误或凭证。
+func TestConnectionFailureWritesSafeAudit(t *testing.T) {
+	service, db, source, _ := newResourceServiceTest(t)
+	if _, err := service.TestConnection(context.Background(), source.ProjectID, source.ID, collectorStub{probeErr: ErrAuthenticationFailed}); !errors.Is(err, ErrAuthenticationFailed) {
+		t.Fatalf("连接测试必须保留认证失败业务语义：%v", err)
+	}
+	var auditEntry audit.Log
+	if err := db.Where("action = ? AND resource_id = ?", audit.ActionSourceConnectionTested, source.ID).Order("id DESC").First(&auditEntry).Error; err != nil {
+		t.Fatalf("失败连接测试必须进入审计：%v", err)
+	}
+	if !strings.Contains(string(auditEntry.Detail), `"status":"failed"`) || strings.Contains(string(auditEntry.Detail), "example") {
+		t.Fatalf("失败连接审计必须只有安全状态摘要：%s", auditEntry.Detail)
+	}
 }
 
 // TestPurgeLostResourcesAfterOneDay 验证仅物理删除连续失联满 24 小时的资源。
@@ -196,8 +278,8 @@ func TestPurgeLostResourcesAfterOneDay(t *testing.T) {
 	if err != nil || deleted != 1 {
 		t.Fatalf("一天清理数量错误：deleted=%d err=%v", deleted, err)
 	}
-	var audit AuditLog
-	if err := db.Where("action = ? AND resource_id = ?", "resource.deleted", "a").First(&audit).Error; err != nil {
+	var auditEntry audit.Log
+	if err := db.Where("action = ? AND resource_id = ?", audit.ActionResourceDeleted, "a").First(&auditEntry).Error; err != nil {
 		t.Fatal("物理删除资源前必须保留独立审计记录")
 	}
 }
