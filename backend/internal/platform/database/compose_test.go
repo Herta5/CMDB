@@ -11,6 +11,8 @@ import (
 
 const composeDefinitionPath = "../../../../docker-compose.yml"
 
+const postgresIntegrationComposePath = "../../../test/postgres/docker-compose.yml"
+
 const postgreSQLEntrypointPath = "../../../database/entrypoint/validate_before_init.sh"
 
 // TestPostgreSQLComposeDefinesIsolatedDeployment 防止部署配置回退为 MySQL，或绕过受限应用账号初始化。
@@ -46,6 +48,28 @@ func TestPostgreSQLComposeDefinesIsolatedDeployment(t *testing.T) {
 	for _, forbidden := range []string{"mysql:", "mysql:8.4", "3306", "cmdb-mysql-data", "./backend/migrations/"} {
 		if strings.Contains(compose, forbidden) {
 			t.Errorf("PostgreSQL Compose 部署不得保留 MySQL 遗留配置：%s", forbidden)
+		}
+	}
+}
+
+// TestPostgreSQLIntegrationComposeUsesEphemeralPostgreSQL17 验证真实数据库测试固定使用隔离端口、临时数据目录和虚构凭证。
+func TestPostgreSQLIntegrationComposeUsesEphemeralPostgreSQL17(t *testing.T) {
+	content, err := os.ReadFile(postgresIntegrationComposePath)
+	if err != nil {
+		t.Fatal("读取 PostgreSQL 集成测试 Compose 配置失败")
+	}
+	compose := string(content)
+
+	for _, fragment := range []string{
+		"postgresql-test:\n    image: postgres:17",
+		"POSTGRES_PASSWORD: cmdb-integration-only",
+		"DB_PASSWORD: cmdb-app-integration-only",
+		`- "127.0.0.1:55432:5432"`,
+		"- /var/lib/postgresql/data",
+		"001_create_app_role.sh:/docker-entrypoint-initdb.d/001_create_app_role.sh:ro",
+	} {
+		if !strings.Contains(compose, fragment) {
+			t.Errorf("PostgreSQL 集成测试 Compose 缺少隔离约束：%s", fragment)
 		}
 	}
 }

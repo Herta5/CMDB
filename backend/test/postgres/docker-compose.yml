@@ -1,0 +1,22 @@
+# 本 Compose 仅供 CMDB PostgreSQL 17 集成测试使用，数据和凭证均为可丢弃的本地夹具。
+name: cmdb-postgres-integration
+services:
+  postgresql-test:
+    image: postgres:17
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: cmdb-integration-only
+      POSTGRES_DB: postgres
+      DB_PASSWORD: cmdb-app-integration-only
+    ports:
+      - "127.0.0.1:55432:5432"
+    tmpfs:
+      - /var/lib/postgresql/data
+    volumes:
+      # 集成测试只初始化受限账号；每个测试自行创建、初始化并清理独立数据库。
+      - ../../database/init/001_create_app_role.sh:/docker-entrypoint-initdb.d/001_create_app_role.sh:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d postgres"]
+      interval: 1s
+      timeout: 5s
+      retries: 30

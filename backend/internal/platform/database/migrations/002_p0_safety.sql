@@ -46,9 +46,9 @@ ALTER TABLE resource_sources
         (identity_status = 'verified' AND cloud_account_id IS NOT NULL AND cloud_account_id <> '' AND identity_verified_at IS NOT NULL)
     );
 
-CREATE UNIQUE INDEX uk_resource_sources_verified_cloud_account
+CREATE UNIQUE INDEX uk_resource_sources_provider_account_verified
     ON resource_sources (provider, cloud_account_id)
-    WHERE identity_status = 'verified';
+    WHERE identity_status = 'verified' AND cloud_account_id IS NOT NULL;
 
 ALTER TABLE resources_servers
     DROP CONSTRAINT fk_resources_servers_project,
