@@ -132,4 +132,55 @@ describe('认证状态', () => {
     expect(auth.currentUser).toBeNull()
     expect(storage.getItem('cmdb.auth.session')).toBeNull()
   })
+
+  it('恢复合法旧会话时从内存和存储清除数字用户标识及所有未知字段', () => {
+    storage.setItem('cmdb.auth.session', JSON.stringify({
+      sessionId: '0123456789abcdef0123456789abcdef',
+      token: 'test-session',
+      user_id: 41,
+      metadata: { id: 41, user_id: 41 },
+      currentUser: {
+        username: 'cloud_user', displayName: '云用户', email: 'cloud@example.test', globalRole: 'user', status: 'active',
+        id: 41, user_id: 41, profile: { user_id: 41 }, projectPermissions: [{ user_id: 41 }],
+      },
+    }))
+    storage.setItem('cmdb_user_id', '41')
+    storage.setItem('cmdb.auth.current-user', JSON.stringify({ id: 41 }))
+
+    const auth = useAuthStore()
+    const publicUser = { username: 'cloud_user', displayName: '云用户', email: 'cloud@example.test', globalRole: 'user', status: 'active' }
+
+    expect(auth.currentUser).toStrictEqual(publicUser)
+    expect(auth.token === 'test-session').toBe(true)
+    expect(auth.sessionId).toBe('0123456789abcdef0123456789abcdef')
+    const stored = JSON.parse(storage.getItem('cmdb.auth.session') || 'null')
+    expect(Object.keys(stored).sort()).toEqual(['currentUser', 'sessionId', 'token'])
+    expect(stored.currentUser).toStrictEqual(publicUser)
+    expect(storage.getItem('cmdb_user_id')).toBeNull()
+    expect(storage.getItem('cmdb.auth.current-user')).toBeNull()
+  })
+
+  it('恢复旧会话时不允许公开资料字段夹带嵌套用户标识', () => {
+    storage.setItem('cmdb.auth.session', JSON.stringify({
+      sessionId: '0123456789abcdef0123456789abcdef', token: 'test-session',
+      currentUser: { username: 'cloud_user', globalRole: 'user', displayName: { id: 41 }, email: { user_id: 41 }, status: { user_id: 41 } },
+    }))
+
+    const auth = useAuthStore()
+
+    expect(auth.currentUser).toStrictEqual({ username: 'cloud_user', globalRole: 'user' })
+    const stored = JSON.parse(storage.getItem('cmdb.auth.session') || 'null')
+    expect(stored.currentUser).toStrictEqual({ username: 'cloud_user', globalRole: 'user' })
+  })
+
+  it('接受会话时仅将公开字段保存到内存和存储', () => {
+    const auth = useAuthStore()
+    const extendedUser = { username: 'cloud_user', globalRole: 'user' as const, id: 41, user_id: 41, profile: { user_id: 41 } }
+
+    auth.acceptSession('test-session', extendedUser)
+
+    expect(auth.currentUser).toStrictEqual({ username: 'cloud_user', globalRole: 'user' })
+    const stored = JSON.parse(storage.getItem('cmdb.auth.session') || 'null')
+    expect(stored.currentUser).toStrictEqual({ username: 'cloud_user', globalRole: 'user' })
+  })
 })

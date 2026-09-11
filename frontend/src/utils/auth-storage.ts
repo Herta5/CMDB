@@ -27,16 +27,31 @@ export function clearAuthStorage() {
   legacyAuthStorageKeys.forEach(key => localStorage.removeItem(key))
 }
 
+/** 只复制已知公开字段，并校验可选资料类型，避免旧快照或扩展对象夹带内部标识。 */
+function publicCurrentUser(user: CurrentUser): CurrentUser {
+  const currentUser: CurrentUser = { username: user.username, globalRole: user.globalRole }
+  if (typeof user.displayName === 'string') currentUser.displayName = user.displayName
+  if (typeof user.email === 'string') currentUser.email = user.email
+  if (user.status === 'active' || user.status === 'disabled') currentUser.status = user.status
+  return currentUser
+}
+
 /** 只恢复带独立标识的完整会话；旧快照无法区分重复登录，必须重新登录建立新边界。 */
 export function readAuthSession(): StoredAuthSession | null {
   try {
-    const value = JSON.parse(localStorage.getItem(authSessionStorageKey) || 'null')
+    const stored = localStorage.getItem(authSessionStorageKey)
+    const value = JSON.parse(stored || 'null')
     const user = value?.currentUser
     if (typeof value?.sessionId === 'string' && /^[0-9a-f]{32}$/.test(value.sessionId) &&
       typeof value.token === 'string' && value.token.trim() &&
       typeof user?.username === 'string' && /^[A-Za-z0-9_]{1,64}$/.test(user.username) &&
       (user.globalRole === 'system_admin' || user.globalRole === 'user')) {
-      return { sessionId: value.sessionId, token: value.token, currentUser: user }
+      const session = { sessionId: value.sessionId, token: value.token, currentUser: publicCurrentUser(user) }
+      const cleaned = JSON.stringify(session)
+      legacyAuthStorageKeys.forEach(key => localStorage.removeItem(key))
+      // 迁移时同步清理持久化；已清理快照不重复发布，避免标签页相互触发存储事件。
+      if (cleaned !== stored) localStorage.setItem(authSessionStorageKey, cleaned)
+      return session
     }
   } catch {
     // 损坏资料按未登录处理，不能让本地解析异常阻断登录入口。
@@ -48,7 +63,7 @@ export function readAuthSession(): StoredAuthSession | null {
 export function saveAuthSession(token: string, currentUser: CurrentUser): StoredAuthSession {
   // getRandomValues 在普通 HTTP 部署也可使用，避免依赖仅安全上下文提供的 randomUUID。
   const sessionId = Array.from(crypto.getRandomValues(new Uint8Array(16)), value => value.toString(16).padStart(2, '0')).join('')
-  const session = { sessionId, token, currentUser: { ...currentUser } }
+  const session = { sessionId, token, currentUser: publicCurrentUser(currentUser) }
   legacyAuthStorageKeys.forEach(key => localStorage.removeItem(key))
   localStorage.setItem(authSessionStorageKey, JSON.stringify(session))
   return session
