@@ -3,9 +3,12 @@ package identity_test
 
 import (
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -108,11 +111,12 @@ func TestLoginIssuesJWTWithOnlyIdentityClaims(t *testing.T) {
 	}
 
 	claims := jwt.MapClaims{}
-	parsed, err := jwt.ParseWithClaims(payload.Token, claims, func(token *jwt.Token) (interface{}, error) {
-		return []byte("identity-test-signing-key"), nil
-	})
-	if err != nil || !parsed.Valid {
-		t.Fatal("登录签发的令牌必须可由服务签名密钥验证")
+	_, _, err = jwt.NewParser().ParseUnverified(payload.Token, claims)
+	if err != nil {
+		t.Fatal("登录签发的令牌必须包含可解析的公开载荷")
+	}
+	if requestCurrentUser(t, server, payload.Token).Code != http.StatusOK {
+		t.Fatal("登录签发的令牌必须通过服务端的完整认证")
 	}
 	if len(claims) != 3 || claims["username"] != user.Username || claims["user_id"] != nil || claims["global_role"] != identity.GlobalRoleSystemAdmin {
 		t.Fatal("JWT 必须只用用户名标识当前用户")
@@ -215,7 +219,7 @@ func TestCurrentUserRejectsUserDisabledAfterTokenIssued(t *testing.T) {
 	assertUnauthorized(t, response)
 }
 
-// TestCurrentUserRejectsExpiredAndWrongSignatureTokens 验证中间件拒绝已过期及非本服务签发的 JWT。
+// TestCurrentUserRejectsExpiredAndWrongSignatureTokens 使用可通过认证的签名夹具隔离验证到期与密钥边界。
 func TestCurrentUserRejectsExpiredAndWrongSignatureTokens(t *testing.T) {
 	user := newAuthenticationFixtureUser(t, 15, "invalid_token_user", "active")
 	server := newAuthenticationServer(t, user)
@@ -224,13 +228,69 @@ func TestCurrentUserRejectsExpiredAndWrongSignatureTokens(t *testing.T) {
 		name       string
 		expiresAt  time.Time
 		signingKey string
+		status     int
 	}{
-		{name: "过期令牌", expiresAt: time.Now().Add(-time.Minute), signingKey: "identity-test-signing-key"},
-		{name: "错误签名", expiresAt: time.Now().Add(time.Hour), signingKey: "another-test-signing-key"},
+		{name: "有效账号令牌", expiresAt: time.Now().Add(time.Hour), signingKey: "identity-test-signing-key", status: http.StatusOK},
+		{name: "过期令牌", expiresAt: time.Now().Add(-time.Minute), signingKey: "identity-test-signing-key", status: http.StatusUnauthorized},
+		{name: "错误签名", expiresAt: time.Now().Add(time.Hour), signingKey: "another-test-signing-key", status: http.StatusUnauthorized},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			response := requestCurrentUser(t, server, signedTestToken(t, user, testCase.expiresAt, testCase.signingKey))
-			assertUnauthorized(t, response)
+			if testCase.status == http.StatusUnauthorized {
+				assertUnauthorized(t, response)
+			} else if response.Code != testCase.status {
+				t.Fatal("有效签名夹具必须先能通过认证，才能隔离测试过期和错误签名")
+			}
+		})
+	}
+}
+
+// TestCurrentUserRejectsUnboundUsernameToken 防止未绑定账号代际的历史用户名令牌继续生效。
+func TestCurrentUserRejectsUnboundUsernameToken(t *testing.T) {
+	user := newAuthenticationFixtureUser(t, 18, "unbound_session_user", "active")
+	server := newAuthenticationServer(t, user)
+	token, err := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
+		"username": user.Username, "global_role": user.GlobalRole, "exp": time.Now().Add(time.Hour).Unix(),
+	}).SignedString([]byte("identity-test-signing-key"))
+	if err != nil {
+		t.Fatal("准备未绑定账号代际的令牌失败")
+	}
+	assertUnauthorized(t, requestCurrentUser(t, server, token))
+}
+
+// TestCurrentUserRejectsTokenWithoutExpiration 防止未声明到期时间的令牌绕过会话时限。
+func TestCurrentUserRejectsTokenWithoutExpiration(t *testing.T) {
+	user := newAuthenticationFixtureUser(t, 19, "no_expiration_user", "active")
+	server := newAuthenticationServer(t, user)
+	token, err := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
+		"username": user.Username, "global_role": user.GlobalRole,
+	}).SignedString(authenticationTestKey(user.ID, "identity-test-signing-key"))
+	if err != nil {
+		t.Fatal("准备缺少过期时间的令牌失败")
+	}
+	assertUnauthorized(t, requestCurrentUser(t, server, token))
+}
+
+// TestCurrentUserRejectsUnsupportedSigningMethods 防止接受其他 HMAC 算法或未签名令牌。
+func TestCurrentUserRejectsUnsupportedSigningMethods(t *testing.T) {
+	user := newAuthenticationFixtureUser(t, 20, "unsupported_method_user", "active")
+	server := newAuthenticationServer(t, user)
+	for _, scenario := range []struct {
+		name   string
+		method jwt.SigningMethod
+		key    any
+	}{
+		{"其他 HMAC 算法", jwt.SigningMethodHS384, authenticationTestKey(user.ID, "identity-test-signing-key")},
+		{"未签名令牌", jwt.SigningMethodNone, jwt.UnsafeAllowNoneSignatureType},
+	} {
+		t.Run(scenario.name, func(t *testing.T) {
+			token, err := jwt.NewWithClaims(scenario.method, jwt.MapClaims{
+				"username": user.Username, "global_role": user.GlobalRole, "exp": time.Now().Add(time.Hour).Unix(),
+			}).SignedString(scenario.key)
+			if err != nil {
+				t.Fatal("准备不支持算法的令牌失败")
+			}
+			assertUnauthorized(t, requestCurrentUser(t, server, token))
 		})
 	}
 }
@@ -371,11 +431,18 @@ func signedTestToken(t *testing.T, user *identity.User, expiresAt time.Time, sig
 		"username":    user.Username,
 		"global_role": user.GlobalRole,
 		"exp":         expiresAt.Unix(),
-	}).SignedString([]byte(signingKey))
+	}).SignedString(authenticationTestKey(user.ID, signingKey))
 	if err != nil {
 		t.Fatal("构造认证测试令牌失败")
 	}
 	return token
+}
+
+// authenticationTestKey 独立构造账号签名夹具，让过期与算法测试不因错误密钥而假通过。
+func authenticationTestKey(userID uint64, secret string) []byte {
+	mac := hmac.New(sha256.New, []byte(secret))
+	mac.Write([]byte("cmdb.jwt.account.v1:" + strconv.FormatUint(userID, 10)))
+	return mac.Sum(nil)
 }
 
 // assertAuthenticationFailure 验证登录失败始终使用反枚举的统一错误边界。

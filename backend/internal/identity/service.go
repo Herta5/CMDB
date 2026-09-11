@@ -3,7 +3,10 @@ package identity
 
 import (
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
 	"errors"
+	"strconv"
 	"strings"
 	"time"
 
@@ -17,6 +20,8 @@ var (
 	ErrInvalidCredentials = errors.New("无效的登录凭证")
 	// ErrAuthenticatedUserNotFound 表示令牌所指向的用户已不存在，当前会话应立即失效。
 	ErrAuthenticatedUserNotFound = errors.New("认证用户不存在")
+	// ErrInvalidSession 统一表示令牌或当前账号无法通过完整认证，不暴露失败步骤。
+	ErrInvalidSession = errors.New("身份认证已失效")
 	// ErrIdentityRepositoryUnavailable 表示服务装配错误，不得向外暴露具体存储原因。
 	ErrIdentityRepositoryUnavailable = errors.New("身份仓储不可用")
 	// ErrInvalidUserInput 表示用户资料、密码长度或状态不符合身份域约束。
@@ -112,7 +117,32 @@ func (s *Service) Login(ctx context.Context, username, password string) (*User, 
 	return user, token, nil
 }
 
-// CurrentUser 以受验证的声明读取当前用户，避免把 JWT 中不应携带的公开资料复制到令牌内。
+// Authenticate 只在签名、算法、到期时间与当前账号均有效后返回可用于授权的身份。
+func (s *Service) Authenticate(ctx context.Context, tokenString string) (*User, error) {
+	if s.repository == nil {
+		return nil, ErrInvalidSession
+	}
+	claims := UserClaims{}
+	var user *User
+	token, err := jwt.ParseWithClaims(tokenString, &claims, func(_ *jwt.Token) (interface{}, error) {
+		// 此时声明尚未验证，用户名只能选择候选账号的密钥，不能建立权限或审计上下文。
+		if !ValidUsername(claims.Username) {
+			return nil, ErrInvalidSession
+		}
+		var err error
+		user, err = s.repository.FindByUsername(ctx, claims.Username)
+		if err != nil || user == nil || user.ID == 0 || user.Status != "active" {
+			return nil, ErrInvalidSession
+		}
+		return s.accountSigningKey(user.ID), nil
+	}, jwt.WithValidMethods([]string{jwt.SigningMethodHS256.Alg()}), jwt.WithExpirationRequired(), jwt.WithTimeFunc(s.now))
+	if err != nil || token == nil || !token.Valid {
+		return nil, ErrInvalidSession
+	}
+	return user, nil
+}
+
+// CurrentUser 重新读取受验证账号的资料；二次查询也不得把同名新账号绑定到旧会话。
 func (s *Service) CurrentUser(ctx context.Context, claims UserClaims) (*User, error) {
 	if s.repository == nil {
 		return nil, ErrIdentityRepositoryUnavailable
@@ -125,7 +155,7 @@ func (s *Service) CurrentUser(ctx context.Context, claims UserClaims) (*User, er
 	if err != nil {
 		return nil, err
 	}
-	if user == nil || user.Status != "active" {
+	if user == nil || user.Status != "active" || user.ID != claims.InternalUserID {
 		return nil, ErrAuthenticatedUserNotFound
 	}
 	return user, nil
@@ -463,5 +493,13 @@ func (s *Service) sign(user *User) (string, error) {
 			ExpiresAt: jwt.NewNumericDate(s.now().Add(defaultTokenLifetime)),
 		},
 	}
-	return jwt.NewWithClaims(jwt.SigningMethodHS256, claims).SignedString(s.jwtSecret)
+	return jwt.NewWithClaims(jwt.SigningMethodHS256, claims).SignedString(s.accountSigningKey(user.ID))
+}
+
+// accountSigningKey 将不可复用的数据库主键绑定到签名，用户名重建不会恢复旧账号令牌。
+// 域前缀隔离此派生用途；内部主键只参与服务端 HMAC，绝不进入 JWT 载荷或公开输出。
+func (s *Service) accountSigningKey(userID uint64) []byte {
+	mac := hmac.New(sha256.New, s.jwtSecret)
+	mac.Write([]byte("cmdb.jwt.account.v1:" + strconv.FormatUint(userID, 10)))
+	return mac.Sum(nil)
 }

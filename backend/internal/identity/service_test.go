@@ -13,6 +13,24 @@ import (
 	"gorm.io/gorm/logger"
 )
 
+// TestCurrentUserRejectsReplacedAccount 防止认证通过后的二次查询重新绑定同名新账号。
+func TestCurrentUserRejectsReplacedAccount(t *testing.T) {
+	db := identityAuditFailureDatabase(t)
+	repository := NewUserRepository(db)
+	user := &User{Username: "replaced_user", DisplayName: "同名新账号", GlobalRole: GlobalRoleSystemAdmin, Status: "active"}
+	if err := repository.Create(context.Background(), user); err != nil {
+		t.Fatal("准备同名新账号失败")
+	}
+	service := NewService(repository, "identity-test-signing-key")
+	if _, err := service.CurrentUser(context.Background(), UserClaims{Username: user.Username, InternalUserID: user.ID}); err != nil {
+		t.Fatalf("原账号资料读取必须成功：%v", err)
+	}
+	_, err := service.CurrentUser(context.Background(), UserClaims{Username: user.Username, InternalUserID: user.ID + 1})
+	if !errors.Is(err, ErrAuthenticatedUserNotFound) {
+		t.Fatalf("当前用户查询必须拒绝与已验证账号代际不一致的身份：%v", err)
+	}
+}
+
 // TestCreateUserRejectsInvalidUsername 防止管理员创建不满足公开身份标识格式的用户。
 func TestCreateUserRejectsInvalidUsername(t *testing.T) {
 	db := identityUserCreationDatabase(t)

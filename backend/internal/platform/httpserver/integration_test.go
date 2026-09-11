@@ -603,6 +603,48 @@ func TestIssuedAdminSessionUsesCurrentAccount(t *testing.T) {
 	}
 }
 
+// TestRecreatedUsernameCannotReviveIssuedTokens 防止删除后重建同名账号把新权限赋给旧 JWT。
+func TestRecreatedUsernameCannotReviveIssuedTokens(t *testing.T) {
+	server, password := integrationServer(t)
+	admin := loginUser(t, server, "operator", password)
+	original := loginUser(t, server, "member_a", password)
+	var managedProject project.Project
+	decodeIntegration(t, integrationRequest(t, server, admin, http.MethodPost, "/api/v1/projects", map[string]any{"code": "account-generation", "name": "账号代际项目"}, http.StatusCreated), &managedProject)
+	projectPath := "/api/v1/projects/" + strconv.FormatUint(managedProject.ID, 10)
+	integrationRequest(t, server, admin, http.MethodPost, projectPath+"/members", map[string]any{"username": "member_a", "role": "member"}, http.StatusCreated)
+	integrationRequest(t, server, original, http.MethodGet, projectPath, nil, http.StatusOK)
+	integrationRequest(t, server, original, http.MethodGet, "/api/v1/users", nil, http.StatusForbidden)
+
+	oldTokens := []string{original}
+	for _, role := range []string{identity.GlobalRoleSystemAdmin, identity.GlobalRoleUser} {
+		integrationRequest(t, server, admin, http.MethodDelete, "/api/v1/users/member_a", nil, http.StatusNoContent)
+		integrationRequest(t, server, original, http.MethodGet, "/api/v1/me", nil, http.StatusUnauthorized)
+		integrationRequest(t, server, admin, http.MethodPost, "/api/v1/users", map[string]any{
+			"username": "member_a", "password": password, "display_name": "重建账号", "global_role": role, "status": "active",
+			"project_permissions": []map[string]any{{"project_id": managedProject.ID, "role": "member"}},
+		}, http.StatusCreated)
+		for _, oldToken := range oldTokens {
+			for _, path := range []string{"/api/v1/me", "/api/v1/users", projectPath} {
+				t.Run("重建为"+role+path, func(t *testing.T) {
+					response := integrationRequest(t, server, oldToken, http.MethodGet, path, nil, http.StatusUnauthorized)
+					if response.Body.String() != `{"code":"AUTH_UNAUTHORIZED","message":"身份认证已失效"}` {
+						t.Fatal("历史账号令牌必须统一返回认证失效")
+					}
+				})
+			}
+		}
+		current := loginUser(t, server, "member_a", password)
+		integrationRequest(t, server, current, http.MethodGet, "/api/v1/me", nil, http.StatusOK)
+		integrationRequest(t, server, current, http.MethodGet, projectPath, nil, http.StatusOK)
+		wantUsersStatus := http.StatusForbidden
+		if role == identity.GlobalRoleSystemAdmin {
+			wantUsersStatus = http.StatusOK
+		}
+		integrationRequest(t, server, current, http.MethodGet, "/api/v1/users", nil, wantUsersStatus)
+		oldTokens = append(oldTokens, current)
+	}
+}
+
 // TestEnginesKeepIndependentSigningKeys 防止后创建的服务实例替换已有服务的 JWT 校验密钥。
 func TestEnginesKeepIndependentSigningKeys(t *testing.T) {
 	first, firstPassword := integrationServer(t)

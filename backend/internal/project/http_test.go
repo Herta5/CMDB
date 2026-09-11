@@ -3,6 +3,8 @@ package project_test
 
 import (
 	"bytes"
+	"crypto/hmac"
+	"crypto/sha256"
 	"database/sql"
 	"encoding/json"
 	"net/http"
@@ -308,9 +310,16 @@ func projectTestToken(t *testing.T, userID uint64, globalRole string) string {
 		RegisteredClaims: jwt.RegisteredClaims{
 			ExpiresAt: jwt.NewNumericDate(time.Now().Add(time.Hour)),
 		},
-	}).SignedString([]byte("project-http-test-key"))
+	}).SignedString(projectTestSigningKey(userID))
 	if err != nil {
 		t.Fatalf("签发项目 HTTP 测试令牌失败：%v", err)
 	}
 	return token
+}
+
+// projectTestSigningKey 将项目 HTTP 夹具绑定到数据库实际账号，保持真实认证中间件参与权限验收。
+func projectTestSigningKey(userID uint64) []byte {
+	mac := hmac.New(sha256.New, []byte("project-http-test-key"))
+	mac.Write([]byte("cmdb.jwt.account.v1:" + strconv.FormatUint(userID, 10)))
+	return mac.Sum(nil)
 }

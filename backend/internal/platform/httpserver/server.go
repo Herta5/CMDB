@@ -45,7 +45,7 @@ func New(dependencies Dependencies) *gin.Engine {
 	// 全部领域共享同一个审计仓储，平台模块不得复制审计表写入逻辑。
 	auditRepository := audit.NewRepository(dependencies.Database)
 	identityService := identity.NewService(repository, dependencies.JWTSecret, auditRepository)
-	authenticator := NewAuthenticator(identityService, dependencies.JWTSecret)
+	authenticator := NewAuthenticator(identityService)
 	handler := identity.NewHTTPHandler(identityService)
 	projectHandler := project.NewHTTPHandler(project.NewService(projectRepository, auditRepository))
 	auditHandler := audit.NewHTTPHandler(audit.NewService(auditRepository))

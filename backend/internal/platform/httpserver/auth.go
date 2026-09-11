@@ -2,28 +2,25 @@
 package httpserver
 
 import (
-	"errors"
 	"net/http"
 	"strings"
 
 	"cmdb/internal/audit"
 	"cmdb/internal/identity"
 	"github.com/gin-gonic/gin"
-	"github.com/golang-jwt/jwt/v5"
 )
 
-// Authenticator 只持有当前服务实例的校验密钥和身份服务，避免多个引擎互相改变认证结果。
+// Authenticator 只使用当前服务实例的身份服务，避免多个引擎互相改变认证结果。
 type Authenticator struct {
-	jwtSecret []byte
-	identity  *identity.Service
+	identity *identity.Service
 }
 
-// NewAuthenticator 在服务装配时创建认证依赖；密钥不暴露给领域模块、日志或响应。
-func NewAuthenticator(service *identity.Service, secret string) *Authenticator {
-	return &Authenticator{jwtSecret: []byte(secret), identity: service}
+// NewAuthenticator 在服务装配时创建认证依赖；签名密钥始终由身份服务保管。
+func NewAuthenticator(service *identity.Service) *Authenticator {
+	return &Authenticator{identity: service}
 }
 
-// RequireUser 验证签名后重新读取当前账户；令牌中的历史角色不能用于项目授权。
+// RequireUser 完整验证账号代际绑定的令牌；授权只使用数据库当前身份与角色。
 func (a *Authenticator) RequireUser() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		tokenString, ok := bearerToken(c.GetHeader("Authorization"))
@@ -32,31 +29,14 @@ func (a *Authenticator) RequireUser() gin.HandlerFunc {
 			return
 		}
 
-		claims := identity.UserClaims{}
-		token, err := jwt.ParseWithClaims(tokenString, &claims, func(token *jwt.Token) (interface{}, error) {
-			if token.Method.Alg() != jwt.SigningMethodHS256.Alg() {
-				return nil, errors.New("不支持的 JWT 签名算法")
-			}
-			return a.jwtSecret, nil
-		}, jwt.WithValidMethods([]string{jwt.SigningMethodHS256.Alg()}))
-		if err != nil || !token.Valid || !identity.ValidUsername(claims.Username) {
+		user, err := a.identity.Authenticate(c.Request.Context(), tokenString)
+		if err != nil {
 			writeAuthenticationError(c)
 			return
 		}
 
-		user, err := a.identity.CurrentUser(c.Request.Context(), claims)
-		if errors.Is(err, identity.ErrAuthenticatedUserNotFound) {
-			writeAuthenticationError(c)
-			return
-		}
-		if err != nil {
-			// 仓储故障必须拒绝授权但保留服务错误语义，不能伪装成已失效会话。
-			c.AbortWithStatusJSON(http.StatusInternalServerError, authenticationErrorResponse{Code: "AUTH_SERVICE_UNAVAILABLE", Message: "认证服务暂不可用"})
-			return
-		}
-		// 停用和删除已由身份服务拒绝；所有下游项目接口只消费数据库当前全局角色。
-		claims.InternalUserID = user.ID
-		claims.GlobalRole = user.GlobalRole
+		// 仅从通过完整认证的账号建立内部关联，绝不采用未验证或历史声明中的角色。
+		claims := identity.UserClaims{Username: user.Username, InternalUserID: user.ID, GlobalRole: user.GlobalRole}
 		c.Set(identity.UserClaimsContextKey, claims)
 		// 只有完成实时账户校验的请求才能写入操作者审计上下文，令牌和用户资料不进入其中。
 		c.Request = c.Request.WithContext(audit.WithActorProfile(c.Request.Context(), claims.InternalUserID, c.ClientIP(), user.Username, user.DisplayName))
