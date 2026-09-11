@@ -10,6 +10,7 @@ import (
 	"cmdb/internal/platform/config"
 	"cmdb/internal/platform/database"
 	"gorm.io/gorm"
+	"gorm.io/gorm/logger"
 )
 
 type migrationConfigLoader func() (config.Database, error)
@@ -17,7 +18,7 @@ type migrationDatabaseOpener func(config.Database) (*gorm.DB, error)
 type schemaMigrator func(context.Context, *gorm.DB) error
 
 func main() {
-	if err := runMigration(context.Background(), config.LoadMigrationDatabase, database.Open, database.Migrate); err != nil {
+	if err := runMigration(context.Background(), config.LoadMigrationDatabase, database.OpenMigration, database.Migrate); err != nil {
 		fmt.Fprintln(os.Stderr, err.Error())
 		os.Exit(1)
 	}
@@ -34,6 +35,8 @@ func runMigration(ctx context.Context, load migrationConfigLoader, open migratio
 	if err != nil {
 		return errors.New("数据库迁移失败：无法连接数据库")
 	}
+	// 即使测试或未来调用方传入自定义连接，也必须在执行任何迁移 SQL 前再次固定静默日志边界。
+	db = db.Session(&gorm.Session{Logger: logger.Default.LogMode(logger.Silent)})
 	if err := migrate(ctx, db); err != nil {
 		return errors.New("数据库迁移失败：结构未更新")
 	}
