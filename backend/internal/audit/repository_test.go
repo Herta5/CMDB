@@ -4,6 +4,7 @@ package audit_test
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 
@@ -67,12 +68,86 @@ func TestRecordUsesActorContextAndFiltersSensitiveDetail(t *testing.T) {
 	}
 }
 
+// TestRecordRecursivelyRemovesInternalUserReferences 验证用户内部引用在持久化前被清理，包括数组内的数组。
+func TestRecordRecursivelyRemovesInternalUserReferences(t *testing.T) {
+	db := auditDatabase(t)
+	if err := audit.NewRepository(db).Record(context.Background(), audit.Entry{
+		Action: audit.ActionUserUpdated, ResourceType: "user", ResourceID: "admin_1",
+		Detail: map[string]any{
+			"actor_id": 7, "user_id": 8, "target_user_id": 9,
+			"nested": map[string]any{"owner_user_id": 10, "previous_owner_user_id": 11, "target_username": "member_1"},
+			"arrays": []any{[]any{map[string]any{"ActorID": 12, "User-ID": 13, "target_user_id": 14, "password": "虚构密码", "safe": "保留"}}},
+		},
+	}); err != nil {
+		t.Fatalf("写入用户审计失败：%v", err)
+	}
+	var stored audit.Log
+	if err := db.First(&stored).Error; err != nil {
+		t.Fatalf("读取已持久化审计失败：%v", err)
+	}
+	want := `{"arrays":[[{"safe":"保留"}]],"nested":{"target_username":"member_1"}}`
+	if string(stored.Detail) != want {
+		t.Fatalf("持久化详情必须递归删除用户内部引用且保留安全字段：%s", stored.Detail)
+	}
+}
+
+// TestListSanitizesLegacyUserReferences 验证历史记录无法通过详情或用户对象标识泄露数字 ID。
+func TestListSanitizesLegacyUserReferences(t *testing.T) {
+	for _, tt := range []struct {
+		name, resourceType, resourceID, detail, wantID string
+	}{
+		{"用户快照", "user", "12", `{"target_username":"member_1"}`, "member_1"},
+		{"成员快照", "project_member", "12", `{"target_username":"member_1"}`, "member_1"},
+		{"无快照", "user", "12", `{}`, ""},
+		{"成员无详情", "project_member", "12", `null`, ""},
+		{"空详情", "user", "12", "", ""},
+		{"巨大旧标识", "user", "99999999999999999999999999999999", `{}`, ""},
+		{"数字用户名快照", "user", "12", `{"target_username":"1234"}`, "1234"},
+		{"已有用户名", "project_member", "member_1", `{}`, "member_1"},
+		{"其他对象数字标识", "project", "12", `{}`, "12"},
+		{"保留其他业务数字精度", "project", "12", `{"project_id":9007199254740993,"user_id":7}`, "12"},
+		{"递归历史详情", "user", "12", `{"actor_id":7,"user_id":8,"target_user_id":9,"nested":{"owner_user_id":10,"previous_owner_user_id":11},"arrays":[[{"user_id":12,"password":"虚构密码","safe":"保留"}]]}`, ""},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			db := auditDatabase(t)
+			actorID := uint64(7)
+			entry := audit.Log{ActorID: &actorID, Action: audit.ActionUserUpdated, ResourceType: tt.resourceType, ResourceID: tt.resourceID, Detail: json.RawMessage(tt.detail)}
+			if err := db.Create(&entry).Error; err != nil {
+				t.Fatalf("准备历史审计失败：%v", err)
+			}
+			items, _, _, err := audit.NewRepository(db).List(context.Background(), audit.Filter{Page: 1, PageSize: 20})
+			if err != nil || len(items) != 1 {
+				t.Fatalf("查询历史审计失败：%v，记录数=%d", err, len(items))
+			}
+			if items[0].ResourceID != tt.wantID {
+				t.Errorf("用户对象必须使用用户名或空标识：得到 %q，期望 %q", items[0].ResourceID, tt.wantID)
+			}
+			encoded, err := json.Marshal(items[0])
+			if err != nil {
+				t.Fatalf("序列化审计失败：%v", err)
+			}
+			if containsAny(string(encoded), `"actor_id"`, `"user_id"`, `"target_user_id"`, `"owner_user_id"`, `"previous_owner_user_id"`, `"password"`) {
+				t.Errorf("公开审计不得包含用户内部引用或凭证：%s", encoded)
+			}
+			if tt.name == "递归历史详情" && !strings.Contains(string(encoded), `"safe":"保留"`) {
+				t.Error("历史详情清理必须保留安全字段")
+			}
+			if tt.name == "保留其他业务数字精度" && !strings.Contains(string(encoded), `"project_id":9007199254740993`) {
+				t.Errorf("重新编码历史详情不得丢失其他业务数字的精度：%s", encoded)
+			}
+		})
+	}
+}
+
 // TestListFiltersProjectActionActorObjectAndTime 验证所有页面筛选都由数据库查询真实执行。
 func TestListFiltersProjectActionActorObjectAndTime(t *testing.T) {
 	db := auditDatabase(t)
 	repository := audit.NewRepository(db)
 	projectA, projectB := uint64(9), uint64(10)
 	actor := uint64(7)
+	if err := db.Exec("INSERT INTO users (id, username, display_name) VALUES (7, 'admin_1', '管理员')").Error; err != nil {
+		t.Fatalf("准备操作者失败：%v", err)
+	}
 	now := time.Date(2026, 9, 10, 8, 0, 0, 0, time.UTC)
 	logs := []audit.Log{
 		{ID: 1, ActorID: &actor, ProjectID: &projectA, Action: audit.ActionProjectUpdated, ResourceType: "project", ResourceID: "9", Detail: json.RawMessage(`{"name":"平台项目"}`), CreatedAt: now.Add(-time.Hour)},
@@ -83,7 +158,7 @@ func TestListFiltersProjectActionActorObjectAndTime(t *testing.T) {
 		t.Fatalf("准备审计数据失败：%v", err)
 	}
 	start, end := now.Add(-time.Minute), now.Add(time.Minute)
-	items, total, _, err := repository.List(context.Background(), audit.Filter{ProjectID: &projectA, Action: audit.ActionUserUpdated, ActorID: &actor, ResourceType: "user", ResourceID: "12", StartAt: &start, EndAt: &end, Page: 1, PageSize: 20})
+	items, total, _, err := repository.List(context.Background(), audit.Filter{ProjectID: &projectA, Action: audit.ActionUserUpdated, ActorUsername: "admin_1", ResourceType: "user", ResourceID: "12", StartAt: &start, EndAt: &end, Page: 1, PageSize: 20})
 	if err != nil {
 		t.Fatalf("筛选审计失败：%v", err)
 	}

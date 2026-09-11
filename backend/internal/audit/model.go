@@ -52,7 +52,7 @@ const (
 // Log 映射长期保留的 audit_logs 表，并附带查询时得到的公开显示名称。
 type Log struct {
 	ID               uint64          `gorm:"primaryKey" json:"id"`
-	ActorID          *uint64         `json:"actor_id"`
+	ActorID          *uint64         `json:"-"`
 	ActorUsername    string          `gorm:"->" json:"actor_username"`
 	ActorDisplayName string          `gorm:"->" json:"actor_display_name"`
 	ProjectID        *uint64         `gorm:"index" json:"project_id"`
@@ -81,16 +81,16 @@ type Entry struct {
 
 // Filter 表示审计页面允许使用的精确筛选及分页边界。
 type Filter struct {
-	ProjectID    *uint64
-	Action       string
-	ActorID      *uint64
-	ResourceType string
-	ResourceID   string
-	StartAt      *time.Time
-	EndAt        *time.Time
-	Page         int
-	PageSize     int
-	SnapshotID   uint64
+	ProjectID     *uint64
+	Action        string
+	ActorUsername string
+	ResourceType  string
+	ResourceID    string
+	StartAt       *time.Time
+	EndAt         *time.Time
+	Page          int
+	PageSize      int
+	SnapshotID    uint64
 }
 
 // Page 是审计查询的稳定分页响应。

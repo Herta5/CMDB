@@ -61,20 +61,13 @@ func filterFromQuery(c *gin.Context) (Filter, error) {
 	if err != nil {
 		return Filter{}, err
 	}
-	filter := Filter{Action: c.Query("action"), ResourceType: c.Query("resource_type"), ResourceID: c.Query("resource_id"), Page: page, PageSize: pageSize}
+	filter := Filter{Action: c.Query("action"), ActorUsername: c.Query("actor_username"), ResourceType: c.Query("resource_type"), ResourceID: c.Query("resource_id"), Page: page, PageSize: pageSize}
 	if value := c.Query("snapshot_id"); value != "" {
 		snapshotID, parseErr := strconv.ParseUint(value, 10, 64)
 		if parseErr != nil || snapshotID == 0 {
 			return Filter{}, ErrInvalidFilter
 		}
 		filter.SnapshotID = snapshotID
-	}
-	if value := c.Query("actor_id"); value != "" {
-		actorID, parseErr := strconv.ParseUint(value, 10, 64)
-		if parseErr != nil || actorID == 0 {
-			return Filter{}, ErrInvalidFilter
-		}
-		filter.ActorID = &actorID
 	}
 	if value := c.Query("start_at"); value != "" {
 		parsed, parseErr := time.Parse(time.RFC3339, value)

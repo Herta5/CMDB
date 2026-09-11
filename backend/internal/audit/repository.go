@@ -2,6 +2,7 @@
 package audit
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -119,23 +120,25 @@ func (r *Repository) List(ctx context.Context, filter Filter) ([]Log, int64, uin
 	if r == nil || r.db == nil {
 		return nil, 0, 0, ErrRepositoryUnavailable
 	}
-	base := r.db.WithContext(ctx).Table("audit_logs AS audit_logs")
+	// 操作者筛选同时影响快照边界、总数和结果，关联必须先于这些查询构建。
+	base := r.db.WithContext(ctx).Table("audit_logs AS audit_logs").
+		Joins("LEFT JOIN users ON users.id = audit_logs.actor_id")
 	base = applyFilter(base, filter)
 	snapshotID := filter.SnapshotID
 	if snapshotID == 0 {
 		// 审计日志只增不删，最大 ID 可作为本次翻页期间稳定且低成本的快照边界。
-		if err := base.Select("COALESCE(MAX(audit_logs.id), 0)").Scan(&snapshotID).Error; err != nil {
+		if err := base.Session(&gorm.Session{}).Select("COALESCE(MAX(audit_logs.id), 0)").Scan(&snapshotID).Error; err != nil {
 			return nil, 0, 0, err
 		}
 	}
 	base = base.Where("audit_logs.id <= ?", snapshotID)
 	var total int64
-	if err := base.Count(&total).Error; err != nil {
+	// 每个终结查询使用独立语句，避免 GORM 将上一条查询已构建的关联条件重复累积。
+	if err := base.Session(&gorm.Session{}).Count(&total).Error; err != nil {
 		return nil, 0, 0, err
 	}
 	var items []Log
 	query := base.Select("audit_logs.*, users.username AS actor_username, users.display_name AS actor_display_name, projects.name AS project_name").
-		Joins("LEFT JOIN users ON users.id = audit_logs.actor_id").
 		Joins("LEFT JOIN projects ON projects.id = audit_logs.project_id").
 		Order("audit_logs.created_at DESC, audit_logs.id DESC").
 		Offset((filter.Page - 1) * filter.PageSize).Limit(filter.PageSize)
@@ -156,8 +159,8 @@ func applyFilter(query *gorm.DB, filter Filter) *gorm.DB {
 	if filter.Action != "" {
 		query = query.Where("audit_logs.action = ?", filter.Action)
 	}
-	if filter.ActorID != nil {
-		query = query.Where("audit_logs.actor_id = ?", *filter.ActorID)
+	if filter.ActorUsername != "" {
+		query = query.Where(actorUsernameExpression(query.Dialector.Name())+" = ?", filter.ActorUsername)
 	}
 	if filter.ResourceType != "" {
 		query = query.Where("audit_logs.resource_type = ?", filter.ResourceType)
@@ -174,14 +177,28 @@ func applyFilter(query *gorm.DB, filter Filter) *gorm.DB {
 	return query
 }
 
-// applyNameSnapshots 在关联对象已经删除时使用审计详情中的最小快照补齐显示名称。
+// actorUsernameExpression 兼容 PostgreSQL 与 SQLite，用户删除后仍可用审计快照精确筛选。
+func actorUsernameExpression(dialect string) string {
+	if dialect == "sqlite" {
+		return "COALESCE(users.username, json_extract(audit_logs.detail, '$.actor_username'))"
+	}
+	return "COALESCE(users.username, audit_logs.detail ->> 'actor_username')"
+}
+
+// applyNameSnapshots 补齐已删除对象的显示名称，并在输出历史记录前清理内部用户引用。
 func applyNameSnapshots(log *Log) {
-	if log == nil || len(log.Detail) == 0 {
+	if log == nil {
 		return
 	}
 	var detail map[string]any
-	if json.Unmarshal(log.Detail, &detail) != nil {
-		return
+	if len(log.Detail) > 0 {
+		// 无法解析的历史详情没有可信快照，按空详情处理，不能绕过用户标识清理。
+		decoder := json.NewDecoder(bytes.NewReader(log.Detail))
+		// 原始详情重新编码时保留非用户数字的精度，避免改变项目等其他业务引用。
+		decoder.UseNumber()
+		if decoder.Decode(&detail) != nil {
+			detail = nil
+		}
 	}
 	if log.ActorUsername == "" {
 		log.ActorUsername, _ = detail["actor_username"].(string)
@@ -192,36 +209,48 @@ func applyNameSnapshots(log *Log) {
 	if log.ProjectName == "" {
 		log.ProjectName, _ = detail["project_name"].(string)
 	}
+	if (log.ResourceType == "user" || log.ResourceType == "project_member") && isNumericIdentifier(log.ResourceID) {
+		// 仅快照可以区分数字用户名与旧数据库主键；缺少快照时不可猜测用户身份。
+		log.ResourceID, _ = detail["target_username"].(string)
+	}
+	// 已解码的 JSON 值可以安全重新编码，历史记录也复用写入时的递归脱敏规则。
+	log.Detail, _ = json.Marshal(sanitizeMap(detail))
 }
 
-// sanitizeMap 复制白名单详情并递归删除可能由调用方误传的认证字段。
+// isNumericIdentifier 不解析整数，避免超出 uint64 范围的历史标识绕过清理。
+func isNumericIdentifier(value string) bool {
+	return value != "" && strings.IndexFunc(value, func(char rune) bool { return char < '0' || char > '9' }) == -1
+}
+
+// sanitizeMap 复制安全详情并递归删除认证字段及内部用户引用。
 func sanitizeMap(value map[string]any) map[string]any {
 	clean := make(map[string]any, len(value))
 	for key, item := range value {
 		if sensitiveKey(key) {
 			continue
 		}
-		switch typed := item.(type) {
-		case map[string]any:
-			clean[key] = sanitizeMap(typed)
-		case []any:
-			items := make([]any, 0, len(typed))
-			for _, child := range typed {
-				if childMap, ok := child.(map[string]any); ok {
-					items = append(items, sanitizeMap(childMap))
-				} else {
-					items = append(items, child)
-				}
-			}
-			clean[key] = items
-		default:
-			clean[key] = item
-		}
+		clean[key] = sanitizeValue(item)
 	}
 	return clean
 }
 
-// sensitiveKey 使用统一规格化匹配常见凭证字段，兼容蛇形、短横线和大小写写法。
+// sanitizeValue 逐层处理数组和对象，确保数组内嵌数组不会绕过字段清理。
+func sanitizeValue(value any) any {
+	switch typed := value.(type) {
+	case map[string]any:
+		return sanitizeMap(typed)
+	case []any:
+		items := make([]any, len(typed))
+		for index, child := range typed {
+			items[index] = sanitizeValue(child)
+		}
+		return items
+	default:
+		return value
+	}
+}
+
+// sensitiveKey 统一匹配凭证及内部用户引用，兼容蛇形、短横线和大小写写法。
 func sensitiveKey(key string) bool {
 	normalized := strings.Map(func(value rune) rune {
 		if unicode.IsLetter(value) || unicode.IsDigit(value) {
@@ -230,6 +259,7 @@ func sensitiveKey(key string) bool {
 		return -1
 	}, key)
 	for _, blocked := range []string{
+		"actorid", "userid", "targetuserid", "owneruserid", "previousowneruserid",
 		"password", "passwordhash",
 		"token", "sessiontoken", "accesstoken", "refreshtoken",
 		"apikey", "accesskey", "accesskeyid", "accesskeysecret",
