@@ -14,6 +14,7 @@ RUN go mod download
 COPY backend/ ./
 RUN CGO_ENABLED=0 GOOS=linux go build -buildvcs=false -o cmdb-server ./cmd/server
 RUN CGO_ENABLED=0 GOOS=linux go build -buildvcs=false -o cmdb-init-admin ./cmd/init-admin
+RUN CGO_ENABLED=0 GOOS=linux go build -buildvcs=false -o cmdb-migrate ./cmd/migrate
 
 FROM alpine:3.22
 RUN apk --no-cache add ca-certificates tzdata
@@ -24,6 +25,7 @@ ENV TZ=Asia/Shanghai \
 WORKDIR /app
 COPY --from=backend-builder /src/backend/cmdb-server ./cmdb-server
 COPY --from=backend-builder /src/backend/cmdb-init-admin ./cmdb-init-admin
+COPY --from=backend-builder /src/backend/cmdb-migrate ./cmdb-migrate
 COPY --from=frontend-builder /src/frontend/dist ./web
 EXPOSE 80
 HEALTHCHECK --interval=10s --timeout=3s --retries=5 CMD wget -q -O /dev/null http://127.0.0.1/health || exit 1

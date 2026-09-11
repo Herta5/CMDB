@@ -68,6 +68,33 @@ func Load() (Config, error) {
 	return config, nil
 }
 
+// LoadMigrationDatabase 只加载管理员迁移所需的数据库连接信息。
+// 迁移进程不读取应用账号、JWT 或凭证加密密钥，避免扩大管理员凭证的使用边界。
+func LoadMigrationDatabase() (Database, error) {
+	database := Database{
+		Host:     os.Getenv("DB_HOST"),
+		Port:     os.Getenv("DB_PORT"),
+		User:     os.Getenv("DB_MIGRATION_USER"),
+		Password: os.Getenv("DB_MIGRATION_PASSWORD"),
+		Name:     os.Getenv("DB_NAME"),
+	}
+	for _, requirement := range []struct {
+		name  string
+		value string
+	}{
+		{name: "DB_HOST", value: database.Host},
+		{name: "DB_PORT", value: database.Port},
+		{name: "DB_NAME", value: database.Name},
+		{name: "DB_MIGRATION_USER", value: database.User},
+		{name: "DB_MIGRATION_PASSWORD", value: database.Password},
+	} {
+		if requirement.value == "" {
+			return Database{}, fmt.Errorf("缺少必需环境变量 %s", requirement.name)
+		}
+	}
+	return database, nil
+}
+
 // valueOrDefault 为非敏感的运行参数提供开发环境可用的默认值。
 func valueOrDefault(name, fallback string) string {
 	if value := os.Getenv(name); value != "" {

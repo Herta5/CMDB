@@ -14,6 +14,10 @@ const (
 	applicationRoleInitializationPath = "../../../database/init/001_create_app_role.sh"
 	// schemaInitializationPath 是由 PostgreSQL 管理员执行的唯一业务结构初始化文件。
 	schemaInitializationPath = "../../../database/init/002_schema.sql"
+	// p0SafetyMigrationPath 是管理员命令嵌入执行的 P0 增量迁移文件。
+	p0SafetyMigrationPath = "migrations/002_p0_safety.sql"
+	// dockerfilePath 是同时构建服务和管理员工具的应用镜像定义。
+	dockerfilePath = "../../../../Dockerfile"
 )
 
 // TestPostgreSQLInitializationCreatesRestrictedApplicationRole 防止应用账号取得管理员或建库权限。
@@ -111,7 +115,7 @@ func TestPostgreSQLSchemaDefinesBusinessStructure(t *testing.T) {
 			"id", "actor_id", "project_id", "action", "resource_type", "resource_id", "detail", "request_ip", "created_at",
 		},
 		"resource_sources": {
-			"id", "project_id", "provider", "name", "region", "encrypted_credential", "credential_hint", "config", "enabled", "sync_interval_minutes", "last_sync_at", "next_sync_at", "created_at", "updated_at",
+			"id", "project_id", "provider", "name", "region", "encrypted_credential", "credential_hint", "config", "enabled", "sync_interval_minutes", "last_sync_at", "next_sync_at", "created_at", "updated_at", "cloud_account_id", "identity_status", "identity_verified_at",
 		},
 		"resources_servers": {
 			"id", "project_id", "source_id", "provider", "resource_type", "external_id", "name", "region", "zone", "cloud_status", "asset_status", "private_ips", "public_ips", "raw_attributes", "first_seen_at", "last_seen_at", "missing_since", "created_at", "updated_at",
@@ -124,6 +128,9 @@ func TestPostgreSQLSchemaDefinesBusinessStructure(t *testing.T) {
 		},
 		"sync_jobs": {
 			"id", "project_id", "source_id", "previous_job_id", "status", "trigger", "statistics", "error_summary", "started_at", "finished_at",
+		},
+		"schema_migrations": {
+			"version", "applied_at",
 		},
 	}
 
@@ -161,10 +168,40 @@ func TestPostgreSQLSchemaDefinesBusinessStructure(t *testing.T) {
 		}
 	}
 
-	allInitialization := string(readInitializationFile(t, applicationRoleInitializationPath)) + schema
+	allInitialization := string(readInitializationFile(t, applicationRoleInitializationPath)) + schema + string(readInitializationFile(t, p0SafetyMigrationPath))
 	for _, forbidden := range []string{"AUTO_INCREMENT", "ENUM(", string(rune(96)), "ON UPDATE"} {
 		if strings.Contains(allInitialization, forbidden) {
 			t.Errorf("PostgreSQL 初始化文件不得包含 MySQL 方言：%s", forbidden)
+		}
+	}
+}
+
+// TestP0MigrationKeepsChineseMetadata 验证增量迁移为新表字段补充中文职责与业务语义。
+func TestP0MigrationKeepsChineseMetadata(t *testing.T) {
+	migration := string(readInitializationFile(t, p0SafetyMigrationPath))
+	for _, fragment := range []string{
+		"COMMENT ON TABLE public.schema_migrations IS",
+		"COMMENT ON COLUMN public.schema_migrations.version IS",
+		"COMMENT ON COLUMN public.schema_migrations.applied_at IS",
+		"COMMENT ON COLUMN public.resource_sources.cloud_account_id IS",
+		"COMMENT ON COLUMN public.resource_sources.identity_status IS",
+		"COMMENT ON COLUMN public.resource_sources.identity_verified_at IS",
+	} {
+		if !strings.Contains(migration, fragment) {
+			t.Errorf("P0 增量迁移缺少中文元数据：%s", fragment)
+		}
+	}
+}
+
+// TestDockerfileIncludesMigrationCommand 验证应用镜像同时交付显式管理员迁移工具。
+func TestDockerfileIncludesMigrationCommand(t *testing.T) {
+	dockerfile := string(readInitializationFile(t, dockerfilePath))
+	for _, fragment := range []string{
+		"go build -buildvcs=false -o cmdb-migrate ./cmd/migrate",
+		"COPY --from=backend-builder /src/backend/cmdb-migrate ./cmdb-migrate",
+	} {
+		if !strings.Contains(dockerfile, fragment) {
+			t.Errorf("镜像定义缺少管理员迁移工具：%s", fragment)
 		}
 	}
 }

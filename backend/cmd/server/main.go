@@ -17,6 +17,7 @@ import (
 	cloudresource "cmdb/internal/resource"
 	"cmdb/internal/web"
 	"github.com/gin-gonic/gin"
+	"gorm.io/gorm"
 )
 
 func main() {
@@ -33,6 +34,23 @@ func main() {
 	if err != nil {
 		log.Fatalf("连接数据库失败：%v", err)
 	}
+	if err := startAfterSchemaCheck(context.Background(), db, func() error {
+		return serve(configuration, db)
+	}); err != nil {
+		log.Fatalf("启动服务失败：%v", err)
+	}
+}
+
+// startAfterSchemaCheck 将数据库版本门禁放在所有长期运行组件之前，失败时不启动任何后台任务或端口监听。
+func startAfterSchemaCheck(ctx context.Context, db *gorm.DB, start func() error) error {
+	if err := database.CheckSchemaVersion(ctx, db); err != nil {
+		return err
+	}
+	return start()
+}
+
+// serve 在版本门禁通过后装配并启动调度器与 HTTP 服务。
+func serve(configuration config.Config, db *gorm.DB) error {
 	collectors := map[string]cloudresource.Collector{
 		cloudresource.ProviderAliyun: aliyuncollector.NewCollector(),
 		cloudresource.ProviderAWS:    awscollector.NewCollector(),
@@ -52,11 +70,9 @@ func main() {
 		ResourceService: resourceService,
 	}, os.Getenv("STATIC_DIR"))
 	if err != nil {
-		log.Fatalf("装配 HTTP 服务失败：%v", err)
+		return err
 	}
-	if err := server.Run(":" + configuration.Server.Port); err != nil {
-		log.Fatalf("启动 HTTP 服务失败：%v", err)
-	}
+	return server.Run(":" + configuration.Server.Port)
 }
 
 // buildServer 在同一服务中装配 API 与可选静态页面；显式静态目录损坏时拒绝带缺失页面启动。
