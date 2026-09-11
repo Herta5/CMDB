@@ -40,6 +40,9 @@ docs/project/*
 !docs/project/resource-sync.md
 !docs/project/security.md
 !docs/project/frontend-guidelines.md
+!docs/project/README.md
+!docs/project/acceptance.md
+!docs/project/implementation-status.md
 
 # Isolated development worktrees
 .worktrees/
