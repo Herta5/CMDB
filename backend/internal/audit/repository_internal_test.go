@@ -3,6 +3,20 @@ package audit
 
 import "testing"
 
+// TestSanitizeMapUsesSharedSensitiveClassification 防止审计保留一份会落后的敏感键名单。
+func TestSanitizeMapUsesSharedSensitiveClassification(t *testing.T) {
+	value := sanitizeMap(map[string]any{
+		"raw-error-body": "虚构平台错误正文",
+		"safe":           "保留",
+	})
+	if _, exists := value["raw-error-body"]; exists {
+		t.Fatal("审计清理必须复用共享分类删除原始错误正文")
+	}
+	if value["safe"] != "保留" {
+		t.Fatal("审计清理必须保留安全字段")
+	}
+}
+
 // TestActorUsernameExpressionByDialect 防止 PostgreSQL 查询误用 SQLite 的 JSON 函数。
 func TestActorUsernameExpressionByDialect(t *testing.T) {
 	for _, tt := range []struct{ dialect, want string }{

@@ -6,11 +6,24 @@ import (
 	"errors"
 )
 
-// ErrAuthenticationFailed 表示接入凭证无效，公共同步服务据此保护现有资源状态。
-var ErrAuthenticationFailed = errors.New("接入源认证失败")
+var (
+	// ErrInvalidProviderCredential 表示凭证 JSON 不符合平台字段和非空约束。
+	ErrInvalidProviderCredential = errors.New("云平台凭证格式无效")
+	// ErrInvalidProviderConfig 表示非敏感配置包含未定义字段或敏感信息。
+	ErrInvalidProviderConfig = errors.New("云平台配置无效")
+	// ErrCloudAuthentication 表示云平台拒绝凭证认证，不携带原始响应。
+	ErrCloudAuthentication = errors.New("接入源认证失败")
+	// ErrCloudPermission 表示凭证有效但缺少云资源只读权限。
+	ErrCloudPermission = errors.New("云账号权限不足")
+	// ErrCloudNetwork 表示云平台轻量调用遇到网络故障。
+	ErrCloudNetwork = errors.New("网络连接失败")
+)
 
-// ErrPermissionDenied 表示凭证有效但缺少云资源只读权限，不携带云厂商原始响应。
-var ErrPermissionDenied = errors.New("云账号权限不足")
+// 旧名称保留为同一错误实例，确保既有同步和 HTTP 分类在迁移适配器时不改变语义。
+var (
+	ErrAuthenticationFailed = ErrCloudAuthentication
+	ErrPermissionDenied     = ErrCloudPermission
+)
 
 // Snapshot 是平台采集器输出的单个云端资源事实。
 type Snapshot struct {

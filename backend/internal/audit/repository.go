@@ -7,8 +7,8 @@ import (
 	"encoding/json"
 	"errors"
 	"strings"
-	"unicode"
 
+	"cmdb/internal/security"
 	"gorm.io/gorm"
 )
 
@@ -241,7 +241,7 @@ func isNumericIdentifier(value string) bool {
 func sanitizeMap(value map[string]any) map[string]any {
 	clean := make(map[string]any, len(value))
 	for key, item := range value {
-		if sensitiveKey(key) {
+		if security.IsSensitiveKey(key) {
 			continue
 		}
 		clean[key] = sanitizeValue(item)
@@ -263,28 +263,4 @@ func sanitizeValue(value any) any {
 	default:
 		return value
 	}
-}
-
-// sensitiveKey 统一匹配凭证及内部用户引用，兼容蛇形、短横线和大小写写法。
-func sensitiveKey(key string) bool {
-	normalized := strings.Map(func(value rune) rune {
-		if unicode.IsLetter(value) || unicode.IsDigit(value) {
-			return unicode.ToLower(value)
-		}
-		return -1
-	}, key)
-	for _, blocked := range []string{
-		"actorid", "userid", "targetuserid", "owneruserid", "previousowneruserid",
-		"password", "passwordhash",
-		"token", "sessiontoken", "accesstoken", "refreshtoken",
-		"apikey", "accesskey", "accesskeyid", "accesskeysecret",
-		"secret", "secretkey", "secretaccesskey", "clientsecret",
-		"credential", "encryptedcredential", "authorization",
-		"ciphertext", "cmdbencryptionkey",
-	} {
-		if normalized == blocked {
-			return true
-		}
-	}
-	return false
 }
