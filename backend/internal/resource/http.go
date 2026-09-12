@@ -226,6 +226,15 @@ func (h *HTTPHandler) ListSources(c *gin.Context) {
 	c.JSON(http.StatusOK, values)
 }
 
+// writeSourceReadError 保持不存在与跨项目防枚举语义，同时把内部读取故障收敛为安全 500。
+func writeSourceReadError(c *gin.Context, err error) {
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		c.JSON(http.StatusNotFound, gin.H{"code": "SOURCE_NOT_FOUND", "message": "接入源不存在"})
+		return
+	}
+	c.JSON(http.StatusInternalServerError, gin.H{"code": "SOURCE_SERVICE_UNAVAILABLE", "message": "接入源服务暂不可用"})
+}
+
 // SyncSource 手工同步属于当前项目的接入源。
 func (h *HTTPHandler) SyncSource(c *gin.Context) {
 	projectID, ok := projectID(c)
@@ -236,7 +245,7 @@ func (h *HTTPHandler) SyncSource(c *gin.Context) {
 	}
 	source, err := h.service.FindSourceForProject(c.Request.Context(), projectID, sourceID)
 	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"code": "SOURCE_NOT_FOUND", "message": "接入源不存在"})
+		writeSourceReadError(c, err)
 		return
 	}
 	collector := h.service.adapters[source.Provider]
@@ -269,7 +278,7 @@ func (h *HTTPHandler) TestSourceConnection(c *gin.Context) {
 	}
 	source, err := h.service.FindSourceForProject(c.Request.Context(), projectID, sourceID)
 	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"code": "SOURCE_NOT_FOUND", "message": "接入源不存在"})
+		writeSourceReadError(c, err)
 		return
 	}
 	collector := h.service.adapters[source.Provider]

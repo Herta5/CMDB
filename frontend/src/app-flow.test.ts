@@ -121,6 +121,56 @@ beforeEach(() => {
 })
 
 describe('CMDB 第一阶段应用流程', () => {
+  for (const outcome of ['成功', '失败'] as const) {
+    it(`关闭验证后同源可重新提交且旧请求${outcome}不解除新请求锁定`, async () => {
+      const completions: Array<(failed?: boolean) => void> = []
+      request.defaults.adapter = config => {
+        const source = { ...awsSourceDTO, identity_status: 'pending' }
+        if (config.method === 'post') return new Promise((resolve, reject) => {
+          completions.push(failed => {
+            const response = { config, status: failed ? 502 : 200, statusText: '处理结果', headers: {}, data: failed ? { code: 'CLOUD_IDENTITY_UNAVAILABLE', message: '旧验证失败' } : source }
+            if (failed) reject(new AxiosError('旧验证失败', undefined, config, undefined, response)); else resolve(response)
+          })
+        })
+        return Promise.resolve(resourceResponse(config, [source]))
+      }
+      selectManagedProject()
+      const { root, app } = await mount(CloudSyncManagementPage)
+      try {
+        const sourceButton = () => all(root).find(entry => entry.props['aria-label'] === '验证云账号身份')!
+        sourceButton().props.onClick()
+        await flush()
+        const submit = () => Promise.resolve(all(root).find(entry => entry.type === 'form')!.props.onSubmit({ preventDefault() {} })).catch(() => {})
+        const oldSubmission = submit()
+        await flush()
+        all(root).find(entry => entry.type === 'button' && pageText(entry) === '取消')!.props.onClick()
+        await flush()
+        expect(sourceButton().props.disabled).toBe(false)
+        expect(useResourceStore().verifyingSourceId).toBeNull()
+        sourceButton().props.onClick()
+        await flush()
+        enter(root, 'verification-mode', 'new')
+        await flush()
+        enter(root, 'verification-access-key-id', '虚构新输入'); enter(root, 'verification-secret', '虚构新秘密')
+        const newSubmission = submit()
+        await flush()
+        completions[0]!(outcome === '失败')
+        await oldSubmission
+        await flush()
+        const form = all(root).find(entry => entry.type === 'form')!
+        expect(all(form).find(entry => entry.type === 'button' && pageText(entry).includes('正在验证'))?.props.disabled).toBe(true)
+        expect(all(root).find(entry => entry.props.name === 'verification-access-key-id')?.value).toBe('虚构新输入')
+        expect(useResourceStore().verifyingSourceId).toBe(9)
+        expect(useResourceStore().mutationError).toBe('')
+        completions[1]!()
+        await newSubmission
+        await flush()
+        expect(all(root).some(entry => entry.type === 'form')).toBe(false)
+        expect(useResourceStore().verifyingSourceId).toBeNull()
+      } finally { app.unmount() }
+    })
+  }
+
   for (const operation of ['验证', '新建', '编辑'] as const) {
     for (const outcome of ['成功', '失败'] as const) {
       for (const transition of ['切换项目', '关闭后重开'] as const) {

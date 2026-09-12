@@ -702,6 +702,59 @@ func TestVerifySourceIdentityAPI(t *testing.T) {
 	}
 }
 
+// TestSourceOperationReadFailureIsInternal 验证同步和连接测试的读取故障安全返回 500，不进入任务或探测副作用流程。
+func TestSourceOperationReadFailureIsInternal(t *testing.T) {
+	for _, operation := range []struct{ name, suffix string }{{"同步", "sync"}, {"连接测试", "test"}} {
+		t.Run(operation.name, func(t *testing.T) {
+			server, password, db := integrationServerWithDatabase(t)
+			admin := loginUser(t, server, "operator", password)
+			var parent, other project.Project
+			decodeIntegration(t, integrationRequest(t, server, admin, http.MethodPost, "/api/v1/projects", map[string]any{"code": "operation-read", "name": "运行读取项目"}, http.StatusCreated), &parent)
+			decodeIntegration(t, integrationRequest(t, server, admin, http.MethodPost, "/api/v1/projects", map[string]any{"code": "other-operation-read", "name": "另一个项目"}, http.StatusCreated), &other)
+			source := integrationIdentitySource(t, db, parent.ID, cloudresource.IdentityStatusVerified, "111111111111", "identity-ok")
+			missing := integrationRequest(t, server, admin, http.MethodPost, fmt.Sprintf("/api/v1/projects/%d/sources/999999/%s", parent.ID, operation.suffix), nil, http.StatusNotFound)
+			crossProject := integrationRequest(t, server, admin, http.MethodPost, fmt.Sprintf("/api/v1/projects/%d/sources/%d/%s", other.ID, source.ID, operation.suffix), nil, http.StatusNotFound)
+			if missing.Body.String() != crossProject.Body.String() {
+				t.Fatal("不存在与跨项目来源必须保持相同响应")
+			}
+			assertIdentityVerificationError(t, missing.Body.String(), "SOURCE_NOT_FOUND")
+			var beforeAudits int64
+			if err := db.Model(&audit.Log{}).Count(&beforeAudits).Error; err != nil {
+				t.Fatal("读取原审计数量失败")
+			}
+			if err := db.Callback().Query().Before("gorm:query").Register("integration:operation_read_failure", func(tx *gorm.DB) {
+				if tx.Statement.Table == "resource_sources" {
+					tx.AddError(fmt.Errorf("虚构运行读取数据库原文及敏感参数"))
+				}
+			}); err != nil {
+				t.Fatal("安装运行读取故障失败")
+			}
+			response := integrationRequest(t, server, admin, http.MethodPost, fmt.Sprintf("/api/v1/projects/%d/sources/%d/%s", parent.ID, source.ID, operation.suffix), nil, http.StatusInternalServerError)
+			assertIdentityVerificationError(t, response.Body.String(), "SOURCE_SERVICE_UNAVAILABLE")
+			if strings.Contains(response.Body.String(), "虚构运行读取数据库") {
+				t.Fatal("运行读取故障不得公开底层错误")
+			}
+			if err := db.Callback().Query().Remove("integration:operation_read_failure"); err != nil {
+				t.Fatal("撤销运行读取故障失败")
+			}
+			for _, model := range []any{&cloudresource.SyncJob{}, &cloudresource.Server{}, &cloudresource.Database{}, &cloudresource.LoadBalancer{}} {
+				var count int64
+				if err := db.Model(model).Count(&count).Error; err != nil || count != 0 {
+					t.Fatal("来源读取失败不得创建任务或资源")
+				}
+			}
+			var afterAudits int64
+			if err := db.Model(&audit.Log{}).Count(&afterAudits).Error; err != nil || afterAudits != beforeAudits {
+				t.Fatal("来源读取失败不得产生操作审计")
+			}
+			var current cloudresource.Source
+			if err := db.First(&current, source.ID).Error; err != nil || current.EncryptedCredential != source.EncryptedCredential || current.LastSyncAt != nil || current.NextSyncAt != nil {
+				t.Fatal("来源读取失败不得修改凭证或同步计划")
+			}
+		})
+	}
+}
+
 // TestSourceUpdateReadFailureIsInternal 验证编辑前数据库读取故障不能伪装成来源不存在。
 func TestSourceUpdateReadFailureIsInternal(t *testing.T) {
 	server, password, db := integrationServerWithDatabase(t)

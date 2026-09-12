@@ -10,6 +10,16 @@ CMDB 是面向公有云的资源配置管理平台，业务项目是最高级的
 
 后端使用 Go 1.25.1、Gin、GORM；前端使用 Vue 3、TypeScript、Pinia、Vue Router、Element Plus；数据库使用 PostgreSQL 17。Docker Compose 启动一个 PostgreSQL 容器和一个同时提供前端静态文件与 API 的应用容器。
 
+## 构建应用镜像
+
+`Dockerfile` 的前端构建、后端构建和运行阶段分别使用 `registry.aliyuncs.com/acheron/node:20-alpine`、`registry.aliyuncs.com/acheron/golang:1.25-alpine` 和 `registry.aliyuncs.com/acheron/alpine:latest`。这是基础镜像来源选择，不新增代理服务；Go 模块仍声明 Go 1.25.1，Compose 的单应用容器和入口保持不变。构建环境还须能访问 pnpm、Go 模块和 Alpine 软件包依赖源。
+
+```bash
+docker build -t cmdb:p0-verification .
+```
+
+成品包含 `/app/cmdb-server`、`/app/cmdb-init-admin`、`/app/cmdb-migrate` 三个可执行文件和 `/app/web` 前端静态文件；默认入口仍为 `./cmdb-server`。初始化管理员和数据库迁移继续通过下文的一次性命令执行，不新增常驻服务。
+
 ## 从空库部署
 
 需要 Docker Engine、Docker Compose、Bash 和 OpenSSL。部署使用独立的 `cmdb-postgresql-data` 数据卷：首次创建空卷时，PostgreSQL 按文件名顺序以管理员身份执行 `backend/database/init/001_create_app_role.sh` 和 `002_schema.sql`，先创建受限的 `cmdb` 应用账号，再建立当前版本 2 业务结构；不会创建默认账号、业务项目或云接入源。

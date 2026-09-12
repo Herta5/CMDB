@@ -36,6 +36,36 @@ describe('云资源状态层', () => {
   })
 
   for (const operation of ['新建', '编辑'] as const) {
+    for (const outcome of ['成功', '失败'] as const) {
+      for (const syncManagement of [false, true]) {
+        it(`${operation}${outcome}在同项目${syncManagement ? '汇总轮询' : '平台刷新'}后仍刷新事实并清理凭证`, async () => {
+          let serverName = '提交前事实'
+          get.mockImplementation((url, options) => {
+            if (url.endsWith('/resources')) return Promise.resolve({ items: [], total: 0 })
+            const response = projectResponse(url, options)
+            return Promise.resolve(Array.isArray(response) ? response.map(source => ({ ...source, name: serverName })) : response)
+          })
+          const store = useResourceStore()
+          const refresh = () => syncManagement ? store.loadSyncManagement(1) : store.load(1, 'aws')
+          await refresh()
+          const response = deferred()
+          post.mockReturnValue(response.promise); put.mockReturnValue(response.promise)
+          const credential = { access_key_id: '虚构输入', secret_access_key: '虚构秘密' }
+          const input = { provider: 'aws' as const, name: '提交名称', region: '', credential, config: {}, syncIntervalMinutes: 60 }
+          const pending = (operation === '新建' ? store.create(1, 'aws', input, syncManagement) : store.update(1, 'aws', 10, input, syncManagement)).catch(error => error)
+          serverName = '同项目轮询事实'
+          await refresh()
+          expect(store.sources[0]?.name).toBe('同项目轮询事实')
+          serverName = '提交后的服务端事实'
+          if (outcome === '成功') response.resolve({ id: 10, project_id: 1, provider: 'aws', name: '提交响应', identity_status: 'verified', enabled: true, sync_interval_minutes: 60 })
+          else response.reject({ response: { data: { message: '保存接入源失败，请重试' } } })
+          await pending
+          expect(store.sources.map(source => source.name)).toEqual(syncManagement ? ['提交后的服务端事实', '提交后的服务端事实'] : ['提交后的服务端事实'])
+          expect(store.mutationError).toBe(outcome === '失败' ? '保存接入源失败，请重试' : '')
+          expect(credential).toEqual({})
+        })
+      }
+    }
     it(`${operation}失败后的刷新迟到不得把旧项目错误写回新项目`, async () => {
       get.mockImplementation((url, options) => Promise.resolve(projectResponse(url, options)))
       const store = useResourceStore()
