@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"cmdb/internal/resource"
+	"github.com/aliyun/alibaba-cloud-sdk-go/sdk/requests"
 	"github.com/aliyun/alibaba-cloud-sdk-go/services/sts"
 )
 
@@ -17,10 +18,12 @@ type stsIdentityStub struct {
 	calls    int
 	response *sts.GetCallerIdentityResponse
 	err      error
+	scheme   string
 }
 
-func (s *stsIdentityStub) GetCallerIdentity(*sts.GetCallerIdentityRequest) (*sts.GetCallerIdentityResponse, error) {
+func (s *stsIdentityStub) GetCallerIdentity(request *sts.GetCallerIdentityRequest) (*sts.GetCallerIdentityResponse, error) {
 	s.calls++
+	s.scheme = request.Scheme
 	return s.response, s.err
 }
 
@@ -59,6 +62,21 @@ func TestAliyunResourceTypesKeepsInitialScope(t *testing.T) {
 	values := NewCollector().ResourceTypes()
 	if len(values) != 3 || values[0] != "ecs" || values[1] != "rds" || values[2] != "slb" {
 		t.Fatalf("阿里云首期资源类型必须固定为 ecs、rds、slb：%v", values)
+	}
+}
+
+// TestAliyunResolveCloudAccountIDUsesHTTPS 防止 STS 身份请求退回不再受支持的明文 HTTP。
+func TestAliyunResolveCloudAccountIDUsesHTTPS(t *testing.T) {
+	stub := &stsIdentityStub{response: &sts.GetCallerIdentityResponse{AccountId: "100000000001"}}
+	collector := &Collector{newSTSClient: func(string, string, string) (aliyunIdentityAPI, error) {
+		return stub, nil
+	}}
+
+	if _, err := collector.ResolveCloudAccountID(context.Background(), resource.Source{Region: "cn-hangzhou"}, []byte(`{"access_key_id":"test-id","access_key_secret":"test-secret"}`)); err != nil {
+		t.Fatalf("HTTPS 身份请求应返回账号标识：%v", err)
+	}
+	if stub.scheme != requests.HTTPS {
+		t.Fatalf("阿里云 STS 身份请求必须使用 HTTPS：got=%q", stub.scheme)
 	}
 }
 
