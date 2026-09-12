@@ -39,6 +39,7 @@ services:
       dockerfile: Dockerfile
     restart: unless-stopped
     environment:
+      # 管理员迁移变量不得常驻 app 环境；停服升级时仅通过 docker compose run -e 显式传入。
       SERVER_PORT: "80"
       STATIC_DIR: /app/web
       GIN_MODE: release
