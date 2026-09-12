@@ -37,6 +37,18 @@ func TestInitializeAdminFromStandardInput(t *testing.T) {
 	}
 }
 
+// TestInitializeAdminRequiresInitialDatabaseSetup 验证结构缺失时只提示首次初始化，不暗示存在数据库升级入口。
+func TestInitializeAdminRequiresInitialDatabaseSetup(t *testing.T) {
+	db := adminDatabase(t)
+	if err := db.Migrator().DropTable(&identity.User{}); err != nil {
+		t.Fatal("准备未初始化数据库失败")
+	}
+	err := run([]string{"--username", "operator"}, strings.NewReader(adminPassword(t)), db)
+	if err == nil || err.Error() != "初始化失败：请先完成数据库首次初始化" {
+		t.Fatalf("未初始化数据库必须返回准确的首次初始化提示：%v", err)
+	}
+}
+
 // TestInitializeAdminRejectsUnsafeInput 防止凭证通过参数泄露或无效输入创建身份。
 func TestInitializeAdminRejectsUnsafeInput(t *testing.T) {
 	for _, test := range []struct {

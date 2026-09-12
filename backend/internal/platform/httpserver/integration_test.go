@@ -795,19 +795,25 @@ func TestSourceIdentityErrorsUseStableHTTPContract(t *testing.T) {
 	_ = integrationIdentitySource(t, db, parent.ID, "333333333333", "identity-occupied")
 
 	for _, scenario := range []struct {
-		name   string
-		body   map[string]any
-		status int
-		code   string
+		name    string
+		body    map[string]any
+		status  int
+		code    string
+		message string
 	}{
 		{name: "创建基础字段无效", body: map[string]any{"provider": "aws", "name": "", "credential": map[string]string{"access_key_id": "identity-ok", "secret_access_key": "identity-secret"}}, status: http.StatusBadRequest, code: "SOURCE_INVALID_INPUT"},
 		{name: "创建周期无效", body: map[string]any{"provider": "aws", "name": "周期无效", "sync_interval_minutes": 1, "credential": map[string]string{"access_key_id": "identity-ok", "secret_access_key": "identity-secret"}}, status: http.StatusBadRequest, code: "SOURCE_INVALID_INPUT"},
 		{name: "创建账号冲突", body: map[string]any{"provider": "aws", "name": "重复账号", "region": "ap-east-1", "credential": map[string]any{"access_key_id": "identity-conflict", "secret_access_key": "identity-secret"}}, status: http.StatusConflict, code: "CLOUD_ACCOUNT_CONFLICT"},
-		{name: "创建时云身份不可用", body: map[string]any{"provider": "aws", "name": "云故障账号", "region": "ap-east-1", "credential": map[string]any{"access_key_id": "identity-network", "secret_access_key": "identity-secret"}}, status: http.StatusBadGateway, code: "CLOUD_IDENTITY_UNAVAILABLE"},
+		{name: "创建时云认证失败", body: map[string]any{"provider": "aws", "name": "云认证失败账号", "region": "ap-east-1", "credential": map[string]any{"access_key_id": "identity-authentication", "secret_access_key": "identity-secret"}}, status: http.StatusBadGateway, code: "CLOUD_IDENTITY_UNAVAILABLE", message: "AccessKey 无效或签名校验失败，请检查凭证"},
+		{name: "创建时云权限不足", body: map[string]any{"provider": "aws", "name": "云权限不足账号", "region": "ap-east-1", "credential": map[string]any{"access_key_id": "identity-permission", "secret_access_key": "identity-secret"}}, status: http.StatusBadGateway, code: "CLOUD_IDENTITY_UNAVAILABLE", message: "云账号身份查询权限不足，请检查云账号授权"},
+		{name: "创建时云网络失败", body: map[string]any{"provider": "aws", "name": "云网络失败账号", "region": "ap-east-1", "credential": map[string]any{"access_key_id": "identity-network", "secret_access_key": "identity-secret"}}, status: http.StatusBadGateway, code: "CLOUD_IDENTITY_UNAVAILABLE", message: "云账号身份服务连接失败，请检查服务端网络"},
 	} {
 		t.Run(scenario.name, func(t *testing.T) {
 			response := integrationRequest(t, server, admin, http.MethodPost, projectPath+"/sources", scenario.body, scenario.status)
 			assertIdentityVerificationError(t, response.Body.String(), scenario.code)
+			if scenario.message != "" && !strings.Contains(response.Body.String(), scenario.message) {
+				t.Fatal("创建凭证身份失败必须返回对应的安全处理提示")
+			}
 		})
 	}
 
@@ -818,6 +824,23 @@ func TestSourceIdentityErrorsUseStableHTTPContract(t *testing.T) {
 		"name": "替换凭证", "region": "ap-east-1", "credential": map[string]any{"access_key_id": "identity-object", "secret_access_key": "identity-secret"}, "config": map[string]any{}, "enabled": true, "sync_interval_minutes": 60,
 	}, http.StatusConflict)
 	assertIdentityVerificationError(t, updateResponse.Body.String(), "SOURCE_IDENTITY_MISMATCH")
+	for _, scenario := range []struct {
+		name, accessKeyID, message string
+	}{
+		{name: "替换时云认证失败", accessKeyID: "identity-authentication", message: "AccessKey 无效或签名校验失败，请检查凭证"},
+		{name: "替换时云权限不足", accessKeyID: "identity-permission", message: "云账号身份查询权限不足，请检查云账号授权"},
+		{name: "替换时云网络失败", accessKeyID: "identity-network", message: "云账号身份服务连接失败，请检查服务端网络"},
+	} {
+		t.Run(scenario.name, func(t *testing.T) {
+			response := integrationRequest(t, server, admin, http.MethodPut, projectPath+"/sources/"+strconv.FormatUint(verified.ID, 10), map[string]any{
+				"name": "替换凭证失败", "region": "ap-east-1", "credential": map[string]any{"access_key_id": scenario.accessKeyID, "secret_access_key": "identity-secret"}, "config": map[string]any{}, "enabled": true, "sync_interval_minutes": 60,
+			}, http.StatusBadGateway)
+			assertIdentityVerificationError(t, response.Body.String(), "CLOUD_IDENTITY_UNAVAILABLE")
+			if !strings.Contains(response.Body.String(), scenario.message) {
+				t.Fatal("替换凭证身份失败必须返回对应的安全处理提示")
+			}
+		})
+	}
 
 }
 
@@ -843,7 +866,7 @@ func integrationIdentitySource(t *testing.T, db *gorm.DB, projectID uint64, acco
 // assertIdentityVerificationResponseSafe 防止身份接口响应泄露云账号、凭证、密文或内部验证时间。
 func assertIdentityVerificationResponseSafe(t *testing.T, body string) {
 	t.Helper()
-	for _, forbidden := range []string{"111111111111", "222222222222", "333333333333", "444444444444", "identity-test-secret", "identity-object-secret", "identity-ok", "identity-object", "identity-network", "identity-conflict", "云端原始身份错误", "encrypted_credential", "cloud_account_id", "identity_verified_at", "user_id", "actor_id"} {
+	for _, forbidden := range []string{"111111111111", "222222222222", "333333333333", "444444444444", "identity-test-secret", "identity-object-secret", "identity-ok", "identity-object", "identity-authentication", "identity-permission", "identity-network", "identity-conflict", "云端原始身份错误", "encrypted_credential", "cloud_account_id", "identity_verified_at", "user_id", "actor_id"} {
 		if strings.Contains(body, forbidden) {
 			t.Fatal("身份验证响应不得泄露账号、凭证、密文或内部验证字段")
 		}
@@ -936,6 +959,10 @@ func (integrationCollector) ResolveCloudAccountID(_ context.Context, _ cloudreso
 		return "333333333333", nil
 	case "identity-object":
 		return "444444444444", nil
+	case "identity-authentication":
+		return "", fmt.Errorf("云端原始身份错误：%w", cloudresource.ErrCloudAuthentication)
+	case "identity-permission":
+		return "", fmt.Errorf("云端原始身份错误：%w", cloudresource.ErrCloudPermission)
 	case "identity-network":
 		return "", fmt.Errorf("云端原始身份错误：%w", cloudresource.ErrCloudNetwork)
 	default:

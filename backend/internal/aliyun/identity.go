@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"cmdb/internal/resource"
+	"github.com/aliyun/alibaba-cloud-sdk-go/sdk/requests"
 	"github.com/aliyun/alibaba-cloud-sdk-go/services/sts"
 )
 
@@ -56,7 +57,10 @@ func (c *Collector) ResolveCloudAccountID(_ context.Context, source resource.Sou
 	if err != nil || client == nil {
 		return "", classifyAliyunIdentityError(err)
 	}
-	response, err := client.GetCallerIdentity(sts.CreateGetCallerIdentityRequest())
+	request := sts.CreateGetCallerIdentityRequest()
+	// 阿里云 STS 已拒绝明文 HTTP；显式指定 HTTPS，避免依赖 SDK 的历史默认协议。
+	request.Scheme = requests.HTTPS
+	response, err := client.GetCallerIdentity(request)
 	if err != nil {
 		return "", classifyAliyunIdentityError(err)
 	}

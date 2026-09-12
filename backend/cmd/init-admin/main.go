@@ -64,7 +64,7 @@ func run(args []string, input io.Reader, db *gorm.DB) error {
 	return db.Session(&gorm.Session{Logger: logger.Default.LogMode(logger.Silent)}).Transaction(func(tx *gorm.DB) error {
 		var count int64
 		if err := tx.Model(&identity.User{}).Count(&count).Error; err != nil {
-			return errors.New("初始化失败：请先完成新版数据库迁移")
+			return errors.New("初始化失败：请先完成数据库首次初始化")
 		}
 		if count != 0 {
 			return errors.New("初始化被拒绝：用户库非空")

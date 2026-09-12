@@ -16,20 +16,26 @@ type HTTPHandler struct {
 	service *Service
 }
 
-// writeSourceIdentityError 为所有可能触发身份门禁的接入源入口提供同一组稳定公开分类。
+// writeSourceIdentityError 为创建与替换凭证时的云身份识别提供同一组稳定公开分类。
 func writeSourceIdentityError(c *gin.Context, err error) bool {
 	if writeSourceIdentityConflict(c, err) {
 		return true
 	}
 	switch {
-	case errors.Is(err, ErrCloudAuthentication), errors.Is(err, ErrCloudPermission), errors.Is(err, ErrCloudNetwork):
-		c.JSON(http.StatusBadGateway, gin.H{"code": "CLOUD_IDENTITY_UNAVAILABLE", "message": "云账号身份验证暂不可用"})
+	case errors.Is(err, ErrCloudAuthentication):
+		c.JSON(http.StatusBadGateway, gin.H{"code": "CLOUD_IDENTITY_UNAVAILABLE", "message": "AccessKey 无效或签名校验失败，请检查凭证"})
+		return true
+	case errors.Is(err, ErrCloudPermission):
+		c.JSON(http.StatusBadGateway, gin.H{"code": "CLOUD_IDENTITY_UNAVAILABLE", "message": "云账号身份查询权限不足，请检查云账号授权"})
+		return true
+	case errors.Is(err, ErrCloudNetwork):
+		c.JSON(http.StatusBadGateway, gin.H{"code": "CLOUD_IDENTITY_UNAVAILABLE", "message": "云账号身份服务连接失败，请检查服务端网络"})
 		return true
 	}
 	return false
 }
 
-// writeSourceIdentityConflict 只处理身份状态与归属门禁，不把连接 Probe 的错误当作身份识别故障。
+// writeSourceIdentityConflict 只处理账号归属和替换身份不一致，不把连接 Probe 的错误当作身份识别故障。
 func writeSourceIdentityConflict(c *gin.Context, err error) bool {
 	switch {
 	case errors.Is(err, ErrCloudAccountConflict):
