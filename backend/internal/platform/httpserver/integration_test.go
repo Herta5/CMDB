@@ -39,7 +39,7 @@ func TestDeletionConflictHTTPContract(t *testing.T) {
 		t.Fatal("准备项目管理员失败")
 	}
 	now := time.Now().UTC()
-	source := cloudresource.Source{ProjectID: parent.ID, Name: "保留来源", Provider: "aws", CloudAccountID: "虚构账号", IdentityStatus: "verified", IdentityVerifiedAt: &now}
+	source := cloudresource.Source{ProjectID: parent.ID, Name: "保留来源", Provider: "aws", CloudAccountID: "虚构账号", IdentityVerifiedAt: &now}
 	if err := db.Create(&source).Error; err != nil {
 		t.Fatal("准备来源失败")
 	}
@@ -540,8 +540,8 @@ func TestProjectSourceAPINeverReturnsCredentials(t *testing.T) {
 	path := "/api/v1/projects/" + strconv.FormatUint(created.ID, 10)
 	integrationRequest(t, server, admin, http.MethodPost, path+"/members", map[string]any{"username": "member_a", "role": "member"}, http.StatusCreated)
 	response := integrationRequest(t, server, admin, http.MethodPost, path+"/sources", map[string]any{"provider": "aws", "name": "AWS 生产账号", "region": "cn-north-1", "credential": map[string]any{"access_key_id": "example-id", "secret_access_key": "example-secret"}}, http.StatusCreated)
-	if !strings.Contains(response.Body.String(), `"identity_status":"verified"`) || strings.Contains(response.Body.String(), "123456789012") || strings.Contains(response.Body.String(), "identity_verified_at") {
-		t.Fatal("HTTP 新建来源必须公开已验证状态，但不得公开账号或验证时间")
+	if strings.Contains(response.Body.String(), "123456789012") || strings.Contains(response.Body.String(), "identity_verified_at") || strings.Contains(response.Body.String(), "identity_status") {
+		t.Fatal("HTTP 新建来源不得公开账号、验证时间或不存在的身份状态")
 	}
 	if strings.Contains(response.Body.String(), "example") || strings.Contains(response.Body.String(), "encrypted") {
 		t.Fatal("接入源响应不得暴露凭证明文或密文字段")
@@ -593,11 +593,15 @@ func TestProjectSourceAPINeverReturnsCredentials(t *testing.T) {
 		t.Fatal("资产阻止来源删除时不得产生成功审计")
 	}
 	// 空来源用于独立验收删除能力，不能把已同步资产的来源当作级联清理入口。
-	emptySource := source
+	// 公开响应不会携带密文和身份验证时间，测试夹具必须从持久化记录复制完整的服务端字段。
+	var emptySource cloudresource.Source
+	if err := db.First(&emptySource, source.ID).Error; err != nil {
+		t.Fatalf("读取来源夹具失败：%v", err)
+	}
 	emptySource.ID, emptySource.CloudAccountID = 0, "虚构空账号"
 	emptySource.Name = "无依赖来源"
 	if err := db.Create(&emptySource).Error; err != nil {
-		t.Fatal("准备无依赖来源失败")
+		t.Fatalf("准备无依赖来源失败：%v", err)
 	}
 	integrationRequest(t, server, admin, http.MethodDelete, path+"/sources/"+strconv.FormatUint(emptySource.ID, 10), nil, http.StatusNoContent)
 	integrationRequest(t, server, member, http.MethodGet, path+"/sources", nil, http.StatusOK)
@@ -619,90 +623,6 @@ func TestProjectSourceAPINeverReturnsCredentials(t *testing.T) {
 	}
 }
 
-// TestVerifySourceIdentityAPI 验证身份确认仅允许具备写权限的操作者执行，并将领域失败收敛为稳定脱敏响应。
-func TestVerifySourceIdentityAPI(t *testing.T) {
-	server, password, db := integrationServerWithDatabase(t)
-	systemAdmin := loginUser(t, server, "operator", password)
-	projectMember := loginUser(t, server, "member_a", password)
-
-	var firstProject, secondProject project.Project
-	decodeIntegration(t, integrationRequest(t, server, systemAdmin, http.MethodPost, "/api/v1/projects", map[string]any{"code": "identity-api-one", "name": "身份验证项目"}, http.StatusCreated), &firstProject)
-	decodeIntegration(t, integrationRequest(t, server, systemAdmin, http.MethodPost, "/api/v1/projects", map[string]any{"code": "identity-api-two", "name": "另一身份验证项目"}, http.StatusCreated), &secondProject)
-	firstPath := "/api/v1/projects/" + strconv.FormatUint(firstProject.ID, 10)
-	integrationRequest(t, server, systemAdmin, http.MethodPost, firstPath+"/members", map[string]any{"username": "member_a", "role": "member"}, http.StatusCreated)
-
-	verified := integrationIdentitySource(t, db, firstProject.ID, cloudresource.IdentityStatusPending, "", "identity-ok")
-	alreadyVerified := integrationIdentitySource(t, db, firstProject.ID, cloudresource.IdentityStatusVerified, "222222222222", "identity-mismatch")
-	conflict := integrationIdentitySource(t, db, firstProject.ID, cloudresource.IdentityStatusPending, "", "identity-conflict")
-	_ = integrationIdentitySource(t, db, firstProject.ID, cloudresource.IdentityStatusVerified, "333333333333", "identity-occupied")
-	cloudFailure := integrationIdentitySource(t, db, firstProject.ID, cloudresource.IdentityStatusPending, "", "identity-network")
-	providedCredential := integrationIdentitySource(t, db, firstProject.ID, cloudresource.IdentityStatusPending, "", "identity-network")
-	invalidCredential := integrationIdentitySource(t, db, firstProject.ID, cloudresource.IdentityStatusPending, "", "identity-ok")
-	crossProject := integrationIdentitySource(t, db, secondProject.ID, cloudresource.IdentityStatusPending, "", "identity-ok")
-	disabled := integrationIdentitySource(t, db, secondProject.ID, cloudresource.IdentityStatusPending, "", "identity-ok")
-	if err := db.Model(&project.Project{}).Where("id = ?", secondProject.ID).Update("status", "disabled").Error; err != nil {
-		t.Fatal("准备停用项目失败")
-	}
-
-	verifyPath := func(sourceID uint64) string {
-		return firstPath + "/sources/" + strconv.FormatUint(sourceID, 10) + "/verify-identity"
-	}
-	integrationRequest(t, server, projectMember, http.MethodPost, verifyPath(verified.ID), map[string]any{}, http.StatusNotFound)
-	integrationRequest(t, server, systemAdmin, http.MethodPut, firstPath+"/members/member_a", map[string]any{"role": "project_admin"}, http.StatusOK)
-	for _, scenario := range []struct {
-		name string
-		body string
-	}{
-		{name: "未知顶层字段", body: `{"unexpected":true}`},
-		{name: "尾随 JSON", body: `{"credential":null}{"credential":null}`},
-	} {
-		t.Run(scenario.name, func(t *testing.T) {
-			response := integrationRawRequest(t, server, projectMember, http.MethodPost, verifyPath(verified.ID), scenario.body, http.StatusBadRequest)
-			assertIdentityVerificationError(t, response.Body.String(), "SOURCE_INVALID_INPUT")
-		})
-	}
-	response := integrationRequest(t, server, projectMember, http.MethodPost, verifyPath(verified.ID), map[string]any{}, http.StatusOK)
-	assertIdentityVerificationResponseSafe(t, response.Body.String())
-	response = integrationRequest(t, server, systemAdmin, http.MethodPost, verifyPath(verified.ID), map[string]any{"credential": nil}, http.StatusConflict)
-	assertIdentityVerificationError(t, response.Body.String(), "SOURCE_IDENTITY_ALREADY_VERIFIED")
-	response = integrationRequest(t, server, projectMember, http.MethodPost, verifyPath(providedCredential.ID), map[string]any{"credential": map[string]any{"access_key_id": "identity-object", "secret_access_key": "identity-object-secret"}}, http.StatusOK)
-	assertIdentityVerificationResponseSafe(t, response.Body.String())
-
-	for _, scenario := range []struct {
-		name   string
-		path   string
-		body   any
-		status int
-		code   string
-	}{
-		{name: "字段错误", path: verifyPath(invalidCredential.ID), body: map[string]any{"credential": "无效凭证"}, status: http.StatusBadRequest, code: "SOURCE_INVALID_INPUT"},
-		{name: "来源标识错误", path: firstPath + "/sources/not-a-number/verify-identity", body: map[string]any{}, status: http.StatusBadRequest, code: "SOURCE_INVALID_INPUT"},
-		{name: "账号冲突", path: verifyPath(conflict.ID), body: map[string]any{}, status: http.StatusConflict, code: "CLOUD_ACCOUNT_CONFLICT"},
-		{name: "已验证来源", path: verifyPath(alreadyVerified.ID), body: map[string]any{}, status: http.StatusConflict, code: "SOURCE_IDENTITY_ALREADY_VERIFIED"},
-		{name: "云故障", path: verifyPath(cloudFailure.ID), body: map[string]any{}, status: http.StatusBadGateway, code: "CLOUD_IDENTITY_UNAVAILABLE"},
-		{name: "跨项目来源", path: verifyPath(crossProject.ID), body: map[string]any{}, status: http.StatusNotFound, code: "SOURCE_NOT_FOUND"},
-		{name: "停用项目", path: "/api/v1/projects/" + strconv.FormatUint(secondProject.ID, 10) + "/sources/" + strconv.FormatUint(disabled.ID, 10) + "/verify-identity", body: map[string]any{}, status: http.StatusConflict, code: "PROJECT_DISABLED"},
-	} {
-		t.Run(scenario.name, func(t *testing.T) {
-			response := integrationRequest(t, server, systemAdmin, http.MethodPost, scenario.path, scenario.body, scenario.status)
-			assertIdentityVerificationError(t, response.Body.String(), scenario.code)
-		})
-	}
-	crossResponse := integrationRequest(t, server, systemAdmin, http.MethodPost, verifyPath(crossProject.ID), map[string]any{}, http.StatusNotFound)
-	notFoundResponse := integrationRequest(t, server, systemAdmin, http.MethodPost, verifyPath(999999), map[string]any{}, http.StatusNotFound)
-	if crossResponse.Body.String() != notFoundResponse.Body.String() {
-		t.Fatal("跨项目来源与不存在来源必须返回完全一致的公开响应")
-	}
-	var identityAudits []audit.Log
-	if err := db.Where("project_id = ? AND action = ? AND resource_id IN ?", firstProject.ID, audit.ActionSourceUpdated, []string{strconv.FormatUint(verified.ID, 10), strconv.FormatUint(providedCredential.ID, 10)}).Find(&identityAudits).Error; err != nil || len(identityAudits) != 2 {
-		t.Fatal("身份验证成功必须只记录对应的安全审计")
-	}
-	for _, entry := range identityAudits {
-		assertIdentityVerificationResponseSafe(t, string(entry.Detail))
-	}
-}
-
-// TestSourceOperationReadFailureIsInternal 验证同步和连接测试的读取故障安全返回 500，不进入任务或探测副作用流程。
 func TestSourceOperationReadFailureIsInternal(t *testing.T) {
 	for _, operation := range []struct{ name, suffix string }{{"同步", "sync"}, {"连接测试", "test"}} {
 		t.Run(operation.name, func(t *testing.T) {
@@ -711,7 +631,7 @@ func TestSourceOperationReadFailureIsInternal(t *testing.T) {
 			var parent, other project.Project
 			decodeIntegration(t, integrationRequest(t, server, admin, http.MethodPost, "/api/v1/projects", map[string]any{"code": "operation-read", "name": "运行读取项目"}, http.StatusCreated), &parent)
 			decodeIntegration(t, integrationRequest(t, server, admin, http.MethodPost, "/api/v1/projects", map[string]any{"code": "other-operation-read", "name": "另一个项目"}, http.StatusCreated), &other)
-			source := integrationIdentitySource(t, db, parent.ID, cloudresource.IdentityStatusVerified, "111111111111", "identity-ok")
+			source := integrationIdentitySource(t, db, parent.ID, "111111111111", "identity-ok")
 			missing := integrationRequest(t, server, admin, http.MethodPost, fmt.Sprintf("/api/v1/projects/%d/sources/999999/%s", parent.ID, operation.suffix), nil, http.StatusNotFound)
 			crossProject := integrationRequest(t, server, admin, http.MethodPost, fmt.Sprintf("/api/v1/projects/%d/sources/%d/%s", other.ID, source.ID, operation.suffix), nil, http.StatusNotFound)
 			if missing.Body.String() != crossProject.Body.String() {
@@ -761,7 +681,7 @@ func TestSourceUpdateReadFailureIsInternal(t *testing.T) {
 	admin := loginUser(t, server, "operator", password)
 	var parent project.Project
 	decodeIntegration(t, integrationRequest(t, server, admin, http.MethodPost, "/api/v1/projects", map[string]any{"code": "read-failure", "name": "读取故障项目"}, http.StatusCreated), &parent)
-	source := integrationIdentitySource(t, db, parent.ID, cloudresource.IdentityStatusVerified, "111111111111", "identity-ok")
+	source := integrationIdentitySource(t, db, parent.ID, "111111111111", "identity-ok")
 	if err := db.Callback().Query().Before("gorm:query").Register("integration:source_read_failure", func(tx *gorm.DB) {
 		if tx.Statement.Table == "resource_sources" {
 			tx.AddError(fmt.Errorf("虚构来源数据库连接原文"))
@@ -797,7 +717,7 @@ func TestSourceProbeErrorsKeepConnectionClassification(t *testing.T) {
 			admin := loginUser(t, server, "operator", password)
 			var parent project.Project
 			decodeIntegration(t, integrationRequest(t, server, admin, http.MethodPost, "/api/v1/projects", map[string]any{"code": "probe-errors", "name": "探测错误项目"}, http.StatusCreated), &parent)
-			source := integrationIdentitySource(t, db, parent.ID, cloudresource.IdentityStatusVerified, "111111111111", "identity-ok")
+			source := integrationIdentitySource(t, db, parent.ID, "111111111111", "identity-ok")
 			if err := db.Model(&source).Update("name", scenario.name).Error; err != nil {
 				t.Fatal("准备探测场景失败")
 			}
@@ -828,7 +748,7 @@ func TestSourceMutationInternalFailureIsSafeAndAtomic(t *testing.T) {
 			path := fmt.Sprintf("/api/v1/projects/%d/sources", parent.ID)
 			var original cloudresource.Source
 			if method == http.MethodPut {
-				original = integrationIdentitySource(t, db, parent.ID, cloudresource.IdentityStatusVerified, "111111111111", "identity-ok")
+				original = integrationIdentitySource(t, db, parent.ID, "111111111111", "identity-ok")
 				path += fmt.Sprintf("/%d", original.ID)
 			}
 			// 故障位于真实审计 INSERT 之后，必须回滚已发生的来源与审计写入。
@@ -872,7 +792,7 @@ func TestSourceIdentityErrorsUseStableHTTPContract(t *testing.T) {
 	var parent project.Project
 	decodeIntegration(t, integrationRequest(t, server, admin, http.MethodPost, "/api/v1/projects", map[string]any{"code": "identity-errors", "name": "身份错误分类项目"}, http.StatusCreated), &parent)
 	projectPath := "/api/v1/projects/" + strconv.FormatUint(parent.ID, 10)
-	_ = integrationIdentitySource(t, db, parent.ID, cloudresource.IdentityStatusVerified, "333333333333", "identity-occupied")
+	_ = integrationIdentitySource(t, db, parent.ID, "333333333333", "identity-occupied")
 
 	for _, scenario := range []struct {
 		name   string
@@ -891,7 +811,7 @@ func TestSourceIdentityErrorsUseStableHTTPContract(t *testing.T) {
 		})
 	}
 
-	verified := integrationIdentitySource(t, db, parent.ID, cloudresource.IdentityStatusVerified, "111111111111", "identity-ok")
+	verified := integrationIdentitySource(t, db, parent.ID, "111111111111", "identity-ok")
 	invalidUpdate := integrationRequest(t, server, admin, http.MethodPut, projectPath+"/sources/"+strconv.FormatUint(verified.ID, 10), map[string]any{"name": "", "sync_interval_minutes": 60}, http.StatusBadRequest)
 	assertIdentityVerificationError(t, invalidUpdate.Body.String(), "SOURCE_INVALID_INPUT")
 	updateResponse := integrationRequest(t, server, admin, http.MethodPut, projectPath+"/sources/"+strconv.FormatUint(verified.ID, 10), map[string]any{
@@ -899,31 +819,10 @@ func TestSourceIdentityErrorsUseStableHTTPContract(t *testing.T) {
 	}, http.StatusConflict)
 	assertIdentityVerificationError(t, updateResponse.Body.String(), "SOURCE_IDENTITY_MISMATCH")
 
-	pending := integrationIdentitySource(t, db, parent.ID, cloudresource.IdentityStatusPending, "", "identity-ok")
-	job := cloudresource.SyncJob{ProjectID: parent.ID, SourceID: pending.ID, Status: "failed", Trigger: "manual", StartedAt: time.Now()}
-	if err := db.Create(&job).Error; err != nil {
-		t.Fatal("准备待验证来源任务失败")
-	}
-	pendingPath := projectPath + "/sources/" + strconv.FormatUint(pending.ID, 10)
-	for _, scenario := range []struct {
-		name, method, path string
-		body               any
-	}{
-		{name: "编辑待验证来源", method: http.MethodPut, path: pendingPath, body: map[string]any{"name": "待验证", "region": "ap-east-1", "config": map[string]any{}, "enabled": true, "sync_interval_minutes": 60}},
-		{name: "连接测试待验证来源", method: http.MethodPost, path: pendingPath + "/test"},
-		{name: "同步待验证来源", method: http.MethodPost, path: pendingPath + "/sync"},
-		{name: "删除待验证来源", method: http.MethodDelete, path: pendingPath},
-		{name: "重试待验证来源任务", method: http.MethodPost, path: projectPath + "/sync-jobs/" + strconv.FormatUint(job.ID, 10) + "/retry"},
-	} {
-		t.Run(scenario.name, func(t *testing.T) {
-			response := integrationRequest(t, server, admin, scenario.method, scenario.path, scenario.body, http.StatusConflict)
-			assertIdentityVerificationError(t, response.Body.String(), "SOURCE_IDENTITY_PENDING")
-		})
-	}
 }
 
-// integrationIdentitySource 直接准备历史待验证来源，避免测试把待验证迁移前提误当作本接口的职责。
-func integrationIdentitySource(t *testing.T, db *gorm.DB, projectID uint64, identityStatus, accountID, accessKeyID string) cloudresource.Source {
+// integrationIdentitySource 准备已经在创建阶段完成云账号身份确认的接入源。
+func integrationIdentitySource(t *testing.T, db *gorm.DB, projectID uint64, accountID, accessKeyID string) cloudresource.Source {
 	t.Helper()
 	credential, err := json.Marshal(map[string]string{"access_key_id": accessKeyID, "secret_access_key": "identity-test-secret"})
 	if err != nil {
@@ -933,13 +832,10 @@ func integrationIdentitySource(t *testing.T, db *gorm.DB, projectID uint64, iden
 	if err != nil {
 		t.Fatal("加密虚构身份凭证失败")
 	}
-	source := cloudresource.Source{ProjectID: projectID, Provider: cloudresource.ProviderAWS, CloudAccountID: accountID, IdentityStatus: identityStatus, Name: "历史待验证接入源", Region: "cn-test-1", EncryptedCredential: encrypted, CredentialHint: "已安全配置", Config: json.RawMessage(`{}`), Enabled: true, SyncIntervalMinutes: 60}
-	if identityStatus == cloudresource.IdentityStatusVerified {
-		verifiedAt := time.Now()
-		source.IdentityVerifiedAt = &verifiedAt
-	}
+	verifiedAt := time.Now()
+	source := cloudresource.Source{ProjectID: projectID, Provider: cloudresource.ProviderAWS, CloudAccountID: accountID, IdentityVerifiedAt: &verifiedAt, Name: "已验证接入源", Region: "cn-test-1", EncryptedCredential: encrypted, CredentialHint: "已安全配置", Config: json.RawMessage(`{}`), Enabled: true, SyncIntervalMinutes: 60}
 	if err := db.Create(&source).Error; err != nil {
-		t.Fatal("准备历史待验证来源失败")
+		t.Fatal("准备已验证接入源失败")
 	}
 	return source
 }

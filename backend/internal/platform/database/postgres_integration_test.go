@@ -237,12 +237,34 @@ type postgresTestDatabase struct {
 	db            *gorm.DB
 }
 
-// TestPostgreSQLVerifiedAccountUniqueIndexIsConcurrent 验证并发确认同一平台账号时只有一个接入源可以提交。
-func TestPostgreSQLVerifiedAccountUniqueIndexIsConcurrent(t *testing.T) {
+// TestPostgreSQLAccountIdentityIsRequiredAndUnique 验证来源只能保存完整身份，且同平台账号全局唯一。
+func TestPostgreSQLAccountIdentityIsRequiredAndUnique(t *testing.T) {
 	testDatabase := newPostgresTestDatabase(t)
 	installCurrentSchema(t, testDatabase)
-	assertVerifiedAccountUniqueIndex(t, testDatabase.db)
+	assertAccountUniqueConstraint(t, testDatabase.db)
+	if columnExists(t, testDatabase.db, "resource_sources", "identity_status") {
+		t.Fatal("首次初始化结构不得包含历史身份状态字段")
+	}
 	projectID := insertCurrentProject(t, testDatabase.db, "unique-project")
+	for _, invalid := range []struct {
+		name      string
+		accountID any
+		verified  any
+	}{
+		{name: "缺少账号", accountID: nil, verified: time.Now()},
+		{name: "空账号", accountID: "", verified: time.Now()},
+		{name: "缺少验证时间", accountID: "missing-time", verified: nil},
+	} {
+		t.Run(invalid.name, func(t *testing.T) {
+			if err := testDatabase.db.Exec(`
+				INSERT INTO resource_sources
+				(project_id, provider, name, encrypted_credential, cloud_account_id, identity_verified_at)
+				VALUES (?, 'aliyun', ?, 'integration-ciphertext', ?, ?)
+			`, projectID, invalid.name, invalid.accountID, invalid.verified).Error; err == nil {
+				t.Fatal("接入源必须同时具有非空云账号和身份验证时间")
+			}
+		})
+	}
 
 	start := make(chan struct{})
 	results := make(chan error, 2)
@@ -252,8 +274,8 @@ func TestPostgreSQLVerifiedAccountUniqueIndexIsConcurrent(t *testing.T) {
 			<-start
 			results <- testDatabase.db.Exec(`
 				INSERT INTO resource_sources
-				(project_id, provider, name, encrypted_credential, cloud_account_id, identity_status, identity_verified_at)
-				VALUES (?, 'aliyun', ?, 'integration-ciphertext', 'shared-account', 'verified', NOW())
+				(project_id, provider, name, encrypted_credential, cloud_account_id, identity_verified_at)
+				VALUES (?, 'aliyun', ?, 'integration-ciphertext', 'shared-account', NOW())
 			`, projectID, fmt.Sprintf("concurrent-source-%d", index)).Error
 		}()
 	}
@@ -272,20 +294,18 @@ func TestPostgreSQLVerifiedAccountUniqueIndexIsConcurrent(t *testing.T) {
 	var storedCount int64
 	if err := testDatabase.db.Raw(`
 		SELECT COUNT(*) FROM resource_sources
-		WHERE provider = 'aliyun' AND cloud_account_id = 'shared-account' AND identity_status = 'verified'
+		WHERE provider = 'aliyun' AND cloud_account_id = 'shared-account'
 	`).Scan(&storedCount).Error; err != nil {
 		t.Fatal("读取并发写入结果失败")
 	}
 	if storedCount != 1 {
-		t.Fatalf("部分唯一索引必须只保留一条已验证账号记录，实际为 %d", storedCount)
+		t.Fatalf("账号唯一约束必须只保留一条同平台账号记录，实际为 %d", storedCount)
 	}
-
-	for index := 0; index < 2; index++ {
-		requireExec(t, testDatabase.db, `
-			INSERT INTO resource_sources (project_id, provider, name, encrypted_credential, identity_status)
-			VALUES (?, 'aliyun', ?, 'integration-ciphertext', 'pending')
-		`, "待验证接入源不应占用已验证账号唯一键", projectID, fmt.Sprintf("pending-source-%d", index))
-	}
+	requireExec(t, testDatabase.db, `
+		INSERT INTO resource_sources
+		(project_id, provider, name, encrypted_credential, cloud_account_id, identity_verified_at)
+		VALUES (?, 'aws', 'aws-shared-account', 'integration-ciphertext', 'shared-account', NOW())
+	`, "不同平台允许使用相同云账号标识", projectID)
 }
 
 // TestPostgreSQLAssetForeignKeysRestrictParentDeletion 验证三类资产的项目和接入源父级删除都被数据库拒绝。
@@ -461,8 +481,8 @@ func insertCurrentSource(t *testing.T, database *gorm.DB, projectID int64, name 
 	var id int64
 	if err := database.Raw(`
 		INSERT INTO resource_sources
-		(project_id, provider, name, encrypted_credential, cloud_account_id, identity_status, identity_verified_at)
-		VALUES (?, 'aliyun', ?, 'integration-ciphertext', ?, 'verified', NOW()) RETURNING id
+		(project_id, provider, name, encrypted_credential, cloud_account_id, identity_verified_at)
+		VALUES (?, 'aliyun', ?, 'integration-ciphertext', ?, NOW()) RETURNING id
 	`, projectID, name, accountID).Row().Scan(&id); err != nil {
 		t.Fatal("写入接入源失败")
 	}
@@ -493,21 +513,21 @@ func assertDeleteRule(t *testing.T, database *gorm.DB, constraint string, expect
 	}
 }
 
-func assertVerifiedAccountUniqueIndex(t *testing.T, database *gorm.DB) {
+func assertAccountUniqueConstraint(t *testing.T, database *gorm.DB) {
 	t.Helper()
 	var indexDefinition string
 	if err := database.Raw(`
 		SELECT indexdef FROM pg_indexes
 		WHERE schemaname = 'public' AND tablename = 'resource_sources'
-		  AND indexname = 'uk_resource_sources_provider_account_verified'
+		  AND indexname = 'uk_resource_sources_provider_account'
 	`).Scan(&indexDefinition).Error; err != nil {
-		t.Fatal("读取接入源部分唯一索引失败")
+		t.Fatal("读取接入源账号唯一约束失败")
 	}
 	if indexDefinition == "" {
-		t.Fatal("数据库结构必须存在命名稳定的已验证云账号部分唯一索引")
+		t.Fatal("数据库结构必须存在命名稳定的云账号唯一约束")
 	}
-	if !strings.Contains(indexDefinition, "cloud_account_id IS NOT NULL") {
-		t.Fatalf("已验证云账号部分唯一索引必须排除空账号，实际定义为 %s", indexDefinition)
+	if strings.Contains(indexDefinition, "WHERE") {
+		t.Fatalf("云账号唯一约束不得依赖历史身份状态过滤，实际定义为 %s", indexDefinition)
 	}
 }
 

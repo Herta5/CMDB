@@ -52,7 +52,7 @@ func TestBuildServerServesConsoleAndAPI(t *testing.T) {
 		{http.MethodGet, "/projects/1", 200, "CMDB 验收页面"},
 		{http.MethodGet, "/health", 200, `"status":"ok"`},
 		{http.MethodGet, "/api/v1/projects", 401, "身份认证已失效"},
-		{http.MethodPost, "/api/v1/projects/1/sources/1/verify-identity", 401, "身份认证已失效"},
+		{http.MethodPost, "/api/v1/projects/1/sources/1/verify-identity", 404, "接口不存在"},
 		{http.MethodGet, "/api/v1/missing", 404, "接口不存在"},
 	} {
 		response := httptest.NewRecorder()

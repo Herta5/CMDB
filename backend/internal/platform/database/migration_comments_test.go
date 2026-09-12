@@ -117,7 +117,7 @@ func TestPostgreSQLSchemaDefinesBusinessStructure(t *testing.T) {
 			"id", "actor_id", "project_id", "action", "resource_type", "resource_id", "detail", "request_ip", "created_at",
 		},
 		"resource_sources": {
-			"id", "project_id", "provider", "name", "region", "encrypted_credential", "credential_hint", "config", "enabled", "sync_interval_minutes", "last_sync_at", "next_sync_at", "created_at", "updated_at", "cloud_account_id", "identity_status", "identity_verified_at",
+			"id", "project_id", "provider", "name", "region", "encrypted_credential", "credential_hint", "config", "enabled", "sync_interval_minutes", "last_sync_at", "next_sync_at", "created_at", "updated_at", "cloud_account_id", "identity_verified_at",
 		},
 		"resources_servers": {
 			"id", "project_id", "source_id", "provider", "resource_type", "external_id", "name", "region", "zone", "cloud_status", "asset_status", "private_ips", "public_ips", "raw_attributes", "first_seen_at", "last_seen_at", "missing_since", "created_at", "updated_at",
@@ -191,6 +191,13 @@ func TestInitialInstallationOmitsVersionUpgradeInfrastructure(t *testing.T) {
 		t.Fatal("首次安装基线不得包含数据库升级命令")
 	} else if !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("检查数据库升级命令目录失败：%v", err)
+	}
+}
+
+// TestPostgreSQLSchemaOmitsHistoricalSourceIdentityStatus 防止首次安装重新引入只服务旧数据恢复的身份状态。
+func TestPostgreSQLSchemaOmitsHistoricalSourceIdentityStatus(t *testing.T) {
+	if schema := string(readInitializationFile(t, schemaInitializationPath)); strings.Contains(schema, "identity_status") {
+		t.Fatal("首次初始化结构不得包含历史接入源身份状态")
 	}
 }
 
