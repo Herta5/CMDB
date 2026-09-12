@@ -81,7 +81,7 @@ function enter(root: Node, name: string, value: string) {
   return field
 }
 
-const awsSourceDTO = { id: 9, project_id: 1, provider: 'aws', identity_status: 'verified', name: 'AWS 生产账号', region: 'ap-east-1', credential_hint: '已安全配置', enabled: true, sync_interval_minutes: 60 }
+const awsSourceDTO = { id: 9, project_id: 1, provider: 'aws', name: 'AWS 生产账号', region: 'ap-east-1', credential_hint: '已安全配置', enabled: true, sync_interval_minutes: 60 }
 
 /** 让管理页读请求返回完整空分页，并在 AWS 平台返回指定来源。 */
 function resourceResponse(config: any, awsSources: Record<string, any>[] = []) {
@@ -121,70 +121,20 @@ beforeEach(() => {
 })
 
 describe('CMDB 第一阶段应用流程', () => {
-  for (const outcome of ['成功', '失败'] as const) {
-    it(`关闭验证后同源可重新提交且旧请求${outcome}不解除新请求锁定`, async () => {
-      const completions: Array<(failed?: boolean) => void> = []
-      request.defaults.adapter = config => {
-        const source = { ...awsSourceDTO, identity_status: 'pending' }
-        if (config.method === 'post') return new Promise((resolve, reject) => {
-          completions.push(failed => {
-            const response = { config, status: failed ? 502 : 200, statusText: '处理结果', headers: {}, data: failed ? { code: 'CLOUD_IDENTITY_UNAVAILABLE', message: '旧验证失败' } : source }
-            if (failed) reject(new AxiosError('旧验证失败', undefined, config, undefined, response)); else resolve(response)
-          })
-        })
-        return Promise.resolve(resourceResponse(config, [source]))
-      }
-      selectManagedProject()
-      const { root, app } = await mount(CloudSyncManagementPage)
-      try {
-        const sourceButton = () => all(root).find(entry => entry.props['aria-label'] === '验证云账号身份')!
-        sourceButton().props.onClick()
-        await flush()
-        const submit = () => Promise.resolve(all(root).find(entry => entry.type === 'form')!.props.onSubmit({ preventDefault() {} })).catch(() => {})
-        const oldSubmission = submit()
-        await flush()
-        all(root).find(entry => entry.type === 'button' && pageText(entry) === '取消')!.props.onClick()
-        await flush()
-        expect(sourceButton().props.disabled).toBe(false)
-        expect(useResourceStore().verifyingSourceId).toBeNull()
-        sourceButton().props.onClick()
-        await flush()
-        enter(root, 'verification-mode', 'new')
-        await flush()
-        enter(root, 'verification-access-key-id', '虚构新输入'); enter(root, 'verification-secret', '虚构新秘密')
-        const newSubmission = submit()
-        await flush()
-        completions[0]!(outcome === '失败')
-        await oldSubmission
-        await flush()
-        const form = all(root).find(entry => entry.type === 'form')!
-        expect(all(form).find(entry => entry.type === 'button' && pageText(entry).includes('正在验证'))?.props.disabled).toBe(true)
-        expect(all(root).find(entry => entry.props.name === 'verification-access-key-id')?.value).toBe('虚构新输入')
-        expect(useResourceStore().verifyingSourceId).toBe(9)
-        expect(useResourceStore().mutationError).toBe('')
-        completions[1]!()
-        await newSubmission
-        await flush()
-        expect(all(root).some(entry => entry.type === 'form')).toBe(false)
-        expect(useResourceStore().verifyingSourceId).toBeNull()
-      } finally { app.unmount() }
-    })
-  }
-
-  for (const operation of ['验证', '新建', '编辑'] as const) {
+  for (const operation of ['新建', '编辑'] as const) {
     for (const outcome of ['成功', '失败'] as const) {
       for (const transition of ['切换项目', '关闭后重开'] as const) {
         it(`${operation}迟到${outcome}不得干扰${transition}后的新弹窗和输入`, async () => {
           let finish!: () => void
           request.defaults.adapter = config => {
-            const source = { ...awsSourceDTO, project_id: config.url?.includes('/projects/2/') ? 2 : 1, identity_status: operation === '验证' ? 'pending' : 'verified' }
+            const source = { ...awsSourceDTO, project_id: config.url?.includes('/projects/2/') ? 2 : 1 }
             if (config.method === 'post' || config.method === 'put') return new Promise((resolve, reject) => {
               finish = () => {
                 const response = { config, status: outcome === '成功' ? 200 : 502, statusText: '处理结果', headers: {}, data: outcome === '成功' ? source : { code: 'SOURCE_SERVICE_UNAVAILABLE', message: '提交失败，请重试' } }
                 if (outcome === '成功') resolve(response); else reject(new AxiosError('提交失败', undefined, config, undefined, response))
               }
             })
-            return Promise.resolve(resourceResponse(config, operation === '验证' ? [source, { ...source, id: 10, name: '另一历史来源' }] : [source]))
+            return Promise.resolve(resourceResponse(config, [source]))
           }
           selectManagedProject()
           const projects = useProjectStore()
@@ -192,15 +142,14 @@ describe('CMDB 第一阶段应用流程', () => {
           const { root, app } = await mount(CloudSyncManagementPage)
           try {
             const open = async () => {
-              const label = operation === '验证' ? '验证身份' : operation === '新建' ? '创建云同步' : '编辑'
+              const label = operation === '新建' ? '创建云同步' : '编辑'
               all(root).find(entry => entry.type === 'button' && pageText(entry) === label)!.props.onClick()
               await flush()
-              if (operation === '验证') enter(root, 'verification-mode', 'new')
-              else if (operation === '新建') enter(root, 'provider', 'aws')
+              if (operation === '新建') enter(root, 'provider', 'aws')
               await flush()
             }
-            const keyField = operation === '验证' ? 'verification-access-key-id' : 'access-key-id'
-            const secretField = operation === '验证' ? 'verification-secret' : 'secret'
+            const keyField = 'access-key-id'
+            const secretField = 'secret'
             await open()
             enter(root, keyField, '虚构旧输入'); enter(root, secretField, '虚构旧秘密')
             const oldSubmission = Promise.resolve(all(root).find(entry => entry.type === 'form')!.props.onSubmit({ preventDefault() {} })).catch(() => {})
@@ -270,34 +219,22 @@ describe('CMDB 第一阶段应用流程', () => {
     expect(router.currentRoute.value.path).toBe('/login')
   })
 
-  it('待验证接入源只提供验证身份，并隐藏对应任务重试入口', async () => {
-    let resolveIdentity!: (response: AxiosResponse) => void
+  it('接入源不展示历史身份状态并直接提供日常操作', async () => {
     request.defaults.adapter = config => {
-      if (config.method === 'post' && config.url?.endsWith('/verify-identity')) return new Promise(resolve => { resolveIdentity = resolve })
-      return Promise.resolve({ config, status: 200, statusText: '成功', headers: {}, data: config.url?.endsWith('/sources') ? [{ id: 9, project_id: 1, provider: 'aws', identity_status: 'pending', name: '历史 AWS 账号', enabled: true, sync_interval_minutes: 60 }] : { items: [{ id: 5, source_id: 9, status: 'failed', trigger: 'manual', error_summary: '凭证认证失败' }], total: 1 } })
+      const response = resourceResponse(config, [awsSourceDTO])
+      if (!config.url?.endsWith('/sources')) response.data = { items: [{ id: 5, source_id: 9, status: 'failed', trigger: 'manual', error_summary: '凭证认证失败' }], total: 1, page: 1, page_size: 20 }
+      return Promise.resolve(response)
     }
-    const projects = useProjectStore()
-    projects.projects = [{ id: 1, code: 'cloud-a', name: '云项目甲', description: '', status: 'enabled', ownerUsername: null, currentRole: 'project_admin', createdAt: '', updatedAt: '' }]
-    projects.listState = 'ready'
-    projects.selectProject(1)
-    const resource = useResourceStore()
-    resource.state = 'ready'
-    resource.sources = [{ id: 9, projectId: 1, provider: 'aws', identityStatus: 'pending', name: '历史 AWS 账号', region: 'ap-east-1', credentialHint: '已安全配置', enabled: true, syncIntervalMinutes: 60 }]
-    resource.jobs = [{ id: 5, sourceId: 9, provider: 'aws', status: 'failed', trigger: 'manual', statistics: {}, errorSummary: '凭证认证失败', startedAt: '' }]
+    selectManagedProject()
     const { root, app } = await mount(CloudSyncManagementPage)
 
-    expect(pageText(root)).toContain('待验证')
-    expect(all(root).filter(entry => entry.type === 'button').map(pageText)).toContain('验证身份')
-    expect(all(root).filter(entry => entry.type === 'button').map(pageText)).not.toEqual(expect.arrayContaining(['编辑', '停用', '连接测试', '删除', '立即同步', '重试']))
-    await all(root).find(entry => entry.type === 'button' && pageText(entry) === '验证身份')!.props.onClick()
-    await flush()
-    expect(pageText(root)).toContain('使用现有安全凭证')
-    expect(pageText(root)).toContain('输入完整新凭证')
-    void all(root).find(entry => entry.type === 'form' && pageText(entry).includes('验证身份'))!.props.onSubmit({ preventDefault() {} })
-    await Promise.resolve(); await nextTick()
-    expect(pageText(root)).toContain('正在验证云账号身份…')
-    resolveIdentity({ config: {}, status: 200, statusText: '成功', headers: {}, data: { id: 9, project_id: 1, provider: 'aws', identity_status: 'verified', name: '历史 AWS 账号', enabled: true, sync_interval_minutes: 60 } })
-    await flush()
+    const text = pageText(root)
+    const buttonLabels = all(root).filter(entry => entry.type === 'button').map(pageText)
+    expect(text).not.toContain(['身份', '已验证'].join(''))
+    expect(text).not.toContain(['待', '验证'].join(''))
+    expect(buttonLabels).toEqual(expect.arrayContaining(['编辑', '停用', '连接测试', '删除', '立即同步', '重试']))
+    expect(buttonLabels).not.toContain(['验证', '身份'].join(''))
+    expect(all(root).some(entry => entry.props['aria-labelledby'] === ['verify', '-identity-title'].join(''))).toBe(false)
     app.unmount()
   })
 
@@ -360,39 +297,6 @@ describe('CMDB 第一阶段应用流程', () => {
     expect(all(root).find(entry => entry.props.name === 'access-key-id')?.value).toBe('')
     expect(all(root).find(entry => entry.props.name === 'secret')?.value).toBe('')
     expect(all(root).find(entry => entry.props.name === 'session-token')?.value).toBe('')
-    app.unmount()
-  })
-
-  it('历史 AWS 来源使用新凭证验证时不发送空 Session Token，并在提交后清理凭证', async () => {
-    let submitted: Record<string, any> | undefined
-    const pendingSource = { ...awsSourceDTO, identity_status: 'pending', name: '历史 AWS 账号' }
-    request.defaults.adapter = async config => {
-      if (config.method === 'post' && config.url?.endsWith('/verify-identity')) {
-        submitted = JSON.parse(String(config.data))
-        return { config, status: 200, statusText: '成功', headers: {}, data: awsSourceDTO }
-      }
-      return resourceResponse(config, [pendingSource])
-    }
-    selectManagedProject()
-    const { root, app } = await mount(CloudSyncManagementPage)
-
-    await all(root).find(entry => entry.type === 'button' && pageText(entry) === '验证身份')!.props.onClick()
-    await flush()
-    enter(root, 'verification-mode', 'new')
-    await flush()
-    enter(root, 'verification-access-key-id', 'verification-access-key')
-    enter(root, 'verification-secret', 'verification-secret')
-    await all(root).find(entry => entry.type === 'form' && pageText(entry).includes('验证身份'))!.props.onSubmit({ preventDefault() {} })
-    await flush()
-
-    expect(submitted?.credential).toEqual({ access_key_id: 'verification-access-key', secret_access_key: 'verification-secret' })
-    await all(root).find(entry => entry.type === 'button' && pageText(entry) === '验证身份')!.props.onClick()
-    await flush()
-    enter(root, 'verification-mode', 'new')
-    await flush()
-    expect(all(root).find(entry => entry.props.name === 'verification-access-key-id')?.value).toBe('')
-    expect(all(root).find(entry => entry.props.name === 'verification-secret')?.value).toBe('')
-    expect(all(root).find(entry => entry.props.name === 'verification-session-token')?.value).toBe('')
     app.unmount()
   })
 
