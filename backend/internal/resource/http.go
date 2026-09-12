@@ -2,8 +2,10 @@
 package resource
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"strconv"
 
@@ -24,19 +26,43 @@ func (h *HTTPHandler) VerifySourceIdentity(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"code": "SOURCE_INVALID_INPUT", "message": "接入源参数无效"})
 		return
 	}
-	var request struct {
-		Credential json.RawMessage `json:"credential"`
-	}
-	if err := c.ShouldBindJSON(&request); err != nil {
+	credential, ok := decodeVerifySourceIdentityCredential(c.Request.Body)
+	if !ok {
 		c.JSON(http.StatusBadRequest, gin.H{"code": "SOURCE_INVALID_INPUT", "message": "接入源参数无效"})
 		return
 	}
-	source, err := h.service.VerifySourceIdentity(c.Request.Context(), projectID, sourceID, request.Credential)
+	source, err := h.service.VerifySourceIdentity(c.Request.Context(), projectID, sourceID, credential)
 	if err != nil {
 		writeVerifySourceIdentityError(c, err)
 		return
 	}
 	c.JSON(http.StatusOK, source)
+}
+
+// decodeVerifySourceIdentityCredential 严格限制外层请求为单一对象，防止未知字段或尾随 JSON 被误解为保留旧凭证。
+func decodeVerifySourceIdentityCredential(body io.Reader) (json.RawMessage, bool) {
+	decoder := json.NewDecoder(body)
+	var raw json.RawMessage
+	if err := decoder.Decode(&raw); err != nil {
+		return nil, false
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); err != io.EOF {
+		return nil, false
+	}
+	raw = bytes.TrimSpace(raw)
+	if len(raw) == 0 || raw[0] != '{' {
+		return nil, false
+	}
+	var request struct {
+		Credential json.RawMessage `json:"credential"`
+	}
+	strictDecoder := json.NewDecoder(bytes.NewReader(raw))
+	strictDecoder.DisallowUnknownFields()
+	if err := strictDecoder.Decode(&request); err != nil {
+		return nil, false
+	}
+	return request.Credential, true
 }
 
 // writeVerifySourceIdentityError 在 HTTP 边界将有限领域错误映射为稳定摘要，禁止返回云端或内部错误正文。

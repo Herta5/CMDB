@@ -575,6 +575,18 @@ func TestVerifySourceIdentityAPI(t *testing.T) {
 	}
 	integrationRequest(t, server, projectMember, http.MethodPost, verifyPath(verified.ID), map[string]any{}, http.StatusNotFound)
 	integrationRequest(t, server, systemAdmin, http.MethodPut, firstPath+"/members/member_a", map[string]any{"role": "project_admin"}, http.StatusOK)
+	for _, scenario := range []struct {
+		name string
+		body string
+	}{
+		{name: "未知顶层字段", body: `{"unexpected":true}`},
+		{name: "尾随 JSON", body: `{"credential":null}{"credential":null}`},
+	} {
+		t.Run(scenario.name, func(t *testing.T) {
+			response := integrationRawRequest(t, server, projectMember, http.MethodPost, verifyPath(verified.ID), scenario.body, http.StatusBadRequest)
+			assertIdentityVerificationError(t, response.Body.String(), "SOURCE_INVALID_INPUT")
+		})
+	}
 	response := integrationRequest(t, server, projectMember, http.MethodPost, verifyPath(verified.ID), map[string]any{}, http.StatusOK)
 	assertIdentityVerificationResponseSafe(t, response.Body.String())
 	response = integrationRequest(t, server, systemAdmin, http.MethodPost, verifyPath(verified.ID), map[string]any{"credential": nil}, http.StatusOK)
@@ -869,6 +881,22 @@ func integrationRequest(t *testing.T, server http.Handler, token, method, path s
 	request.Header.Set("Content-Type", "application/json")
 	// 公网客户端可自行伪造转发头，审计来源 IP 必须使用直连地址而不是默认信任该值。
 	request.Header.Set("X-Forwarded-For", "198.51.100.99")
+	if token != "" {
+		request.Header.Set("Authorization", "Bearer "+token)
+	}
+	response := httptest.NewRecorder()
+	server.ServeHTTP(response, request)
+	if response.Code != status {
+		t.Fatalf("%s %s 返回 %d，期望 %d", method, path, response.Code, status)
+	}
+	return response
+}
+
+// integrationRawRequest 用于验证 HTTP JSON 边界，不经测试侧 JSON 编码器修正原始输入。
+func integrationRawRequest(t *testing.T, server http.Handler, token, method, path, body string, status int) *httptest.ResponseRecorder {
+	t.Helper()
+	request := httptest.NewRequest(method, path, strings.NewReader(body))
+	request.Header.Set("Content-Type", "application/json")
 	if token != "" {
 		request.Header.Set("Authorization", "Bearer "+token)
 	}
