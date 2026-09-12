@@ -11,11 +11,28 @@ import (
 	"strings"
 	"testing"
 
+	"cmdb/internal/platform/config"
 	"cmdb/internal/platform/httpserver"
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
 )
+
+// TestServeRejectsIncompleteSchedulerRecovery 防止来源恢复失败后仍装配或开放 HTTP 服务。
+func TestServeRejectsIncompleteSchedulerRecovery(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{Logger: logger.Default.LogMode(logger.Silent)})
+	if err != nil {
+		t.Fatal("创建恢复启动门禁数据库失败")
+	}
+	sqlDB, _ := db.DB()
+	t.Cleanup(func() { _ = sqlDB.Close() })
+	// 缺少恢复任务表会使恢复查询失败；静态目录和端口均设为不可启动，避免回归时真监听端口。
+	t.Setenv("STATIC_DIR", t.TempDir())
+	err = serve(config.Config{EncryptionKey: "虚构启动测试密钥", Server: config.Server{Port: "invalid-port"}}, db)
+	if err == nil || err.Error() != "恢复同步任务失败，服务未启动" {
+		t.Fatal("恢复失败必须在 HTTP 装配前返回中文安全启动错误")
+	}
+}
 
 // TestStartAfterSchemaCheckRequiresCurrentVersion 防止旧版或超前数据库先启动调度器或 HTTP 服务。
 func TestStartAfterSchemaCheckRequiresCurrentVersion(t *testing.T) {

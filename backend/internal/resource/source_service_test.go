@@ -341,7 +341,9 @@ func TestPendingSourceStartupRecoveryPreservesAssets(t *testing.T) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	service.StartScheduler(ctx)
+	if err := service.StartScheduler(ctx); err != nil {
+		t.Fatal("待验证来源安全恢复失败")
+	}
 	var jobs []SyncJob
 	if err := db.Find(&jobs).Error; err != nil {
 		t.Fatal("读取恢复任务失败")
@@ -354,6 +356,64 @@ func TestPendingSourceStartupRecoveryPreservesAssets(t *testing.T) {
 	var persisted Server
 	if err := db.First(&persisted, asset.ID).Error; err != nil || persisted.AssetStatus != AssetStatusActive || !persisted.LastSeenAt.Equal(*now) {
 		t.Fatal("历史任务恢复不得改变资产")
+	}
+}
+
+// TestSchedulerRecoveryErrorsAbortStartup 验证恢复查询、任务保存或审计失败会阻断启动并保留可再次恢复的记录。
+func TestSchedulerRecoveryErrorsAbortStartup(t *testing.T) {
+	for _, scenario := range []string{"查询失败", "任务保存失败", "审计失败"} {
+		t.Run(scenario, func(t *testing.T) {
+			service, db, source, _ := newResourceServiceTest(t)
+			if err := db.Model(source).Updates(map[string]any{"identity_status": IdentityStatusPending, "cloud_account_id": nil, "identity_verified_at": nil}).Error; err != nil {
+				t.Fatal("准备待验证来源失败")
+			}
+			job := SyncJob{ProjectID: source.ProjectID, SourceID: source.ID, Status: "queued", Trigger: "manual"}
+			if err := db.Create(&job).Error; err != nil {
+				t.Fatal("准备排队任务失败")
+			}
+			const rawFailure = "模拟底层恢复错误正文"
+			var logs bytes.Buffer
+			db.Config.Logger = logger.New(log.New(&logs, "", 0), logger.Config{LogLevel: logger.Info})
+			switch scenario {
+			case "查询失败":
+				if err := db.Callback().Query().Before("gorm:query").Register("test:startup_query_failure", func(tx *gorm.DB) {
+					if tx.Statement.Table == "sync_jobs" {
+						tx.AddError(errors.New(rawFailure))
+					}
+				}); err != nil {
+					t.Fatal("准备恢复查询失败失败")
+				}
+			case "任务保存失败":
+				if err := db.Exec("CREATE TRIGGER reject_recovery_job BEFORE UPDATE ON sync_jobs BEGIN SELECT RAISE(ABORT, '模拟底层恢复错误正文'); END").Error; err != nil {
+					t.Fatal("准备任务保存失败失败")
+				}
+			case "审计失败":
+				if err := db.Exec("CREATE TRIGGER reject_recovery_audit BEFORE INSERT ON audit_logs BEGIN SELECT RAISE(ABORT, '模拟底层恢复错误正文'); END").Error; err != nil {
+					t.Fatal("准备审计保存失败失败")
+				}
+			}
+			logs.Reset()
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			err := service.StartScheduler(ctx)
+			if err == nil || err.Error() != "恢复同步任务失败，服务未启动" {
+				t.Fatal("恢复失败必须明确向启动方返回中文安全错误")
+			}
+			if strings.Contains(logs.String(), rawFailure) {
+				t.Fatal("启动恢复不得通过数据库日志旁路披露底层错误")
+			}
+			if scenario == "查询失败" {
+				db.Callback().Query().Remove("test:startup_query_failure")
+			}
+			persisted, readErr := service.repository.FindJob(context.Background(), job.ID)
+			if readErr != nil || persisted.Status != "queued" || persisted.FinishedAt != nil {
+				t.Fatal("恢复失败必须保留原任务，供修复后再次恢复")
+			}
+			var auditCount int64
+			if err := db.Model(&audit.Log{}).Count(&auditCount).Error; err != nil || auditCount != 0 {
+				t.Fatal("恢复失败不得保留不一致的失败审计")
+			}
+		})
 	}
 }
 

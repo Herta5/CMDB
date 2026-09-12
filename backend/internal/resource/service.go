@@ -34,6 +34,8 @@ var (
 	ErrSourceIdentityPending = errors.New("接入源身份待验证，请先验证云账号身份")
 	// ErrSourceIdentityMismatch 防止通过替换凭证将接入源指向另一个云账号。
 	ErrSourceIdentityMismatch = errors.New("新凭证所属云账号与原接入源不一致")
+	// ErrSchedulerRecoveryFailed 阻止恢复未完成的进程开放服务，不携带底层数据库或审计错误。
+	ErrSchedulerRecoveryFailed = errors.New("恢复同步任务失败，服务未启动")
 )
 
 // CreateSourceInput 是创建接入源允许写入的项目边界和平台配置。
@@ -777,30 +779,42 @@ func (s *Service) SyncDueSources(ctx context.Context) {
 	group.Wait()
 }
 
-// StartScheduler 启动资源后台调度，并在服务上下文结束时自动退出。
-func (s *Service) StartScheduler(ctx context.Context) {
+// StartScheduler 完成启动恢复后才启动后台工作器，恢复失败必须由调用方阻止 HTTP 开放。
+func (s *Service) StartScheduler(ctx context.Context) error {
 	// 启动恢复先结束异常中断任务，再继续执行已持久化但尚未开始的排队任务。
 	// 历史待验证来源不进入采集，也不保留旧统计；失败与审计沿用任务终态事务。
-	if err := s.failPendingSourceJobs(ctx); err != nil {
-		return
+	// 此临时服务只执行同步恢复，复用原有失败事务；长期工作器始终由当前服务及其同源锁管理。
+	recovery := NewService(s.repository.forStartupRecovery(), s.cipher, s.adapters, s.auditRecorder)
+	recovery.now = s.now
+	if err := recovery.failPendingSourceJobs(ctx); err != nil {
+		return ErrSchedulerRecoveryFailed
 	}
-	_ = s.repository.FailInterruptedJobs(ctx, s.now())
-	if queued, err := s.repository.RecoverableJobs(ctx); err == nil {
-		for index := range queued {
-			job := &queued[index]
-			source, sourceErr := s.repository.FindSource(ctx, job.SourceID)
-			if sourceErr != nil || s.adapters[source.Provider] == nil {
-				continue
-			}
-			lock, ok := s.trySourceLock(job.SourceID)
-			if !ok {
-				continue
-			}
-			go func(collector Collector) {
-				defer lock.Unlock()
-				_, _ = s.executeSync(context.Background(), job.SourceID, job.Trigger, collector, job)
-			}(s.adapters[source.Provider])
+	if err := recovery.repository.FailInterruptedJobs(ctx, s.now()); err != nil {
+		return ErrSchedulerRecoveryFailed
+	}
+	queued, err := recovery.repository.RecoverableJobs(ctx)
+	if err != nil {
+		return ErrSchedulerRecoveryFailed
+	}
+	// 在启动任何工作器前完整读取待恢复来源，避免后续查询失败留下仅部分启动的后台执行。
+	sources := make([]Source, len(queued))
+	for index := range queued {
+		source, sourceErr := recovery.repository.FindSource(ctx, queued[index].SourceID)
+		if sourceErr != nil || s.adapters[source.Provider] == nil {
+			return ErrSchedulerRecoveryFailed
 		}
+		sources[index] = *source
+	}
+	for index := range queued {
+		job := &queued[index]
+		lock, ok := s.trySourceLock(job.SourceID)
+		if !ok {
+			continue
+		}
+		go func(collector Collector) {
+			defer lock.Unlock()
+			_, _ = s.executeSync(context.Background(), job.SourceID, job.Trigger, collector, job)
+		}(s.adapters[sources[index].Provider])
 	}
 	go func() {
 		// 服务启动后立即补跑已到期任务，再按分钟检查；资源清理由成功类型同步负责并记录任务统计。
@@ -816,6 +830,7 @@ func (s *Service) StartScheduler(ctx context.Context) {
 			}
 		}
 	}()
+	return nil
 }
 
 // failPendingSourceJobs 在恢复任何工作器前安全结束历史来源遗留的排队和运行任务。

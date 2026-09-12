@@ -60,7 +60,9 @@ func serve(configuration config.Config, db *gorm.DB) error {
 	// 调度器和 HTTP 必须共享同一服务实例，才能统一执行同源互斥与生命周期规则。
 	schedulerContext, stopScheduler := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stopScheduler()
-	resourceService.StartScheduler(schedulerContext)
+	if err := resourceService.StartScheduler(schedulerContext); err != nil {
+		return err
+	}
 
 	server, err := buildServer(httpserver.Dependencies{
 		Database:        db,

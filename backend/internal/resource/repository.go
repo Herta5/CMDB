@@ -154,6 +154,11 @@ type Repository struct{ db *gorm.DB }
 // NewRepository 创建由平台数据库连接管理的资源仓储。
 func NewRepository(db *gorm.DB) *Repository { return &Repository{db: db} }
 
+// forStartupRecovery 为启动恢复复用同一连接池但关闭底层日志，所有错误统一由启动门禁返回安全摘要。
+func (r *Repository) forStartupRecovery() *Repository {
+	return NewRepository(r.db.Session(&gorm.Session{Logger: logger.Default.LogMode(logger.Silent)}))
+}
+
 // Transaction 保证一次同步任务内的资源变化、生命周期处理、统计和审计原子提交。
 func (r *Repository) Transaction(ctx context.Context, operation func(*gorm.DB) error) error {
 	return r.db.WithContext(ctx).Transaction(operation)
