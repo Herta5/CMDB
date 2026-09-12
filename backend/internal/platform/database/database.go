@@ -8,22 +8,12 @@ import (
 	"cmdb/internal/platform/config"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
-	"gorm.io/gorm/logger"
 )
 
 // Open 根据已校验的数据库配置创建 PostgreSQL 连接。
 // 配置校验由 config.Load 负责，此处仅保留连接构造职责，避免启动入口混入基础设施细节。
 func Open(databaseConfig config.Database) (*gorm.DB, error) {
 	return gorm.Open(postgres.Open(dsn(databaseConfig)), &gorm.Config{TranslateError: true})
-}
-
-// OpenMigration 在驱动创建连接前关闭 GORM 输出，防止连接探测失败泄露管理员账号和数据库地址。
-// 管理员命令只向终端返回自身定义的中文安全摘要，底层连接和 SQL 错误不得旁路输出。
-func OpenMigration(databaseConfig config.Database) (*gorm.DB, error) {
-	return gorm.Open(postgres.Open(dsn(databaseConfig)), &gorm.Config{
-		TranslateError: true,
-		Logger:         logger.Default.LogMode(logger.Silent),
-	})
 }
 
 // dsn 按 PostgreSQL 驱动格式构造连接串，并固定首期单机部署的 TLS 与时区约束。

@@ -33,7 +33,7 @@ func TestProjectDeletionDependencies(t *testing.T) {
 				t.Fatal("准备项目失败")
 			}
 			now := time.Now().UTC()
-			source := resource.Source{ProjectID: parent.ID, Name: "保留来源", Provider: "aws", CloudAccountID: "虚构账号", IdentityStatus: resource.IdentityStatusVerified, IdentityVerifiedAt: &now, EncryptedCredential: "虚构密文"}
+			source := resource.Source{ProjectID: parent.ID, Name: "保留来源", Provider: "aws", CloudAccountID: "虚构账号", IdentityVerifiedAt: &now, EncryptedCredential: "虚构密文"}
 			if err := db.Create(&source).Error; err != nil {
 				t.Fatal("准备接入源失败")
 			}

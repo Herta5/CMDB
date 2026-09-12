@@ -2,10 +2,8 @@
 package resource
 
 import (
-	"bytes"
 	"encoding/json"
 	"errors"
-	"io"
 	"net/http"
 	"strconv"
 
@@ -18,70 +16,7 @@ type HTTPHandler struct {
 	service *Service
 }
 
-// VerifySourceIdentity 确认历史接入源的云账号归属；凭证可缺失或为 null，分别表示使用已保存的加密凭证。
-func (h *HTTPHandler) VerifySourceIdentity(c *gin.Context) {
-	projectID, ok := projectID(c)
-	sourceID, err := strconv.ParseUint(c.Param("sourceId"), 10, 64)
-	if !ok || err != nil || sourceID == 0 {
-		c.JSON(http.StatusBadRequest, gin.H{"code": "SOURCE_INVALID_INPUT", "message": "接入源参数无效"})
-		return
-	}
-	credential, ok := decodeVerifySourceIdentityCredential(c.Request.Body)
-	if !ok {
-		c.JSON(http.StatusBadRequest, gin.H{"code": "SOURCE_INVALID_INPUT", "message": "接入源参数无效"})
-		return
-	}
-	source, err := h.service.VerifySourceIdentity(c.Request.Context(), projectID, sourceID, credential)
-	if err != nil {
-		writeVerifySourceIdentityError(c, err)
-		return
-	}
-	c.JSON(http.StatusOK, source)
-}
-
-// decodeVerifySourceIdentityCredential 严格限制外层请求为单一对象，防止未知字段或尾随 JSON 被误解为保留旧凭证。
-func decodeVerifySourceIdentityCredential(body io.Reader) (json.RawMessage, bool) {
-	decoder := json.NewDecoder(body)
-	var raw json.RawMessage
-	if err := decoder.Decode(&raw); err != nil {
-		return nil, false
-	}
-	var trailing any
-	if err := decoder.Decode(&trailing); err != io.EOF {
-		return nil, false
-	}
-	raw = bytes.TrimSpace(raw)
-	if len(raw) == 0 || raw[0] != '{' {
-		return nil, false
-	}
-	var request struct {
-		Credential json.RawMessage `json:"credential"`
-	}
-	strictDecoder := json.NewDecoder(bytes.NewReader(raw))
-	strictDecoder.DisallowUnknownFields()
-	if err := strictDecoder.Decode(&request); err != nil {
-		return nil, false
-	}
-	return request.Credential, true
-}
-
-// writeVerifySourceIdentityError 在 HTTP 边界将有限领域错误映射为稳定摘要，禁止返回云端或内部错误正文。
-func writeVerifySourceIdentityError(c *gin.Context, err error) {
-	switch {
-	case errors.Is(err, gorm.ErrRecordNotFound):
-		c.JSON(http.StatusNotFound, gin.H{"code": "SOURCE_NOT_FOUND", "message": "接入源不存在"})
-	case errors.Is(err, ErrInvalidProviderCredential), errors.Is(err, ErrInvalidProviderConfig):
-		c.JSON(http.StatusBadRequest, gin.H{"code": "SOURCE_INVALID_INPUT", "message": "接入源参数无效"})
-	case errors.Is(err, ErrProjectDisabled):
-		c.JSON(http.StatusConflict, gin.H{"code": "PROJECT_DISABLED", "message": "项目已停用，不能验证接入源身份"})
-	default:
-		if !writeSourceIdentityError(c, err) {
-			c.JSON(http.StatusInternalServerError, gin.H{"code": "SOURCE_SERVICE_UNAVAILABLE", "message": "接入源服务暂不可用"})
-		}
-	}
-}
-
-// writeSourceIdentityError 为所有可能触发身份门禁的接入源入口提供同一组稳定公开分类。
+// writeSourceIdentityError 为创建与替换凭证时的云身份识别提供同一组稳定公开分类。
 func writeSourceIdentityError(c *gin.Context, err error) bool {
 	if writeSourceIdentityConflict(c, err) {
 		return true
@@ -100,17 +35,13 @@ func writeSourceIdentityError(c *gin.Context, err error) bool {
 	return false
 }
 
-// writeSourceIdentityConflict 只处理身份状态与归属门禁，不把连接 Probe 的错误当作身份识别故障。
+// writeSourceIdentityConflict 只处理账号归属和替换身份不一致，不把连接 Probe 的错误当作身份识别故障。
 func writeSourceIdentityConflict(c *gin.Context, err error) bool {
 	switch {
 	case errors.Is(err, ErrCloudAccountConflict):
 		c.JSON(http.StatusConflict, gin.H{"code": "CLOUD_ACCOUNT_CONFLICT", "message": "该云账号已接入 CMDB"})
 	case errors.Is(err, ErrSourceIdentityMismatch):
 		c.JSON(http.StatusConflict, gin.H{"code": "SOURCE_IDENTITY_MISMATCH", "message": "新凭证所属云账号与原接入源不一致"})
-	case errors.Is(err, ErrSourceIdentityPending):
-		c.JSON(http.StatusConflict, gin.H{"code": "SOURCE_IDENTITY_PENDING", "message": "接入源身份待验证，请先验证云账号身份"})
-	case errors.Is(err, ErrSourceIdentityAlreadyVerified):
-		c.JSON(http.StatusConflict, gin.H{"code": "SOURCE_IDENTITY_ALREADY_VERIFIED", "message": "接入源身份已验证，无需重复验证"})
 	default:
 		return false
 	}

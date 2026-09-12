@@ -2,8 +2,6 @@
 package main
 
 import (
-	"context"
-	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -34,39 +32,6 @@ func TestServeRejectsIncompleteSchedulerRecovery(t *testing.T) {
 	}
 }
 
-// TestStartAfterSchemaCheckRequiresCurrentVersion 防止旧版或超前数据库先启动调度器或 HTTP 服务。
-func TestStartAfterSchemaCheckRequiresCurrentVersion(t *testing.T) {
-	for _, version := range []int{1, 2, 3} {
-		t.Run(fmt.Sprintf("结构版本%d", version), func(t *testing.T) {
-			db, err := gorm.Open(sqlite.Open(fmt.Sprintf("file:server_schema_%d?mode=memory&cache=shared", version)), &gorm.Config{Logger: logger.Default.LogMode(logger.Silent)})
-			if err != nil {
-				t.Fatal("打开启动门禁测试数据库失败")
-			}
-			sqlDB, _ := db.DB()
-			sqlDB.SetMaxOpenConns(1)
-			t.Cleanup(func() { _ = sqlDB.Close() })
-			if err := db.Exec("CREATE TABLE schema_migrations (version INTEGER NOT NULL)").Error; err != nil {
-				t.Fatal("创建启动门禁版本表失败")
-			}
-			if err := db.Exec("INSERT INTO schema_migrations (version) VALUES (?)", version).Error; err != nil {
-				t.Fatal("写入启动门禁版本失败")
-			}
-
-			started := false
-			err = startAfterSchemaCheck(context.Background(), db, func() error {
-				started = true
-				return nil
-			})
-			if version == 2 && (err != nil || !started) {
-				t.Fatalf("当前结构版本应允许启动，错误=%v", err)
-			}
-			if version != 2 && (err == nil || started) {
-				t.Fatalf("结构版本 %d 必须在服务组件启动前阻断", version)
-			}
-		})
-	}
-}
-
 // TestBuildServerServesConsoleAndAPI 防止镜像启动后仅有 API、刷新详情页面失败或未知 API 被首页掩盖。
 func TestBuildServerServesConsoleAndAPI(t *testing.T) {
 	staticDir := t.TempDir()
@@ -87,7 +52,7 @@ func TestBuildServerServesConsoleAndAPI(t *testing.T) {
 		{http.MethodGet, "/projects/1", 200, "CMDB 验收页面"},
 		{http.MethodGet, "/health", 200, `"status":"ok"`},
 		{http.MethodGet, "/api/v1/projects", 401, "身份认证已失效"},
-		{http.MethodPost, "/api/v1/projects/1/sources/1/verify-identity", 401, "身份认证已失效"},
+		{http.MethodPost, "/api/v1/projects/1/sources/1/verify-identity", 404, "接口不存在"},
 		{http.MethodGet, "/api/v1/missing", 404, "接口不存在"},
 	} {
 		response := httptest.NewRecorder()

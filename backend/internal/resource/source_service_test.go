@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"cmdb/internal/audit"
+	"github.com/jackc/pgx/v5/pgconn"
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
@@ -113,17 +114,6 @@ type identityAdapterStub struct {
 	resolve func(context.Context, Source, []byte) (string, error)
 }
 
-// legacyIdentityAdapterStub 模拟平台只在读取历史密文时规范化旧凭证，不能放宽新提交凭证校验。
-type legacyIdentityAdapterStub struct {
-	identityAdapterStub
-	normalize func(json.RawMessage) (json.RawMessage, error)
-}
-
-// NormalizeStoredCredential 返回平台识别后的历史凭证规范格式，原密文仍由服务保留。
-func (a legacyIdentityAdapterStub) NormalizeStoredCredential(raw json.RawMessage) (json.RawMessage, error) {
-	return a.normalize(raw)
-}
-
 // ValidateCredential 保留平台格式校验的业务边界，不让模拟身份绕过完整凭证要求。
 func (a identityAdapterStub) ValidateCredential(raw json.RawMessage) error {
 	if a.aliyun {
@@ -203,7 +193,7 @@ func TestSourceIdentityCreationAtomicity(t *testing.T) {
 					t.Fatalf("创建应返回安全领域结果：%v", err)
 				}
 				if wantErr == nil {
-					if created.IdentityStatus != IdentityStatusVerified || created.CloudAccountID != "123456789012" || created.IdentityVerifiedAt == nil {
+					if created.CloudAccountID != "123456789012" || created.IdentityVerifiedAt == nil {
 						t.Fatal("新接入源必须保存已验证账号身份")
 					}
 					encoded, _ := json.Marshal(created)
@@ -240,6 +230,14 @@ func TestSourceIdentityConflictWithTranslatedDatabaseErrors(t *testing.T) {
 	db.Config.TranslateError = true
 	if _, err := service.CreateSource(context.Background(), identityInput(2)); !errors.Is(err, ErrCloudAccountConflict) {
 		t.Fatal("数据库错误转换后仍必须返回稳定云账号冲突")
+	}
+}
+
+// TestSourceIdentityConflictFromPostgreSQLConstraint 保证未启用错误转换时也识别当前唯一约束。
+func TestSourceIdentityConflictFromPostgreSQLConstraint(t *testing.T) {
+	err := sourceIdentityWriteError(&pgconn.PgError{Code: "23505", ConstraintName: "uk_resource_sources_provider_account"})
+	if !errors.Is(err, ErrCloudAccountConflict) {
+		t.Fatal("PostgreSQL 当前云账号唯一约束必须转换为稳定业务冲突")
 	}
 }
 
@@ -308,264 +306,16 @@ func TestSourceIdentityCredentialReplacement(t *testing.T) {
 	}
 }
 
-// TestPendingIdentityOnlyAllowsReadAndVerification 防止历史来源绕过身份确认执行任何普通写入或采集。
-func TestPendingIdentityOnlyAllowsReadAndVerification(t *testing.T) {
-	service, db, source, _ := newResourceServiceTest(t)
-	if err := db.Model(source).Updates(map[string]any{"identity_status": "pending", "cloud_account_id": nil, "identity_verified_at": nil}).Error; err != nil {
-		t.Fatal("准备历史待验证来源失败")
-	}
-	ctx := context.Background()
-	if _, err := service.FindSourceForProject(ctx, 1, source.ID); err != nil {
-		t.Fatal("待验证来源必须允许项目内查询")
-	}
-	job := &SyncJob{ProjectID: 1, SourceID: source.ID, Status: "failed", Trigger: "manual"}
-	if err := db.Create(job).Error; err != nil {
-		t.Fatal("准备历史任务失败")
-	}
-	for _, operation := range []struct {
-		name string
-		run  func() error
-	}{
-		{"编辑和启停", func() error {
-			_, err := service.UpdateSource(ctx, 1, source.ID, UpdateSourceInput{Name: "新名称", Enabled: false, SyncIntervalMinutes: 60})
-			return err
-		}},
-		{"删除", func() error { return service.DeleteSource(ctx, 1, source.ID) }},
-		{"连接测试", func() error { _, err := service.TestConnection(ctx, 1, source.ID, collectorStub{}); return err }},
-		{"同步", func() error { _, err := service.Sync(ctx, source.ID, "manual", collectorStub{}); return err }},
-		{"排队", func() error { _, err := service.EnqueueSync(ctx, source.ID, "manual", collectorStub{}); return err }},
-		{"重试", func() error { _, err := service.RetryJob(ctx, 1, job.ID); return err }},
-	} {
-		t.Run(operation.name, func(t *testing.T) {
-			if !errors.Is(operation.run(), ErrSourceIdentityPending) {
-				t.Fatal("待验证来源必须拒绝该操作")
-			}
-		})
-	}
-	due, err := service.repository.ListDueSources(ctx, time.Now().Add(time.Hour))
-	if err != nil || len(due) != 0 {
-		t.Fatal("自动调度不得选择待验证来源")
-	}
-	var jobs int64
-	db.Model(&SyncJob{}).Count(&jobs)
-	if jobs != 1 {
-		t.Fatal("待验证来源不得创建任何新任务")
-	}
-}
-
-// TestVerifyHistoricalSourceIdentity 验证历史来源可用原凭证或完整新凭证确认身份，所有失败均保持 pending。
-func TestVerifyHistoricalSourceIdentity(t *testing.T) {
-	for _, scenario := range []string{"原凭证", "新凭证", "冲突", "云失败", "项目停用", "项目不存在", "审计失败", "不完整凭证"} {
-		t.Run(scenario, func(t *testing.T) {
-			service, db, source, _ := newResourceServiceTest(t)
-			plain := identityInput(1).Credential
-			encrypted, _ := service.cipher.Encrypt(plain)
-			if err := db.Model(source).Updates(map[string]any{"identity_status": "pending", "cloud_account_id": nil, "identity_verified_at": nil, "encrypted_credential": encrypted}).Error; err != nil {
-				t.Fatal("准备待验证来源失败")
-			}
-			credential := json.RawMessage(`{"access_key_id":"虚构新标识","secret_access_key":"虚构新密钥"}`)
-			switch scenario {
-			case "原凭证":
-				credential = nil
-			case "冲突":
-				if _, err := service.CreateSource(context.Background(), identityInput(2)); err != nil {
-					t.Fatal("准备冲突账号失败")
-				}
-			case "云失败":
-				service.adapters[ProviderAWS] = identityAdapterStub{resolve: func(context.Context, Source, []byte) (string, error) { return "", ErrCloudNetwork }}
-			case "项目停用":
-				db.Exec("UPDATE projects SET status = 'disabled' WHERE id = 1")
-			case "项目不存在":
-				db.Exec("DELETE FROM projects WHERE id = 1")
-			case "审计失败":
-				db.Exec("CREATE TRIGGER reject_verification_audit BEFORE INSERT ON audit_logs BEGIN SELECT RAISE(ABORT, '验证审计失败'); END")
-			case "不完整凭证":
-				credential = json.RawMessage(`{"access_key_id":"虚构"}`)
-			}
-			verified, err := service.VerifySourceIdentity(context.Background(), 1, source.ID, credential)
-			if scenario == "原凭证" || scenario == "新凭证" {
-				if err != nil || verified.IdentityStatus != IdentityStatusVerified || verified.CloudAccountID != "123456789012" || verified.IdentityVerifiedAt == nil {
-					t.Fatal("历史来源应保存已确认账号身份")
-				}
-				if scenario == "原凭证" && verified.EncryptedCredential != encrypted {
-					t.Fatal("使用原凭证验证不得生成新密文")
-				}
-				if scenario == "新凭证" {
-					decrypted, _ := service.cipher.Decrypt(verified.EncryptedCredential)
-					if string(decrypted) != string(credential) {
-						t.Fatal("新凭证必须随身份原子更新")
-					}
-				}
-			} else {
-				if err == nil {
-					t.Fatal("验证失败必须返回错误")
-				}
-				if scenario == "冲突" && !errors.Is(err, ErrCloudAccountConflict) {
-					t.Fatal("重复账号必须返回稳定冲突")
-				}
-				after, _ := service.repository.FindSource(context.Background(), source.ID)
-				if after.IdentityStatus != IdentityStatusPending || after.CloudAccountID != "" || after.IdentityVerifiedAt != nil || after.EncryptedCredential != encrypted {
-					t.Fatal("验证失败不得留下身份、验证时间或新密文")
-				}
-			}
-			var verificationAudits int64
-			if err := db.Model(&audit.Log{}).Where("resource_id = ? AND action = ?", source.ID, audit.ActionSourceUpdated).Count(&verificationAudits).Error; err != nil {
-				t.Fatal("查询身份验证审计失败")
-			}
-			wantAudits := int64(0)
-			if scenario == "原凭证" || scenario == "新凭证" {
-				wantAudits = 1
-			}
-			if verificationAudits != wantAudits {
-				t.Fatal("身份验证审计必须与状态提交结果一致")
-			}
-		})
-	}
-}
-
-// TestVerifyHistoricalSourceIdentityNormalizesOnlyStoredCredential 防止旧版本保存的可选空字段阻断升级后的身份验证。
-func TestVerifyHistoricalSourceIdentityNormalizesOnlyStoredCredential(t *testing.T) {
-	service, db, source, _ := newResourceServiceTest(t)
-	legacy := json.RawMessage(`{"access_key_id":"虚构旧标识","secret_access_key":"虚构旧密钥","session_token":""}`)
-	encrypted, err := service.cipher.Encrypt(legacy)
-	if err != nil {
-		t.Fatal("准备历史凭证失败")
-	}
-	if err := db.Model(source).Updates(map[string]any{"identity_status": IdentityStatusPending, "cloud_account_id": nil, "identity_verified_at": nil, "encrypted_credential": encrypted}).Error; err != nil {
-		t.Fatal("准备待验证来源失败")
-	}
-	normalizeCalls := 0
-	service.adapters[ProviderAWS] = legacyIdentityAdapterStub{
-		identityAdapterStub: identityAdapterStub{resolve: func(_ context.Context, _ Source, plain []byte) (string, error) {
-			if string(plain) != `{"access_key_id":"虚构旧标识","secret_access_key":"虚构旧密钥"}` {
-				t.Fatal("云身份识别只能接收移除空可选字段后的规范凭证")
-			}
-			return "123456789012", nil
-		}},
-		normalize: func(raw json.RawMessage) (json.RawMessage, error) {
-			normalizeCalls++
-			if string(raw) != string(legacy) {
-				t.Fatal("历史格式规范化必须读取已解密的原凭证")
-			}
-			return json.RawMessage(`{"access_key_id":"虚构旧标识","secret_access_key":"虚构旧密钥"}`), nil
-		},
-	}
-
-	verified, err := service.VerifySourceIdentity(context.Background(), source.ProjectID, source.ID, nil)
-	if err != nil || verified.IdentityStatus != IdentityStatusVerified {
-		t.Fatalf("历史空可选字段规范化后应完成身份验证：%v", err)
-	}
-	if normalizeCalls != 1 {
-		t.Fatalf("使用已保存凭证时必须规范化一次，实际调用 %d 次", normalizeCalls)
-	}
-	if verified.EncryptedCredential != encrypted {
-		t.Fatal("兼容读取不得静默改写历史密文")
-	}
-	if err := db.Model(source).Updates(map[string]any{"identity_status": IdentityStatusPending, "cloud_account_id": nil, "identity_verified_at": nil}).Error; err != nil {
-		t.Fatal("重置待验证来源失败")
-	}
-	if _, err := service.VerifySourceIdentity(context.Background(), source.ProjectID, source.ID, legacy); !errors.Is(err, ErrInvalidProviderCredential) {
-		t.Fatalf("显式提交的空可选字段必须保持严格拒绝：%v", err)
-	}
-	if normalizeCalls != 1 {
-		t.Fatal("显式提交的新凭证不得进入历史格式规范化")
-	}
-}
-
-// TestVerifySourceIdentityRejectsVerifiedSourceBeforeCloudCall 防止专门入口重复刷新已验证来源或替换其凭证。
-func TestVerifySourceIdentityRejectsVerifiedSourceBeforeCloudCall(t *testing.T) {
-	service, _, source, _ := newResourceServiceTest(t)
-	cloudCalls := 0
-	service.adapters[ProviderAWS] = identityAdapterStub{resolve: func(context.Context, Source, []byte) (string, error) {
-		cloudCalls++
-		return "123456789012", nil
-	}}
-
-	if _, err := service.VerifySourceIdentity(context.Background(), source.ProjectID, source.ID, nil); !errors.Is(err, ErrSourceIdentityAlreadyVerified) {
-		t.Fatal("已验证来源必须返回稳定冲突")
-	}
-	if cloudCalls != 0 {
-		t.Fatal("已验证来源必须在云调用前被拒绝")
-	}
-}
-
-// TestVerifySourceIdentityRechecksPendingInsideTransaction 防止联网期间发生的并发验证被后到请求覆盖。
-func TestVerifySourceIdentityRechecksPendingInsideTransaction(t *testing.T) {
-	service, db, source, now := newResourceServiceTest(t)
-	plain := identityInput(1).Credential
-	encrypted, err := service.cipher.Encrypt(plain)
-	if err != nil {
-		t.Fatal("准备待验证凭证失败")
-	}
-	if err := db.Model(source).Updates(map[string]any{"identity_status": IdentityStatusPending, "cloud_account_id": nil, "identity_verified_at": nil, "encrypted_credential": encrypted}).Error; err != nil {
-		t.Fatal("准备待验证来源失败")
-	}
-	concurrentVerifiedAt := now.Add(-time.Minute)
-	service.adapters[ProviderAWS] = identityAdapterStub{resolve: func(context.Context, Source, []byte) (string, error) {
-		return "123456789012", db.Model(&Source{}).Where("id = ?", source.ID).Updates(map[string]any{
-			"identity_status":      IdentityStatusVerified,
-			"cloud_account_id":     "123456789012",
-			"identity_verified_at": concurrentVerifiedAt,
-		}).Error
-	}}
-
-	if _, err := service.VerifySourceIdentity(context.Background(), source.ProjectID, source.ID, nil); !errors.Is(err, ErrSourceIdentityAlreadyVerified) {
-		t.Fatal("事务内发现来源已验证时必须返回稳定冲突")
-	}
-	current, err := service.repository.FindSource(context.Background(), source.ID)
-	if err != nil || current.IdentityVerifiedAt == nil || !current.IdentityVerifiedAt.Equal(concurrentVerifiedAt) || current.EncryptedCredential != encrypted {
-		t.Fatal("后到验证不得覆盖并发请求已经提交的身份、验证时间或凭证")
-	}
-	var audits int64
-	if err := db.Model(&audit.Log{}).Where("resource_id = ? AND action = ?", source.ID, audit.ActionSourceUpdated).Count(&audits).Error; err != nil || audits != 0 {
-		t.Fatal("被并发验证阻止的请求不得留下成功审计")
-	}
-}
-
-// TestPendingSourceStartupRecoveryPreservesAssets 防止重启继续采集历史 pending 来源，或者遗留统计误报资产变化。
-func TestPendingSourceStartupRecoveryPreservesAssets(t *testing.T) {
-	service, db, source, now := newResourceServiceTest(t)
-	if err := db.Model(source).Updates(map[string]any{"identity_status": "pending", "cloud_account_id": nil, "identity_verified_at": nil}).Error; err != nil {
-		t.Fatal("准备待验证来源失败")
-	}
-	asset := Server{AssetBase: AssetBase{ProjectID: 1, SourceID: source.ID, Provider: ProviderAWS, ResourceType: "ec2", ExternalID: "历史资产", AssetStatus: AssetStatusActive, LastSeenAt: *now}}
-	if err := db.Create(&asset).Error; err != nil {
-		t.Fatal("准备历史资产失败")
-	}
-	for _, status := range []string{"queued", "running"} {
-		if err := db.Create(&SyncJob{ProjectID: 1, SourceID: source.ID, Status: status, Trigger: "manual", Statistics: json.RawMessage(`{"ec2":{"added":9}}`)}).Error; err != nil {
-			t.Fatal("准备遗留任务失败")
-		}
-	}
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	if err := service.StartScheduler(ctx); err != nil {
-		t.Fatal("待验证来源安全恢复失败")
-	}
-	var jobs []SyncJob
-	if err := db.Find(&jobs).Error; err != nil {
-		t.Fatal("读取恢复任务失败")
-	}
-	for _, job := range jobs {
-		if job.Status != "failed" || len(job.Statistics) != 0 || job.FinishedAt == nil || !strings.Contains(job.ErrorSummary, "身份") {
-			t.Fatal("历史待验证任务必须安全失败并清空统计")
-		}
-	}
-	var persisted Server
-	if err := db.First(&persisted, asset.ID).Error; err != nil || persisted.AssetStatus != AssetStatusActive || !persisted.LastSeenAt.Equal(*now) {
-		t.Fatal("历史任务恢复不得改变资产")
-	}
-}
-
-// TestSchedulerRecoveryErrorsAbortStartup 验证恢复查询、任务保存或审计失败会阻断启动并保留可再次恢复的记录。
+// TestSchedulerRecoveryErrorsAbortStartup 验证恢复查询或任务收敛失败会阻断启动并保留可再次恢复的记录。
 func TestSchedulerRecoveryErrorsAbortStartup(t *testing.T) {
-	for _, scenario := range []string{"查询失败", "任务保存失败", "审计失败"} {
+	for _, scenario := range []string{"查询失败", "任务保存失败"} {
 		t.Run(scenario, func(t *testing.T) {
 			service, db, source, _ := newResourceServiceTest(t)
-			if err := db.Model(source).Updates(map[string]any{"identity_status": IdentityStatusPending, "cloud_account_id": nil, "identity_verified_at": nil}).Error; err != nil {
-				t.Fatal("准备待验证来源失败")
+			initialStatus := "queued"
+			if scenario == "任务保存失败" {
+				initialStatus = "running"
 			}
-			job := SyncJob{ProjectID: source.ProjectID, SourceID: source.ID, Status: "queued", Trigger: "manual"}
+			job := SyncJob{ProjectID: source.ProjectID, SourceID: source.ID, Status: initialStatus, Trigger: "manual"}
 			if err := db.Create(&job).Error; err != nil {
 				t.Fatal("准备排队任务失败")
 			}
@@ -585,10 +335,6 @@ func TestSchedulerRecoveryErrorsAbortStartup(t *testing.T) {
 				if err := db.Exec("CREATE TRIGGER reject_recovery_job BEFORE UPDATE ON sync_jobs BEGIN SELECT RAISE(ABORT, '模拟底层恢复错误正文'); END").Error; err != nil {
 					t.Fatal("准备任务保存失败失败")
 				}
-			case "审计失败":
-				if err := db.Exec("CREATE TRIGGER reject_recovery_audit BEFORE INSERT ON audit_logs BEGIN SELECT RAISE(ABORT, '模拟底层恢复错误正文'); END").Error; err != nil {
-					t.Fatal("准备审计保存失败失败")
-				}
 			}
 			logs.Reset()
 			ctx, cancel := context.WithCancel(context.Background())
@@ -604,7 +350,7 @@ func TestSchedulerRecoveryErrorsAbortStartup(t *testing.T) {
 				db.Callback().Query().Remove("test:startup_query_failure")
 			}
 			persisted, readErr := service.repository.FindJob(context.Background(), job.ID)
-			if readErr != nil || persisted.Status != "queued" || persisted.FinishedAt != nil {
+			if readErr != nil || persisted.Status != initialStatus || persisted.FinishedAt != nil {
 				t.Fatal("恢复失败必须保留原任务，供修复后再次恢复")
 			}
 			var auditCount int64

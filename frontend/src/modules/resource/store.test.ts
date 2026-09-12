@@ -6,33 +6,28 @@ const { get, post, put, remove } = vi.hoisted(() => ({ get: vi.fn(), post: vi.fn
 vi.mock('@/utils/request', () => ({ default: { get, post, put, delete: remove } }))
 
 import { useResourceStore } from './store'
+import * as resourceApi from './api'
 
 /** 可控传输只延迟外部响应，项目归属、请求转换和状态更新仍执行真实实现。 */
 function deferred<T = any>() { let resolve!: (value: T) => void; let reject!: (error: unknown) => void; const promise = new Promise<T>((yes, no) => { resolve = yes; reject = no }); return { promise, resolve, reject } }
 function projectResponse(url: string, options?: { params?: { provider?: string } }) {
   const projectId = Number(url.split('/')[2])
-  if (url.endsWith('/sources')) return [{ id: projectId * 10, project_id: projectId, provider: options?.params?.provider, name: `项目${projectId}来源`, region: '', identity_status: 'pending', credential_hint: '已安全配置', enabled: true, sync_interval_minutes: 60 }]
+  if (url.endsWith('/sources')) return [{ id: projectId * 10, project_id: projectId, provider: options?.params?.provider, name: `项目${projectId}来源`, region: '', credential_hint: '已安全配置', enabled: true, sync_interval_minutes: 60 }]
   return { items: [{ id: projectId * 100, source_id: projectId * 10, status: 'failed', trigger: 'manual', statistics: {}, error_summary: '', started_at: '' }], total: 1, page: 1, page_size: 20 }
 }
 
 describe('云资源状态层', () => {
   beforeEach(() => { setActivePinia(createPinia()); get.mockReset(); post.mockReset(); put.mockReset(); remove.mockReset() })
 
-  it('验证失败后的旧项目刷新返回时不得把错误写入新项目', async () => {
+  it('接入源读取结果与状态层不再暴露历史身份确认契约', async () => {
     get.mockImplementation((url, options) => Promise.resolve(projectResponse(url, options)))
     const store = useResourceStore()
-    await store.loadSyncManagement(1)
-    const refresh = deferred(); const refreshStarted = deferred<void>()
-    get.mockImplementation((url, options) => { if (url.includes('/1/') && url.endsWith('/sources')) { refreshStarted.resolve(); return refresh.promise }; return Promise.resolve(projectResponse(url, options)) })
-    post.mockRejectedValue({ response: { data: { message: '旧项目验证失败' } } })
-    const verification = store.verifyIdentity(1, 'aws', 10, undefined, true).catch(error => error)
-    await refreshStarted.promise
-    await store.loadSyncManagement(2)
-    refresh.resolve(projectResponse('/projects/1/sources', { params: { provider: 'aws' } }))
-    await verification
-    expect(store.sources.map(source => source.projectId)).toEqual([2, 2])
-    expect(store.jobs.map(job => job.sourceId)).toEqual([20, 20])
-    expect(store.mutationError).toBe('')
+    await store.load(1, 'aws')
+
+    expect(store.sources[0]).not.toHaveProperty(['identity', 'Status'].join(''))
+    expect(store).not.toHaveProperty(['verify', 'Identity'].join(''))
+    expect(store).not.toHaveProperty(['release', 'Identity', 'Verification'].join(''))
+    expect(resourceApi).not.toHaveProperty(['verify', 'Source', 'Identity'].join(''))
   })
 
   for (const operation of ['新建', '编辑'] as const) {
@@ -134,7 +129,7 @@ describe('云资源状态层', () => {
           await refresh()
           expect(store.sources[0]?.name).toBe('同项目轮询事实')
           serverName = '提交后的服务端事实'
-          if (outcome === '成功') response.resolve({ id: 10, project_id: 1, provider: 'aws', name: '提交响应', identity_status: 'verified', enabled: true, sync_interval_minutes: 60 })
+          if (outcome === '成功') response.resolve({ id: 10, project_id: 1, provider: 'aws', name: '提交响应', enabled: true, sync_interval_minutes: 60 })
           else response.reject({ response: { data: { message: '保存接入源失败，请重试' } } })
           await pending
           expect(store.sources.map(source => source.name)).toEqual(syncManagement ? ['提交后的服务端事实', '提交后的服务端事实'] : ['提交后的服务端事实'])
@@ -258,92 +253,4 @@ describe('云资源状态层', () => {
     expect(store.connectionMessage).toBe('')
   })
 
-  it('验证待确认身份后使用服务端刷新结果且不保留新凭证', async () => {
-    get.mockImplementation((url: string) => Promise.resolve(url.endsWith('/sources') ? [{ id: 4, project_id: 7, provider: 'aws', name: '账号', identity_status: 'verified', enabled: true, sync_interval_minutes: 60 }] : { items: [], total: 0 }))
-    let submitted: unknown
-    post.mockImplementation((_url: string, body: unknown) => { submitted = structuredClone(body); return Promise.resolve({ id: 4, project_id: 7, provider: 'aws', name: '账号', identity_status: 'verified', enabled: true, sync_interval_minutes: 60 }) })
-    const store = useResourceStore()
-    const credential = { access_key_id: 'test-access-key', secret_access_key: 'test-secret' }
-
-    await store.verifyIdentity(7, 'aws', 4, credential)
-
-    expect(post).toHaveBeenCalledWith('/projects/7/sources/4/verify-identity', expect.any(Object))
-    expect(submitted).toEqual({ credential: { access_key_id: 'test-access-key', secret_access_key: 'test-secret' } })
-    expect(store.sources[0]?.identityStatus).toBe('verified')
-    expect(store.verifyingSourceId).toBeNull()
-    expect(credential).toEqual({})
-  })
-
-  it('验证身份使用现有安全凭证时不提交凭证，并在失败后清理提交状态', async () => {
-    get.mockImplementation((url: string) => Promise.resolve(url.endsWith('/sources') ? [{ id: 4, project_id: 7, provider: 'aliyun', name: '历史账号', identity_status: 'pending', enabled: true, sync_interval_minutes: 60 }] : { items: [], total: 0 }))
-    post.mockRejectedValue({ response: { data: { message: '云账号权限不足，请检查只读权限' } } })
-    const store = useResourceStore()
-
-    await expect(store.verifyIdentity(7, 'aliyun', 4)).rejects.toBeTruthy()
-
-    expect(post).toHaveBeenCalledWith('/projects/7/sources/4/verify-identity', {})
-    expect(store.mutationError).toBe('云账号权限不足，请检查只读权限')
-    expect(store.verifyingSourceId).toBeNull()
-    expect(store.sources[0]?.identityStatus).toBe('pending')
-  })
-
-  it('项目切换后忽略旧项目晚到的身份验证刷新和错误', async () => {
-    get.mockImplementation((url: string, options?: { params?: { provider?: string } }) => {
-      const projectId = url.split('/')[2]
-      const provider = options?.params?.provider
-      if (url.endsWith('/sources')) return Promise.resolve([{ id: projectId === '1' ? 4 : 8, project_id: Number(projectId), provider, name: projectId === '1' ? '旧项目账号' : '新项目账号', identity_status: 'verified', enabled: true, sync_interval_minutes: 60 }])
-      return Promise.resolve({ items: [{ id: projectId === '1' ? 14 : 18, source_id: projectId === '1' ? 4 : 8, status: 'failed', trigger: 'manual' }], total: 1 })
-    })
-    let rejectVerification!: (error: unknown) => void
-    post.mockImplementation(() => new Promise((_resolve, reject) => { rejectVerification = reject }))
-    const store = useResourceStore()
-    await store.loadSyncManagement(1)
-
-    const verification = store.verifyIdentity(1, 'aws', 4)
-    await Promise.resolve()
-    await store.loadSyncManagement(2)
-    rejectVerification({ response: { data: { message: '旧项目身份验证失败' } } })
-    await expect(verification).rejects.toBeTruthy()
-
-    expect(store.sources.map(source => source.projectId)).toEqual([2, 2])
-    expect(store.jobs.map(job => job.sourceId)).toEqual([8, 8])
-    expect(store.mutationError).toBe('')
-    expect(store.verifyingSourceId).toBeNull()
-  })
-
-  it('旧项目验证完成时不清理新项目验证的提交状态', async () => {
-    get.mockImplementation((url: string, options?: { params?: { provider?: string } }) => {
-      const projectId = url.split('/')[2]
-      const provider = options?.params?.provider
-      if (url.endsWith('/sources')) return Promise.resolve([{ id: projectId === '1' ? 4 : 8, project_id: Number(projectId), provider, name: projectId === '1' ? '旧项目账号' : '新项目账号', identity_status: 'verified', enabled: true, sync_interval_minutes: 60 }])
-      return Promise.resolve({ items: [{ id: projectId === '1' ? 14 : 18, source_id: projectId === '1' ? 4 : 8, status: 'failed', trigger: 'manual' }], total: 1 })
-    })
-    let rejectOld!: (error: unknown) => void
-    let resolveNew!: (value: unknown) => void
-    post.mockImplementation((url: string) => new Promise((resolve, reject) => {
-      if (url.includes('/sources/4/')) rejectOld = reject
-      else resolveNew = resolve
-    }))
-    const store = useResourceStore()
-    const oldCredential = { access_key_id: 'old-access-key', secret_access_key: 'old-secret' }
-    const newCredential = { access_key_id: 'new-access-key', secret_access_key: 'new-secret' }
-    await store.loadSyncManagement(1)
-
-    const oldVerification = store.verifyIdentity(1, 'aws', 4, oldCredential)
-    await Promise.resolve()
-    await store.loadSyncManagement(2)
-    const newVerification = store.verifyIdentity(2, 'aws', 8, newCredential)
-    await Promise.resolve()
-    rejectOld({ response: { data: { message: '旧项目身份验证失败' } } })
-    await expect(oldVerification).rejects.toBeTruthy()
-
-    expect(store.verifyingSourceId).toBe(8)
-    expect(store.sources.map(source => source.projectId)).toEqual([2, 2])
-    expect(store.mutationError).toBe('')
-    expect(oldCredential).toEqual({})
-    resolveNew({ id: 8, project_id: 2, provider: 'aws', identity_status: 'verified', name: '新项目账号', enabled: true, sync_interval_minutes: 60 })
-    await newVerification
-    expect(store.verifyingSourceId).toBeNull()
-    expect(newCredential).toEqual({})
-  })
 })

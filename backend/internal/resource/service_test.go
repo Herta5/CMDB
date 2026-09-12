@@ -222,7 +222,7 @@ func newResourceServiceTest(t *testing.T) (*Service, *gorm.DB, *Source, *time.Ti
 	cipher := NewCredentialCipher("resource-service-test-key")
 	encrypted, _ := cipher.Encrypt([]byte(`{"token":"example"}`))
 	verified := time.Date(2026, 9, 9, 11, 0, 0, 0, time.UTC)
-	source := &Source{ProjectID: 1, Provider: ProviderAWS, Name: "测试接入源", Region: "cn-test", EncryptedCredential: encrypted, Enabled: true, SyncIntervalMinutes: 60, CloudAccountID: "123456789012", IdentityStatus: IdentityStatusVerified, IdentityVerifiedAt: &verified}
+	source := &Source{ProjectID: 1, Provider: ProviderAWS, Name: "测试接入源", Region: "cn-test", EncryptedCredential: encrypted, Enabled: true, SyncIntervalMinutes: 60, CloudAccountID: "123456789012", IdentityVerifiedAt: &verified}
 	if err := db.Create(source).Error; err != nil {
 		t.Fatal("准备接入源失败")
 	}
@@ -699,7 +699,7 @@ func TestSyncFinalStateRollsBackWhenAuditWriteFails(t *testing.T) {
 				t.Fatalf("准备同步凭证失败：%v", encryptErr)
 			}
 			verified := time.Now()
-			source := &Source{ProjectID: 1, Provider: ProviderAWS, Name: "同步接入源", EncryptedCredential: encrypted, Enabled: true, SyncIntervalMinutes: 60, CloudAccountID: "123456789012", IdentityStatus: IdentityStatusVerified, IdentityVerifiedAt: &verified}
+			source := &Source{ProjectID: 1, Provider: ProviderAWS, Name: "同步接入源", EncryptedCredential: encrypted, Enabled: true, SyncIntervalMinutes: 60, CloudAccountID: "123456789012", IdentityVerifiedAt: &verified}
 			if err := db.Create(source).Error; err != nil {
 				t.Fatalf("准备同步接入源失败：%v", err)
 			}
@@ -898,8 +898,8 @@ func TestSyncDueSourcesOnlyRunsEnabledDueSources(t *testing.T) {
 	future := now.Add(time.Hour)
 	_ = db.Model(source).Updates(map[string]any{"next_sync_at": past, "enabled": true}).Error
 	// 两个排除样本也必须已验证，避免身份门禁掩盖启用状态和到期时间的调度规则。
-	disabled := Source{ProjectID: 1, Provider: ProviderAWS, Name: "停用源", EncryptedCredential: source.EncryptedCredential, Enabled: false, SyncIntervalMinutes: 60, NextSyncAt: &past, CloudAccountID: "123456789013", IdentityStatus: IdentityStatusVerified, IdentityVerifiedAt: source.IdentityVerifiedAt}
-	upcoming := Source{ProjectID: 1, Provider: ProviderAWS, Name: "未到期源", EncryptedCredential: source.EncryptedCredential, Enabled: true, SyncIntervalMinutes: 60, NextSyncAt: &future, CloudAccountID: "123456789014", IdentityStatus: IdentityStatusVerified, IdentityVerifiedAt: source.IdentityVerifiedAt}
+	disabled := Source{ProjectID: 1, Provider: ProviderAWS, Name: "停用源", EncryptedCredential: source.EncryptedCredential, Enabled: false, SyncIntervalMinutes: 60, NextSyncAt: &past, CloudAccountID: "123456789013", IdentityVerifiedAt: source.IdentityVerifiedAt}
+	upcoming := Source{ProjectID: 1, Provider: ProviderAWS, Name: "未到期源", EncryptedCredential: source.EncryptedCredential, Enabled: true, SyncIntervalMinutes: 60, NextSyncAt: &future, CloudAccountID: "123456789014", IdentityVerifiedAt: source.IdentityVerifiedAt}
 	_ = db.Create(&disabled).Error
 	_ = db.Create(&upcoming).Error
 	service.SyncDueSources(context.Background())

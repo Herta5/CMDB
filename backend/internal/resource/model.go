@@ -11,10 +11,6 @@ const (
 	ProviderAliyun = "aliyun"
 	// ProviderAWS 表示 AWS 接入模块。
 	ProviderAWS = "aws"
-	// IdentityStatusPending 表示历史接入源尚未确认云账号归属，只允许读取和专门身份验证。
-	IdentityStatusPending = "pending"
-	// IdentityStatusVerified 表示账号身份已经由云平台确认并占用唯一归属。
-	IdentityStatusVerified = "verified"
 	// AssetStatusActive 表示资源在最近一次完整成功采集中存在。
 	AssetStatusActive = "active"
 	// AssetStatusLost 表示资源在最近一次完整成功采集中缺失但仍处于 24 小时保留期。
@@ -25,11 +21,10 @@ const (
 type Source struct {
 	ID        uint64 `gorm:"primaryKey" json:"id"`
 	ProjectID uint64 `gorm:"not null;index" json:"project_id"`
-	Provider  string `gorm:"size:32;not null;uniqueIndex:uk_resource_sources_provider_account_verified,where:identity_status = 'verified' AND cloud_account_id IS NOT NULL" json:"provider"`
+	Provider  string `gorm:"size:32;not null;uniqueIndex:uk_resource_sources_provider_account" json:"provider"`
 	// 云账号与验证时间只在服务端参与归属判断，禁止进入公开响应。
-	CloudAccountID      string          `gorm:"size:128;default:null;uniqueIndex:uk_resource_sources_provider_account_verified,where:identity_status = 'verified' AND cloud_account_id IS NOT NULL" json:"-"`
-	IdentityStatus      string          `gorm:"size:32;not null;default:verified" json:"identity_status"`
-	IdentityVerifiedAt  *time.Time      `json:"-"`
+	CloudAccountID      string          `gorm:"size:128;not null;uniqueIndex:uk_resource_sources_provider_account" json:"-"`
+	IdentityVerifiedAt  *time.Time      `gorm:"not null" json:"-"`
 	Name                string          `gorm:"size:128;not null" json:"name"`
 	Region              string          `gorm:"size:128;not null" json:"region"`
 	EncryptedCredential string          `gorm:"type:text;not null" json:"-"`

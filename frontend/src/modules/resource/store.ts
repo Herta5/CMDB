@@ -1,27 +1,22 @@
 // 本文件为三个平台页面提供共享状态，平台差异只存在于表单和资源类型展示。
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
-import { createSource as createSourceRequest, deleteSource as deleteSourceRequest, listJobs, listResources, listSources, retrySyncJob, syncSource, testSourceConnection, updateSource as updateSourceRequest, verifySourceIdentity, type CloudResource, type Provider, type Source, type SourceInput, type SyncJob } from './api'
+import { createSource as createSourceRequest, deleteSource as deleteSourceRequest, listJobs, listResources, listSources, retrySyncJob, syncSource, testSourceConnection, updateSource as updateSourceRequest, type CloudResource, type Provider, type Source, type SourceInput, type SyncJob } from './api'
 
 export type ResourceLoadState = 'idle' | 'loading' | 'ready' | 'empty' | 'error' | 'forbidden'
 
 /** 将权限隐藏响应与普通故障区分，页面不得把失败伪装成空数据。 */
 function errorState(error: unknown): ResourceLoadState { const status = (error as { response?: { status?: number } })?.response?.status; return status === 403 || status === 404 ? 'forbidden' : 'error' }
-/** 验证完成后原地移除短生命周期凭证值，避免调用方意外持有秘密。 */
+/** 来源提交完成后原地移除短生命周期凭证值，避免调用方意外持有秘密。 */
 function clearCredential(credential?: Record<string, unknown>) { if (credential) for (const key of Object.keys(credential)) delete credential[key] }
-/** 服务端错误已收敛为安全中文摘要；缺失时使用固定提示，不显示网络或 SDK 详情。 */
-function verificationFailureMessage(error: unknown) { return (error as { response?: { data?: { message?: string } } })?.response?.data?.message || '身份验证失败，请检查凭证和云账号权限后重试' }
-
 export const useResourceStore = defineStore('cmdb-resource', () => {
   const sources = ref<Source[]>([]); const resources = ref<CloudResource[]>([]); const jobs = ref<SyncJob[]>([])
   const state = ref<ResourceLoadState>('idle'); const mutationError = ref(''); const syncingSourceId = ref<number | null>(null)
-  const testingSourceId = ref<number | null>(null); const retryingJobId = ref<number | null>(null); const verifyingSourceId = ref<number | null>(null); const connectionMessage = ref(''); const connectionError = ref('')
+  const testingSourceId = ref<number | null>(null); const retryingJobId = ref<number | null>(null); const connectionMessage = ref(''); const connectionError = ref('')
   const resourceType = ref(''); const assetStatus = ref(''); const page = ref(1); const pageSize = ref(20); const total = ref(0)
   let requestVersion = 0
   let projectGeneration = 0
   let sourceCompletionOrder = 0
-  let verificationToken = 0
-  let activeVerificationOwner: symbol | undefined
   let activeProjectId: number | null = null
 
   /** 项目会话只在实际切换时失效，同项目轮询不能作废尚未完成的写操作。 */
@@ -38,12 +33,9 @@ export const useResourceStore = defineStore('cmdb-resource', () => {
     const version = ++requestVersion
     state.value = 'loading'; mutationError.value = ''
     if (projectChanged) {
-      // 新项目不会继承旧项目的身份验证按钮状态，旧请求只能自行清理凭证。
-      ++verificationToken
-      activeVerificationOwner = undefined
       sources.value = []; resources.value = []; jobs.value = []; total.value = 0
       connectionMessage.value = ''; connectionError.value = ''
-      syncingSourceId.value = null; testingSourceId.value = null; retryingJobId.value = null; verifyingSourceId.value = null
+      syncingSourceId.value = null; testingSourceId.value = null; retryingJobId.value = null
     }
     return version
   }
@@ -124,40 +116,5 @@ export const useResourceStore = defineStore('cmdb-resource', () => {
     catch (error) { mutationError.value = (error as { response?: { status?: number } })?.response?.status === 409 ? '该接入源正在同步，请稍后刷新' : '同步失败，请检查接入配置'; throw error }
     finally { syncingSourceId.value = null }
   }
-  /** 待验证来源仅可确认身份；无新凭证时服务端使用已安全保存的凭证。 */
-  async function verifyIdentity(projectId: number, provider: Provider, sourceId: number, credential?: Record<string, unknown>, syncManagement = false, owner = Symbol()) {
-    // 首次直接提交也建立项目归属，后续自身刷新不应被当成项目切换。
-    if (activeProjectId === null) selectProjectContext(projectId)
-    verifyingSourceId.value = sourceId; mutationError.value = ''
-    const currentVerificationToken = ++verificationToken
-    activeVerificationOwner = owner
-    const verificationVersion = requestVersion
-    let finalVersion = verificationVersion
-    let verificationError: unknown
-    let credentialInput = credential
-    try { await verifySourceIdentity(projectId, sourceId, credentialInput) }
-    catch (error) { verificationError = error }
-    finally {
-      clearCredential(credentialInput)
-      credentialInput = undefined
-      // 新项目或另一来源验证已接管提交状态时，旧请求不得解除其按钮锁定。
-      if (currentVerificationToken === verificationToken) verifyingSourceId.value = null
-      // 只允许当前项目上下文刷新服务端事实，项目切换后的旧请求不得覆盖新列表。
-      if (verificationVersion === requestVersion && currentVerificationToken === verificationToken) {
-        const refresh = reload(projectId, provider, syncManagement)
-        finalVersion = requestVersion
-        try { await refresh } catch (error) { if (!verificationError) throw error }
-      }
-    }
-    if (currentVerificationToken === verificationToken) activeVerificationOwner = undefined
-    if (verificationError) { if (finalVersion === requestVersion && currentVerificationToken === verificationToken) mutationError.value = verificationFailureMessage(verificationError); throw verificationError }
-  }
-  /** 关闭弹窗只释放其拥有的本地提交状态，不取消服务端事务，也不解除后续提交的锁定。 */
-  function releaseIdentityVerification(owner: symbol) {
-    if (activeVerificationOwner !== owner) return
-    ++verificationToken
-    activeVerificationOwner = undefined
-    verifyingSourceId.value = null
-  }
-  return { sources, resources, jobs, state, mutationError, syncingSourceId, testingSourceId, retryingJobId, verifyingSourceId, connectionMessage, connectionError, resourceType, assetStatus, page, pageSize, total, load, loadSyncManagement, create, update, remove, testConnection, toggle, retry, sync, verifyIdentity, releaseIdentityVerification }
+  return { sources, resources, jobs, state, mutationError, syncingSourceId, testingSourceId, retryingJobId, connectionMessage, connectionError, resourceType, assetStatus, page, pageSize, total, load, loadSyncManagement, create, update, remove, testConnection, toggle, retry, sync }
 })

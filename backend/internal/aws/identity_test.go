@@ -63,52 +63,6 @@ func TestAWSCredentialValidationAllowsOptionalSessionToken(t *testing.T) {
 	}
 }
 
-// TestAWSNormalizesLegacyStoredEmptySessionToken 防止旧版前端保存的空 Session Token 阻断历史来源验证。
-func TestAWSNormalizesLegacyStoredEmptySessionToken(t *testing.T) {
-	collector := NewCollector()
-	legacy := json.RawMessage(`{"access_key_id":"stub-access-key","secret_access_key":"stub-secret-key","session_token":""}`)
-	if err := collector.ValidateCredential(legacy); !errors.Is(err, resource.ErrInvalidProviderCredential) {
-		t.Fatal("新提交凭证中的空 Session Token 仍必须被严格拒绝")
-	}
-	normalizer, ok := any(collector).(interface {
-		NormalizeStoredCredential(json.RawMessage) (json.RawMessage, error)
-	})
-	if !ok {
-		t.Fatal("AWS 适配器必须支持历史已保存凭证规范化")
-	}
-	normalized, err := normalizer.NormalizeStoredCredential(legacy)
-	if err != nil {
-		t.Fatalf("旧版空 Session Token 应被安全规范化：%v", err)
-	}
-	values, err := resource.DecodeStrictStringObject(normalized, []string{"access_key_id", "secret_access_key"}, []string{"session_token"})
-	if err != nil || values["access_key_id"] != "stub-access-key" || values["secret_access_key"] != "stub-secret-key" {
-		t.Fatal("规范化结果必须保留 AWS 必填凭证")
-	}
-	if _, exists := values["session_token"]; exists {
-		t.Fatal("规范化结果必须移除历史空 Session Token")
-	}
-	current := json.RawMessage(`{"access_key_id":"stub-access-key","secret_access_key":"stub-secret-key","session_token":"stub-session-token"}`)
-	normalized, err = normalizer.NormalizeStoredCredential(current)
-	if err != nil {
-		t.Fatalf("当前规范凭证也必须可读取：%v", err)
-	}
-	values, err = resource.DecodeStrictStringObject(normalized, []string{"access_key_id", "secret_access_key"}, []string{"session_token"})
-	if err != nil || values["session_token"] != "stub-session-token" {
-		t.Fatal("历史读取规范化不得丢弃非空 Session Token")
-	}
-	for _, invalid := range []json.RawMessage{
-		json.RawMessage(`{"access_key_id":"stub-access-key","secret_access_key":"stub-secret-key","unknown":"value"}`),
-		json.RawMessage(`{"access_key_id":"first","access_key_id":"second","secret_access_key":"stub-secret-key"}`),
-		json.RawMessage(`{"access_key_id":"stub-access-key","secret_access_key":"stub-secret-key","session_token":"","session_token":"stub-session-token"}`),
-		json.RawMessage(`{"access_key_id":"stub-access-key","secret_access_key":"stub-secret-key","session_token":" "}`),
-		json.RawMessage(`{"access_key_id":"stub-access-key","session_token":""}`),
-	} {
-		if _, err := normalizer.NormalizeStoredCredential(invalid); !errors.Is(err, resource.ErrInvalidProviderCredential) {
-			t.Fatal("历史规范化不得接受未知、重复、空白或缺少必填字段的凭证")
-		}
-	}
-}
-
 // TestAWSConfigValidationOnlyAllowsEmptyObject 防止 AWS 非敏感配置提前承载未定义或敏感字段。
 func TestAWSConfigValidationOnlyAllowsEmptyObject(t *testing.T) {
 	collector := NewCollector()
