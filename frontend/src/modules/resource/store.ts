@@ -19,9 +19,9 @@ export const useResourceStore = defineStore('cmdb-resource', () => {
   const resourceType = ref(''); const assetStatus = ref(''); const page = ref(1); const pageSize = ref(20); const total = ref(0)
   let requestVersion = 0
   let projectGeneration = 0
+  let sourceCompletionOrder = 0
   let verificationToken = 0
   let activeVerificationOwner: symbol | undefined
-  let sourceMutationToken = 0
   let activeProjectId: number | null = null
 
   /** 项目会话只在实际切换时失效，同项目轮询不能作废尚未完成的写操作。 */
@@ -41,7 +41,6 @@ export const useResourceStore = defineStore('cmdb-resource', () => {
       // 新项目不会继承旧项目的身份验证按钮状态，旧请求只能自行清理凭证。
       ++verificationToken
       activeVerificationOwner = undefined
-      ++sourceMutationToken
       sources.value = []; resources.value = []; jobs.value = []; total.value = 0
       connectionMessage.value = ''; connectionError.value = ''
       syncingSourceId.value = null; testingSourceId.value = null; retryingJobId.value = null; verifyingSourceId.value = null
@@ -85,22 +84,21 @@ export const useResourceStore = defineStore('cmdb-resource', () => {
   }
   /** 写操作完成后按调用页面恢复单平台或双平台视图。 */
   async function reload(projectId: number, provider: Provider, syncManagement: boolean) { if (syncManagement) await loadSyncManagement(projectId); else await load(projectId, provider) }
-  /** 创建与编辑共享提交归属；迟到请求只清理自身凭证，不得重新接管其他项目。 */
+  /** 同项目每次提交独立刷新事实；只有项目切换能作废提交归属，读取版本负责快照先后。 */
   async function mutateSource(projectId: number, provider: Provider, input: SourceInput, syncManagement: boolean, request: () => Promise<unknown>) {
     if (activeProjectId === null) selectProjectContext(projectId)
-    const token = ++sourceMutationToken
     const generation = projectGeneration
     let failure: unknown
     mutationError.value = ''
     try { await request() } catch (error) { failure = error }
     finally { clearCredential(input.credential) }
-    if (generation === projectGeneration && token === sourceMutationToken) {
+    if (generation === projectGeneration) {
+      // 完成顺序仅决定共享提示的归属，不能阻止任何同项目提交刷新服务端事实。
+      const completion = ++sourceCompletionOrder
       await reload(projectId, provider, syncManagement)
+      if (failure && generation === projectGeneration && completion === sourceCompletionOrder) mutationError.value = (failure as { response?: { data?: { message?: string } } })?.response?.data?.message || '保存接入源失败，请稍后重试'
     }
-    if (failure) {
-      if (generation === projectGeneration && token === sourceMutationToken) mutationError.value = (failure as { response?: { data?: { message?: string } } })?.response?.data?.message || '保存接入源失败，请稍后重试'
-      throw failure
-    }
+    if (failure) throw failure
   }
   /** 新建后刷新仍有效的页面视图。 */
   async function create(projectId: number, provider: Provider, input: SourceInput, syncManagement = false) { await mutateSource(projectId, provider, input, syncManagement, () => createSourceRequest(projectId, { ...input, provider })) }

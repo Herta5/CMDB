@@ -36,6 +36,83 @@ describe('云资源状态层', () => {
   })
 
   for (const operation of ['新建', '编辑'] as const) {
+    for (const secondOperation of ['新建', '编辑'] as const) {
+      for (const outcome of ['成功', '失败'] as const) {
+        it(`同项目${operation}甲与${secondOperation}乙反序完成，甲${outcome}仍刷新全部服务端事实`, async () => {
+          const rows = new Map<number, string>()
+          if (operation === '编辑') rows.set(10, '甲原值')
+          if (secondOperation === '编辑') rows.set(11, '乙原值')
+          const snapshot = () => [...rows].map(([id, name]) => ({ ...projectResponse('/projects/1/sources', { params: { provider: 'aws' } })[0], id, name }))
+          get.mockImplementation(url => Promise.resolve(url.endsWith('/sources') ? snapshot() : { items: [], total: 0 }))
+          const store = useResourceStore()
+          await store.load(1, 'aws')
+          const first = deferred(); const second = deferred()
+          const firstCredential = { access_key_id: '虚构甲输入', secret_access_key: '虚构甲秘密' }
+          const secondCredential = { access_key_id: '虚构乙输入', secret_access_key: '虚构乙秘密' }
+          const submit = (kind: string, id: number, credential: Record<string, unknown>) => {
+            const input = { provider: 'aws' as const, name: '提交输入', region: '', config: {}, credential, syncIntervalMinutes: 60 }
+            return (kind === '新建' ? store.create(1, 'aws', input) : store.update(1, 'aws', id, input)).catch(error => error)
+          }
+          post.mockReturnValue(first.promise); put.mockReturnValue(first.promise)
+          const firstPending = submit(operation, 10, firstCredential)
+          post.mockReturnValue(second.promise); put.mockReturnValue(second.promise)
+          const secondPending = submit(secondOperation, 11, secondCredential)
+          rows.set(11, '乙已提交')
+          second.resolve(snapshot()[0])
+          await secondPending
+          expect(store.sources.map(source => source.name).sort()).toEqual(operation === '编辑' ? ['乙已提交', '甲原值'] : ['乙已提交'])
+          // 失败后的刷新也必须读取独立外部变更，不能靠沿用乙提交后的页面通过。
+          rows.set(12, '独立外部事实')
+          if (outcome === '成功') { rows.set(10, '甲已提交'); first.resolve(snapshot()[0]) }
+          else first.reject({ response: { data: { message: '甲最后完成的保存失败' } } })
+          await firstPending
+          const expected = outcome === '成功' ? ['乙已提交', '独立外部事实', '甲已提交'] : operation === '编辑' ? ['乙已提交', '独立外部事实', '甲原值'] : ['乙已提交', '独立外部事实']
+          expect(store.sources.map(source => source.name).sort()).toEqual(expected)
+          expect(store.mutationError).toBe(outcome === '失败' ? '甲最后完成的保存失败' : '')
+          expect(firstCredential).toEqual({}); expect(secondCredential).toEqual({})
+        })
+      }
+    }
+    for (const outcome of ['成功', '失败'] as const) {
+      it(`同项目两个${operation}${outcome}的刷新反序返回不能覆盖最新事实或最后完成的错误`, async () => {
+        const rows = new Map<number, string>(operation === '编辑' ? [[10, '甲原值'], [11, '乙原值']] : [])
+        const snapshot = () => [...rows].sort(([firstId], [secondId]) => firstId - secondId).map(([id, name]) => ({ ...projectResponse('/projects/1/sources', { params: { provider: 'aws' } })[0], id, name }))
+        get.mockImplementation(url => Promise.resolve(url.endsWith('/sources') ? snapshot() : { items: [], total: 0 }))
+        const store = useResourceStore()
+        await store.load(1, 'aws')
+        const first = deferred(); const second = deferred()
+        const credentials = [{ access_key_id: '虚构甲输入', secret_access_key: '虚构甲秘密' }, { access_key_id: '虚构乙输入', secret_access_key: '虚构乙秘密' }]
+        const submit = (index: number) => {
+          const input = { provider: 'aws' as const, name: '提交输入', region: '', config: {}, credential: credentials[index], syncIntervalMinutes: 60 }
+          return (operation === '新建' ? store.create(1, 'aws', input) : store.update(1, 'aws', 10 + index, input)).catch(error => error)
+        }
+        post.mockReturnValue(first.promise); put.mockReturnValue(first.promise)
+        const firstPending = submit(0)
+        post.mockReturnValue(second.promise); put.mockReturnValue(second.promise)
+        const secondPending = submit(1)
+        const reads: { response: ReturnType<typeof deferred>; rows: ReturnType<typeof snapshot> }[] = []
+        get.mockImplementation(url => {
+          if (!url.endsWith('/sources')) return Promise.resolve({ items: [], total: 0 })
+          const response = deferred(); reads.push({ response, rows: snapshot() }); return response.promise
+        })
+        rows.set(11, outcome === '成功' ? '乙已提交' : '乙失败时外部事实')
+        if (outcome === '成功') second.resolve(snapshot().find(source => source.id === 11)); else second.reject({ response: { data: { message: '乙先完成的失败' } } })
+        await vi.waitFor(() => expect(reads[0]).toBeDefined())
+        rows.set(10, outcome === '成功' ? '甲已提交' : '甲失败时最新外部事实')
+        if (outcome === '成功') first.resolve(snapshot()[0]); else first.reject({ response: { data: { message: '甲最后完成的失败' } } })
+        try {
+          await vi.waitFor(() => expect(reads[1]).toBeDefined())
+          reads[1]!.response.resolve(reads[1]!.rows)
+          await firstPending
+          expect(store.sources.map(source => source.name)).toEqual(outcome === '成功' ? ['甲已提交', '乙已提交'] : ['甲失败时最新外部事实', '乙失败时外部事实'])
+          reads[0]!.response.resolve(reads[0]!.rows)
+          await secondPending
+          expect(store.sources.map(source => source.name)).toEqual(outcome === '成功' ? ['甲已提交', '乙已提交'] : ['甲失败时最新外部事实', '乙失败时外部事实'])
+          expect(store.mutationError).toBe(outcome === '失败' ? '甲最后完成的失败' : '')
+          expect(credentials).toEqual([{}, {}])
+        } finally { for (const read of reads) read.response.resolve(read.rows); await Promise.all([firstPending, secondPending]) }
+      })
+    }
     for (const outcome of ['成功', '失败'] as const) {
       for (const syncManagement of [false, true]) {
         it(`${operation}${outcome}在同项目${syncManagement ? '汇总轮询' : '平台刷新'}后仍刷新事实并清理凭证`, async () => {
