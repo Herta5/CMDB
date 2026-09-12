@@ -125,4 +125,40 @@ describe('云资源状态层', () => {
     expect(store.mutationError).toBe('')
     expect(store.verifyingSourceId).toBeNull()
   })
+
+  it('旧项目验证完成时不清理新项目验证的提交状态', async () => {
+    get.mockImplementation((url: string, options?: { params?: { provider?: string } }) => {
+      const projectId = url.split('/')[2]
+      const provider = options?.params?.provider
+      if (url.endsWith('/sources')) return Promise.resolve([{ id: projectId === '1' ? 4 : 8, project_id: Number(projectId), provider, name: projectId === '1' ? '旧项目账号' : '新项目账号', identity_status: 'verified', enabled: true, sync_interval_minutes: 60 }])
+      return Promise.resolve({ items: [{ id: projectId === '1' ? 14 : 18, source_id: projectId === '1' ? 4 : 8, status: 'failed', trigger: 'manual' }], total: 1 })
+    })
+    let rejectOld!: (error: unknown) => void
+    let resolveNew!: (value: unknown) => void
+    post.mockImplementation((url: string) => new Promise((resolve, reject) => {
+      if (url.includes('/sources/4/')) rejectOld = reject
+      else resolveNew = resolve
+    }))
+    const store = useResourceStore()
+    const oldCredential = { access_key_id: 'old-access-key', secret_access_key: 'old-secret' }
+    const newCredential = { access_key_id: 'new-access-key', secret_access_key: 'new-secret' }
+    await store.loadSyncManagement(1)
+
+    const oldVerification = store.verifyIdentity(1, 'aws', 4, oldCredential)
+    await Promise.resolve()
+    await store.loadSyncManagement(2)
+    const newVerification = store.verifyIdentity(2, 'aws', 8, newCredential)
+    await Promise.resolve()
+    rejectOld({ response: { data: { message: '旧项目身份验证失败' } } })
+    await expect(oldVerification).rejects.toBeTruthy()
+
+    expect(store.verifyingSourceId).toBe(8)
+    expect(store.sources.map(source => source.projectId)).toEqual([2, 2])
+    expect(store.mutationError).toBe('')
+    expect(oldCredential).toEqual({})
+    resolveNew({ id: 8, project_id: 2, provider: 'aws', identity_status: 'verified', name: '新项目账号', enabled: true, sync_interval_minutes: 60 })
+    await newVerification
+    expect(store.verifyingSourceId).toBeNull()
+    expect(newCredential).toEqual({})
+  })
 })

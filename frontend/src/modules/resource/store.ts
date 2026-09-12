@@ -18,6 +18,7 @@ export const useResourceStore = defineStore('cmdb-resource', () => {
   const testingSourceId = ref<number | null>(null); const retryingJobId = ref<number | null>(null); const verifyingSourceId = ref<number | null>(null); const connectionMessage = ref(''); const connectionError = ref('')
   const resourceType = ref(''); const assetStatus = ref(''); const page = ref(1); const pageSize = ref(20); const total = ref(0)
   let requestVersion = 0
+  let verificationToken = 0
   let activeProjectId: number | null = null
 
   /** 新项目请求立即作废旧数据与提交状态，晚到响应只能在同一版本内写回。 */
@@ -27,6 +28,8 @@ export const useResourceStore = defineStore('cmdb-resource', () => {
     const version = ++requestVersion
     state.value = 'loading'; mutationError.value = ''
     if (projectChanged) {
+      // 新项目不会继承旧项目的身份验证按钮状态，旧请求只能自行清理凭证。
+      ++verificationToken
       sources.value = []; resources.value = []; jobs.value = []; total.value = 0
       connectionMessage.value = ''; connectionError.value = ''
       syncingSourceId.value = null; testingSourceId.value = null; retryingJobId.value = null; verifyingSourceId.value = null
@@ -97,6 +100,7 @@ export const useResourceStore = defineStore('cmdb-resource', () => {
   /** 待验证来源仅可确认身份；无新凭证时服务端使用已安全保存的凭证。 */
   async function verifyIdentity(projectId: number, provider: Provider, sourceId: number, credential?: Record<string, unknown>, syncManagement = false) {
     verifyingSourceId.value = sourceId; mutationError.value = ''
+    const currentVerificationToken = ++verificationToken
     const verificationVersion = requestVersion
     let finalVersion = verificationVersion
     let verificationError: unknown
@@ -106,7 +110,8 @@ export const useResourceStore = defineStore('cmdb-resource', () => {
     finally {
       clearCredential(credentialInput)
       credentialInput = undefined
-      verifyingSourceId.value = null
+      // 新项目或另一来源验证已接管提交状态时，旧请求不得解除其按钮锁定。
+      if (currentVerificationToken === verificationToken) verifyingSourceId.value = null
       // 只允许当前项目上下文刷新服务端事实，项目切换后的旧请求不得覆盖新列表。
       if (verificationVersion === requestVersion) {
         try { await reload(projectId, provider, syncManagement) } catch (error) { if (!verificationError) throw error }
