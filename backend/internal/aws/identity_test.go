@@ -5,10 +5,14 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
+	"net/http"
+	"strings"
 	"testing"
 
 	"cmdb/internal/resource"
 	awssdk "github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/sts"
 	"github.com/aws/smithy-go"
 )
@@ -23,6 +27,17 @@ type stsIdentityStub struct {
 func (s *stsIdentityStub) GetCallerIdentity(_ context.Context, _ *sts.GetCallerIdentityInput, _ ...func(*sts.Options)) (*sts.GetCallerIdentityOutput, error) {
 	s.calls++
 	return s.response, s.err
+}
+
+// stsHTTPSClientStub 在进程内接收 AWS SDK 请求，避免协议测试访问真实云端。
+type stsHTTPSClientStub struct {
+	scheme string
+}
+
+func (s *stsHTTPSClientStub) Do(request *http.Request) (*http.Response, error) {
+	s.scheme = request.URL.Scheme
+	body := `<GetCallerIdentityResponse xmlns="https://sts.amazonaws.com/doc/2011-06-15/"><GetCallerIdentityResult><Account>100000000001</Account><Arn>arn:aws:iam::100000000001:user/test</Arn><UserId>test</UserId></GetCallerIdentityResult><ResponseMetadata><RequestId>test-request</RequestId></ResponseMetadata></GetCallerIdentityResponse>`
+	return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(body)), Request: request}, nil
 }
 
 // TestAWSCredentialValidationAllowsOptionalSessionToken 防止缺字段、未知字段或空凭证绕过加密前校验。
@@ -112,6 +127,23 @@ func TestAWSResourceTypesKeepsInitialScope(t *testing.T) {
 	values := NewCollector().ResourceTypes()
 	if len(values) != 3 || values[0] != "ec2" || values[1] != "rds" || values[2] != "elb" {
 		t.Fatal("AWS 首期资源类型必须固定为 ec2、rds、elb")
+	}
+}
+
+// TestAWSSTSClientUsesHTTPS 固化 AWS SDK v2 的加密传输边界，避免身份请求降级为 HTTP。
+func TestAWSSTSClientUsesHTTPS(t *testing.T) {
+	httpClient := &stsHTTPSClientStub{}
+	configuration := awssdk.Config{
+		Region:      "us-east-1",
+		Credentials: awssdk.NewCredentialsCache(credentials.NewStaticCredentialsProvider("stub-access-key", "stub-secret-key", "")),
+		HTTPClient:  httpClient,
+	}
+
+	if _, err := newAWSSTSClient(configuration).GetCallerIdentity(context.Background(), &sts.GetCallerIdentityInput{}); err != nil {
+		t.Fatalf("AWS HTTPS 身份请求应成功解析模拟响应：%v", err)
+	}
+	if httpClient.scheme != "https" {
+		t.Fatalf("AWS STS 身份请求必须使用 HTTPS：got=%q", httpClient.scheme)
 	}
 }
 
