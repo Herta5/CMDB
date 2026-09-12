@@ -554,17 +554,26 @@ func (s *Service) executeSync(ctx context.Context, sourceID uint64, trigger stri
 	for index := range credential {
 		credential[index] = 0
 	}
-	if collectErr != nil {
-		summary := "接入源认证或采集失败"
-		if errors.Is(collectErr, ErrAuthenticationFailed) {
-			summary = "AccessKey 无效或签名校验失败"
-		} else if errors.Is(collectErr, ErrPermissionDenied) {
-			summary = "云账号权限不足，请授予资源只读权限"
-		}
-		return s.finishFailed(ctx, job, summary, collectErr)
+	var expectedTypes []string
+	if adapter := s.adapters[source.Provider]; adapter != nil {
+		expectedTypes = adapter.ResourceTypes()
 	}
-	statistics := map[string]map[string]int{}
-	failed := 0
+	decision := DecideSyncResult(expectedTypes, results, collectErr)
+	if decision.Status == "failed" {
+		var statistics json.RawMessage
+		if len(decision.Statistics) > 0 {
+			statistics, _ = json.Marshal(decision.Statistics)
+		}
+		if err := s.convergeFailedJob(ctx, job, source, decision.ErrorSummary, statistics); err != nil {
+			return job, err
+		}
+		// 保留整体故障向内部调用方报告错误的语义，返回值也必须去掉云端原文。
+		if collectErr != nil && !errors.Is(collectErr, ErrAuthenticationFailed) && !errors.Is(collectErr, ErrPermissionDenied) {
+			return job, errors.New(decision.ErrorSummary)
+		}
+		return job, nil
+	}
+	statistics := decision.Statistics
 	// 所有成功类型的资源变化、删除、任务统计和调度时间使用同一事务，后续类型失败时不会留下无统计归属的部分写入。
 	applyErr := s.repository.Transaction(ctx, func(tx *gorm.DB) error {
 		// 资产新增与父删除共用项目→来源锁顺序；既有任务不因父对象随后停用而取消。
@@ -575,27 +584,20 @@ func (s *Service) executeSync(ctx context.Context, sourceID uint64, trigger stri
 		if err := s.requireVerified(current); err != nil {
 			return err
 		}
-		for _, result := range results {
-			if result.Err != nil {
-				failed++
-				statistics[result.ResourceType] = map[string]int{"added": 0, "updated": 0, "restored": 0, "lost": 0, "deleted": 0, "failed": 1}
-				continue
-			}
+		for _, result := range decision.Successful {
 			counts, typeErr := s.applyType(ctx, tx, *source, result.ResourceType, result.Snapshots, now)
 			if typeErr != nil {
 				return typeErr
 			}
 			statistics[result.ResourceType] = counts
 		}
-		job.Status = "success"
-		if failed > 0 {
-			job.Status = "partial_success"
-		}
+		job.Status = decision.Status
+		job.ErrorSummary = decision.ErrorSummary
 		job.Statistics, _ = json.Marshal(statistics)
 		finished := s.now()
 		job.FinishedAt = &finished
 		source.LastSyncAt = &finished
-		next := finished.Add(time.Duration(source.SyncIntervalMinutes) * time.Minute)
+		next := finished.Add(time.Duration(current.SyncIntervalMinutes) * time.Minute)
 		source.NextSyncAt = &next
 		if err := tx.Save(job).Error; err != nil {
 			return err
@@ -604,7 +606,7 @@ func (s *Service) executeSync(ctx context.Context, sourceID uint64, trigger stri
 			return err
 		}
 		projectID := source.ProjectID
-		return audit.RecordInTransaction(ctx, tx, audit.Entry{ProjectID: &projectID, Action: audit.ActionSourceSynced, ResourceType: "resource_source", ResourceID: strconv.FormatUint(source.ID, 10), Detail: map[string]any{"trigger": trigger, "status": job.Status, "statistics": statistics}})
+		return audit.RecordInTransaction(ctx, tx, audit.Entry{ProjectID: &projectID, Action: audit.ActionSourceSynced, ResourceType: "resource_source", ResourceID: strconv.FormatUint(source.ID, 10), Detail: map[string]any{"trigger": trigger, "status": job.Status, "statistics": statistics, "error_summary": job.ErrorSummary}})
 	})
 	if applyErr != nil {
 		// 外层事务已经回滚全部资源变化，失败任务不得保留尚未生效的统计。
@@ -616,23 +618,45 @@ func (s *Service) executeSync(ctx context.Context, sourceID uint64, trigger stri
 
 // finishFailed 只记录脱敏摘要，不把底层错误或凭证内容写入任务。
 func (s *Service) finishFailed(ctx context.Context, job *SyncJob, summary string, cause error) (*SyncJob, error) {
-	job.Status = "failed"
-	job.ErrorSummary = summary
-	finished := s.now()
-	job.FinishedAt = &finished
-	projectID := job.ProjectID
-	if err := s.withAuditTransaction(ctx, func(repository *Repository, recorder audit.Recorder) error {
-		if err := repository.SaveJob(ctx, job); err != nil {
-			return err
-		}
-		return recordAuditWith(ctx, recorder, audit.Entry{ProjectID: &projectID, Action: audit.ActionSourceSynced, ResourceType: "resource_source", ResourceID: strconv.FormatUint(job.SourceID, 10), Detail: map[string]any{"trigger": job.Trigger, "status": job.Status, "error_summary": summary}})
-	}); err != nil {
+	source, err := s.repository.FindSource(ctx, job.SourceID)
+	if err != nil {
 		return job, err
 	}
-	if errors.Is(cause, ErrAuthenticationFailed) || errors.Is(cause, ErrPermissionDenied) {
+	if err := s.convergeFailedJob(ctx, job, source, summary, nil); err != nil {
+		return job, err
+	}
+	if cause == nil || errors.Is(cause, ErrAuthenticationFailed) || errors.Is(cause, ErrPermissionDenied) {
 		return job, nil
 	}
-	return job, cause
+	return job, errors.New(summary)
+}
+
+// convergeFailedJob 将失败终态、允许保留的统计、自动计划和失败审计原子提交；失败不具备最近成功语义。
+func (s *Service) convergeFailedJob(ctx context.Context, job *SyncJob, source *Source, summary string, statistics json.RawMessage) error {
+	finished := s.now()
+	failed := *job
+	failed.Status, failed.ErrorSummary, failed.Statistics, failed.FinishedAt = "failed", summary, statistics, &finished
+	err := s.withAuditTransaction(ctx, func(repository *Repository, recorder audit.Recorder) error {
+		// 与资源提交及父删除保持项目→来源锁顺序，同时读取最新配置周期。
+		current, err := NewDeletionGuard(repository.db).LockSourceForOperation(ctx, source.ProjectID, source.ID)
+		if err != nil {
+			return err
+		}
+		if err := repository.SaveJob(ctx, &failed); err != nil {
+			return err
+		}
+		if failed.Trigger == "scheduled" && failed.PreviousJobID == nil {
+			next := finished.Add(time.Duration(current.SyncIntervalMinutes) * time.Minute)
+			if err := repository.UpdateNextSyncAt(ctx, current.ID, next); err != nil {
+				return err
+			}
+		}
+		return recordAuditWith(ctx, recorder, audit.Entry{ProjectID: &failed.ProjectID, Action: audit.ActionSourceSynced, ResourceType: "resource_source", ResourceID: strconv.FormatUint(failed.SourceID, 10), Detail: map[string]any{"trigger": failed.Trigger, "status": failed.Status, "statistics": statistics, "error_summary": summary}})
+	})
+	if err == nil {
+		*job = failed
+	}
+	return err
 }
 
 // applyType 在任务事务内写入一个成功资源类型，并只对该类型执行失联和删除判断。

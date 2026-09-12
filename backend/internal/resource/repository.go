@@ -207,6 +207,11 @@ func (r *Repository) SaveJob(ctx context.Context, job *SyncJob) error {
 	return r.db.WithContext(ctx).Save(job).Error
 }
 
+// UpdateNextSyncAt 只推进自动计划，失败收敛不得同时刷新最近成功同步时间。
+func (r *Repository) UpdateNextSyncAt(ctx context.Context, sourceID uint64, next time.Time) error {
+	return r.db.WithContext(ctx).Model(&Source{}).Where("id = ?", sourceID).Update("next_sync_at", next).Error
+}
+
 // FindJob 读取单个同步任务，服务层继续校验项目归属和可重试状态。
 func (r *Repository) FindJob(ctx context.Context, id uint64) (*SyncJob, error) {
 	var job SyncJob

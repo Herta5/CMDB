@@ -745,6 +745,64 @@ func assertIdentityVerificationError(t *testing.T, body, wantCode string) {
 	assertIdentityVerificationResponseSafe(t, body)
 }
 
+// TestSyncFailureHTTPContract 验证异步同步和任务查询公开真实终态，失败不更新资产和自动计划。
+func TestSyncFailureHTTPContract(t *testing.T) {
+	for _, scenario := range []struct{ name, status string }{
+		{"集成全部失败", "failed"}, {"集成空结果", "failed"}, {"集成缺少类型", "failed"}, {"集成重复类型", "failed"}, {"集成部分成功", "partial_success"},
+	} {
+		t.Run(scenario.name, func(t *testing.T) {
+			server, password, db := integrationServerWithDatabase(t)
+			admin := loginUser(t, server, "operator", password)
+			var parent project.Project
+			decodeIntegration(t, integrationRequest(t, server, admin, http.MethodPost, "/api/v1/projects", map[string]any{"code": "同步终态", "name": "同步验收项目"}, http.StatusCreated), &parent)
+			path := fmt.Sprintf("/api/v1/projects/%d", parent.ID)
+			var source cloudresource.Source
+			decodeIntegration(t, integrationRequest(t, server, admin, http.MethodPost, path+"/sources", map[string]any{"provider": "aws", "name": scenario.name, "region": "cn-north-1", "credential": map[string]any{"access_key_id": "example-id", "secret_access_key": "example-secret"}}, http.StatusCreated), &source)
+			last, next := time.Now().UTC().Add(-2*time.Hour), time.Now().UTC().Add(time.Hour)
+			if err := db.Model(&source).Updates(map[string]any{"last_sync_at": last, "next_sync_at": next}).Error; err != nil {
+				t.Fatal("准备自动计划失败")
+			}
+			var queued cloudresource.SyncJob
+			decodeIntegration(t, integrationRequest(t, server, admin, http.MethodPost, fmt.Sprintf("%s/sources/%d/sync", path, source.ID), nil, http.StatusAccepted), &queued)
+			if queued.Status != "queued" {
+				t.Fatal("手工同步必须先返回排队任务")
+			}
+			var completed cloudresource.SyncJob
+			for deadline := time.Now().Add(2 * time.Second); time.Now().Before(deadline); {
+				if err := db.First(&completed, queued.ID).Error; err != nil {
+					t.Fatal("读取异步任务失败")
+				}
+				if completed.Status != "queued" && completed.Status != "running" {
+					break
+				}
+				time.Sleep(time.Millisecond)
+			}
+			if completed.Status != scenario.status || completed.FinishedAt == nil {
+				t.Fatalf("异步任务终态错误：%s", completed.Status)
+			}
+			response := integrationRequest(t, server, admin, http.MethodGet, path+"/sync-jobs", nil, http.StatusOK)
+			if !strings.Contains(response.Body.String(), `"status":"`+scenario.status+`"`) || strings.Contains(response.Body.String(), "虚构原始") || strings.Contains(response.Body.String(), "example-secret") {
+				t.Fatal("任务查询必须返回安全且准确的同步终态")
+			}
+			var current cloudresource.Source
+			if err := db.First(&current, source.ID).Error; err != nil {
+				t.Fatal("读取同步后计划失败")
+			}
+			var assets int64
+			if err := db.Model(&cloudresource.Server{}).Count(&assets).Error; err != nil {
+				t.Fatal("查询同步资产失败")
+			}
+			if scenario.status == "failed" {
+				if assets != 0 || current.LastSyncAt == nil || !current.LastSyncAt.Equal(last) || current.NextSyncAt == nil || !current.NextSyncAt.Equal(next) {
+					t.Fatal("手工失败不得写入资产、最近同步时间或自动计划")
+				}
+			} else if assets != 1 || current.LastSyncAt == nil || !current.LastSyncAt.Equal(*completed.FinishedAt) || current.NextSyncAt == nil || !current.NextSyncAt.Equal(completed.FinishedAt.Add(time.Hour)) {
+				t.Fatal("部分成功必须一并提交成功类型资产、终态和调度时间")
+			}
+		})
+	}
+}
+
 // integrationCollector 保留真实 AWS 输入校验，只替换会访问云端的适配器边界。
 type integrationCollector struct{ *awscollector.Collector }
 
@@ -768,8 +826,20 @@ func (integrationCollector) ResolveCloudAccountID(_ context.Context, _ cloudreso
 	}
 }
 
-func (integrationCollector) Collect(context.Context, cloudresource.Source, []byte) ([]cloudresource.CollectionResult, error) {
-	return []cloudresource.CollectionResult{{ResourceType: "ec2", Snapshots: []cloudresource.Snapshot{{ResourceType: "ec2", ExternalID: "i-integration", Name: "集成计算节点", CloudStatus: "running", Endpoints: []cloudresource.EndpointSnapshot{{Kind: "private", Address: "10.0.0.8"}}}}}}, nil
+func (integrationCollector) Collect(_ context.Context, source cloudresource.Source, _ []byte) ([]cloudresource.CollectionResult, error) {
+	switch source.Name {
+	case "集成全部失败":
+		return []cloudresource.CollectionResult{{ResourceType: "ec2", Err: fmt.Errorf("虚构原始认证响应：%w", cloudresource.ErrCloudAuthentication)}, {ResourceType: "rds", Err: cloudresource.ErrCloudNetwork}, {ResourceType: "elb", Err: cloudresource.ErrCloudPermission}}, nil
+	case "集成空结果":
+		return nil, nil
+	case "集成缺少类型":
+		return []cloudresource.CollectionResult{{ResourceType: "ec2"}}, nil
+	case "集成重复类型":
+		return []cloudresource.CollectionResult{{ResourceType: "ec2"}, {ResourceType: "ec2"}, {ResourceType: "elb"}}, nil
+	case "集成部分成功":
+		return []cloudresource.CollectionResult{{ResourceType: "ec2", Snapshots: []cloudresource.Snapshot{{ExternalID: "i-partial", Name: "成功类型实例"}}}, {ResourceType: "rds", Err: cloudresource.ErrCloudNetwork}, {ResourceType: "elb", Err: cloudresource.ErrCloudPermission}}, nil
+	}
+	return []cloudresource.CollectionResult{{ResourceType: "ec2", Snapshots: []cloudresource.Snapshot{{ResourceType: "ec2", ExternalID: "i-integration", Name: "集成计算节点", CloudStatus: "running", Endpoints: []cloudresource.EndpointSnapshot{{Kind: "private", Address: "10.0.0.8"}}}}}, {ResourceType: "rds"}, {ResourceType: "elb"}}, nil
 }
 
 // Probe 为集成测试提供不含快照的轻量连接结果，避免连接测试与同步行为混淆。
