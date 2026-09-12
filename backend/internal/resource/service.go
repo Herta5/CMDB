@@ -2,6 +2,7 @@
 package resource
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -17,6 +18,7 @@ import (
 type Service struct {
 	repository    *Repository
 	cipher        *CredentialCipher
+	adapters      map[string]ProviderAdapter
 	now           func() time.Time
 	sourceLocks   sync.Map
 	auditRecorder audit.Recorder
@@ -24,6 +26,15 @@ type Service struct {
 
 // ErrSyncAlreadyRunning 表示同一接入源已有同步任务正在执行。
 var ErrSyncAlreadyRunning = errors.New("接入源同步任务正在执行")
+
+var (
+	// ErrCloudAccountConflict 表示同平台云账号已由一个接入源占用，不披露其归属。
+	ErrCloudAccountConflict = errors.New("该云账号已接入 CMDB")
+	// ErrSourceIdentityPending 阻止未确认归属的历史来源执行普通写入或采集。
+	ErrSourceIdentityPending = errors.New("接入源身份待验证，请先验证云账号身份")
+	// ErrSourceIdentityMismatch 防止通过替换凭证将接入源指向另一个云账号。
+	ErrSourceIdentityMismatch = errors.New("新凭证所属云账号与原接入源不一致")
+)
 
 // CreateSourceInput 是创建接入源允许写入的项目边界和平台配置。
 type CreateSourceInput struct {
@@ -53,8 +64,8 @@ type ConnectionTestResult struct {
 }
 
 // NewService 创建资源服务，调用方必须提供部署密钥派生的凭证加密器。
-func NewService(repository *Repository, cipher *CredentialCipher, recorders ...audit.Recorder) *Service {
-	service := &Service{repository: repository, cipher: cipher, now: time.Now}
+func NewService(repository *Repository, cipher *CredentialCipher, adapters map[string]ProviderAdapter, recorders ...audit.Recorder) *Service {
+	service := &Service{repository: repository, cipher: cipher, adapters: adapters, now: time.Now}
 	if len(recorders) > 0 {
 		service.auditRecorder = recorders[0]
 	}
@@ -76,19 +87,23 @@ func (s *Service) CreateSource(ctx context.Context, input CreateSourceInput) (*S
 	if interval < 5 || interval > 10080 {
 		return nil, errors.New("同步周期无效")
 	}
-	encrypted, err := s.cipher.Encrypt(input.Credential)
-	if err != nil {
-		return nil, err
-	}
 	config := input.Config
 	if len(config) == 0 {
 		config = json.RawMessage(`{}`)
 	}
-	if !json.Valid(config) {
-		return nil, errors.New("接入源配置无效")
+	source := &Source{ProjectID: input.ProjectID, Provider: input.Provider, Name: input.Name, Region: input.Region, CredentialHint: "已安全配置", Config: config, Enabled: true, SyncIntervalMinutes: interval}
+	accountID, err := s.resolveSourceIdentity(ctx, source, input.Credential)
+	if err != nil {
+		return nil, err
 	}
-	next := s.now().Add(time.Duration(interval) * time.Minute)
-	source := &Source{ProjectID: input.ProjectID, Provider: input.Provider, Name: input.Name, Region: input.Region, EncryptedCredential: encrypted, CredentialHint: "已安全配置", Config: config, Enabled: true, SyncIntervalMinutes: interval, NextSyncAt: &next}
+	encrypted, err := s.cipher.Encrypt(input.Credential)
+	if err != nil {
+		return nil, err
+	}
+	verifiedAt := s.now()
+	next := verifiedAt.Add(time.Duration(interval) * time.Minute)
+	source.EncryptedCredential, source.CloudAccountID, source.IdentityStatus = encrypted, accountID, IdentityStatusVerified
+	source.IdentityVerifiedAt, source.NextSyncAt = &verifiedAt, &next
 	projectID := source.ProjectID
 	if err := s.withAuditTransaction(ctx, func(repository *Repository, recorder audit.Recorder) error {
 		if err := repository.CreateSource(ctx, source); err != nil {
@@ -107,6 +122,9 @@ func (s *Service) UpdateSource(ctx context.Context, projectID, sourceID uint64, 
 	if err != nil {
 		return nil, err
 	}
+	if err := s.requireVerified(source); err != nil {
+		return nil, err
+	}
 	if input.Name == "" || input.SyncIntervalMinutes < 5 || input.SyncIntervalMinutes > 10080 {
 		return nil, errors.New("接入源参数无效")
 	}
@@ -114,25 +132,166 @@ func (s *Service) UpdateSource(ctx context.Context, projectID, sourceID uint64, 
 	if len(config) == 0 {
 		config = json.RawMessage(`{}`)
 	}
-	if !json.Valid(config) || (len(input.Credential) > 0 && !json.Valid(input.Credential)) {
-		return nil, errors.New("接入源参数无效")
+	adapter := s.adapters[source.Provider]
+	if adapter == nil {
+		return nil, errors.New("平台适配器不可用")
+	}
+	if err := adapter.ValidateConfig(config); err != nil {
+		return nil, ErrInvalidProviderConfig
 	}
 	updates := map[string]any{"name": input.Name, "region": input.Region, "config": config, "enabled": input.Enabled, "sync_interval_minutes": input.SyncIntervalMinutes}
-	if len(input.Credential) > 0 {
+	credentialReplaced := hasCredential(input.Credential)
+	if credentialReplaced {
+		candidate := *source
+		candidate.Region, candidate.Config = input.Region, config
+		accountID, identityErr := s.resolveSourceIdentity(ctx, &candidate, input.Credential)
+		if identityErr != nil {
+			return nil, identityErr
+		}
+		if accountID != source.CloudAccountID {
+			return nil, ErrSourceIdentityMismatch
+		}
 		encrypted, encryptErr := s.cipher.Encrypt(input.Credential)
 		if encryptErr != nil {
 			return nil, encryptErr
 		}
 		updates["encrypted_credential"] = encrypted
 		updates["credential_hint"] = "已安全配置"
+		updates["identity_verified_at"] = s.now()
 	}
 	projectIDCopy := projectID
 	if err := s.withAuditTransaction(ctx, func(repository *Repository, recorder audit.Recorder) error {
-		if err := repository.UpdateSource(ctx, source, updates); err != nil {
+		current, err := repository.lockSourceForProject(ctx, projectID, sourceID)
+		if err != nil {
 			return err
 		}
-		return recordAuditWith(ctx, recorder, audit.Entry{ProjectID: &projectIDCopy, Action: audit.ActionSourceUpdated, ResourceType: "resource_source", ResourceID: strconv.FormatUint(sourceID, 10), Detail: map[string]any{"provider": source.Provider, "name": input.Name, "credential_replaced": len(input.Credential) > 0}})
+		if err := s.requireVerified(current); err != nil {
+			return err
+		}
+		if current.CloudAccountID != source.CloudAccountID {
+			return ErrSourceIdentityMismatch
+		}
+		if err := repository.UpdateSource(ctx, current, updates); err != nil {
+			return err
+		}
+		return recordAuditWith(ctx, recorder, audit.Entry{ProjectID: &projectIDCopy, Action: audit.ActionSourceUpdated, ResourceType: "resource_source", ResourceID: strconv.FormatUint(sourceID, 10), Detail: map[string]any{"provider": source.Provider, "name": input.Name, "credential_replaced": credentialReplaced}})
 	}); err != nil {
+		return nil, err
+	}
+	return s.repository.FindSource(ctx, sourceID)
+}
+
+// requireVerified 是普通变更和所有任务入口共享的身份门禁，管理员身份也不构成例外。
+func (s *Service) requireVerified(source *Source) error {
+	if source.IdentityStatus != IdentityStatusVerified || source.CloudAccountID == "" {
+		return ErrSourceIdentityPending
+	}
+	return nil
+}
+
+// hasCredential 将缺失、null 和空字符串视为未提交；空对象仍须通过平台完整凭证校验。
+func hasCredential(raw json.RawMessage) bool {
+	value := bytes.TrimSpace(raw)
+	return len(value) > 0 && !bytes.Equal(value, []byte("null")) && !bytes.Equal(value, []byte(`""`))
+}
+
+// resolveSourceIdentity 先严格检查平台输入再联网识别，所有上游错误必须收敛为有限领域错误。
+func (s *Service) resolveSourceIdentity(ctx context.Context, source *Source, credential json.RawMessage) (string, error) {
+	adapter := s.adapters[source.Provider]
+	if adapter == nil {
+		return "", errors.New("平台适配器不可用")
+	}
+	if err := adapter.ValidateCredential(credential); err != nil {
+		return "", ErrInvalidProviderCredential
+	}
+	if err := adapter.ValidateConfig(source.Config); err != nil {
+		return "", ErrInvalidProviderConfig
+	}
+	// 云调用使用独立的最短期缓冲，防止平台实现持有调用方原始输入。
+	plain := append([]byte(nil), credential...)
+	defer func() {
+		for i := range plain {
+			plain[i] = 0
+		}
+	}()
+	accountID, err := adapter.ResolveCloudAccountID(ctx, *source, plain)
+	if err != nil {
+		for _, safe := range []error{ErrInvalidProviderCredential, ErrInvalidProviderConfig, ErrCloudAuthentication, ErrCloudPermission, ErrCloudNetwork} {
+			if errors.Is(err, safe) {
+				return "", safe
+			}
+		}
+		return "", ErrCloudNetwork
+	}
+	if accountID == "" {
+		return "", ErrCloudAuthentication
+	}
+	return accountID, nil
+}
+
+// VerifySourceIdentity 是历史来源唯一的写入入口，确认身份、可选新密文与审计必须原子提交。
+func (s *Service) VerifySourceIdentity(ctx context.Context, projectID, sourceID uint64, credential json.RawMessage) (*Source, error) {
+	source, err := s.FindSourceForProject(ctx, projectID, sourceID)
+	if err != nil {
+		return nil, err
+	}
+	enabled, err := s.repository.ProjectIsEnabled(ctx, projectID)
+	if err != nil {
+		return nil, err
+	}
+	if !enabled {
+		return nil, errors.New("项目已停用，不能验证接入源身份")
+	}
+	replace := hasCredential(credential)
+	plain := append([]byte(nil), credential...)
+	if !replace {
+		plain, err = s.cipher.Decrypt(source.EncryptedCredential)
+		if err != nil {
+			return nil, err
+		}
+	}
+	defer func() {
+		for i := range plain {
+			plain[i] = 0
+		}
+	}()
+	accountID, err := s.resolveSourceIdentity(ctx, source, plain)
+	if err != nil {
+		return nil, err
+	}
+	if source.IdentityStatus == IdentityStatusVerified && source.CloudAccountID != accountID {
+		return nil, ErrSourceIdentityMismatch
+	}
+	updates := map[string]any{"cloud_account_id": accountID, "identity_status": IdentityStatusVerified, "identity_verified_at": s.now()}
+	if replace {
+		encrypted, err := s.cipher.Encrypt(plain)
+		if err != nil {
+			return nil, err
+		}
+		updates["encrypted_credential"], updates["credential_hint"] = encrypted, "已安全配置"
+	}
+	err = s.withAuditTransaction(ctx, func(repository *Repository, recorder audit.Recorder) error {
+		// 项目锁先于来源锁，与项目停用事务保持清晰的锁顺序。
+		enabled, err := repository.ProjectIsEnabled(ctx, projectID)
+		if err != nil {
+			return err
+		}
+		if !enabled {
+			return errors.New("项目已停用，不能验证接入源身份")
+		}
+		current, err := repository.lockSourceForProject(ctx, projectID, sourceID)
+		if err != nil {
+			return err
+		}
+		if current.IdentityStatus == IdentityStatusVerified && current.CloudAccountID != accountID {
+			return ErrSourceIdentityMismatch
+		}
+		if err := repository.UpdateSource(ctx, current, updates); err != nil {
+			return err
+		}
+		return recordAuditWith(ctx, recorder, audit.Entry{ProjectID: &projectID, Action: audit.ActionSourceUpdated, ResourceType: "resource_source", ResourceID: strconv.FormatUint(sourceID, 10), Detail: map[string]any{"provider": current.Provider, "name": current.Name, "identity_verified": true, "credential_replaced": replace}})
+	})
+	if err != nil {
 		return nil, err
 	}
 	return s.repository.FindSource(ctx, sourceID)
@@ -142,6 +301,9 @@ func (s *Service) UpdateSource(ctx context.Context, projectID, sourceID uint64, 
 func (s *Service) DeleteSource(ctx context.Context, projectID, sourceID uint64) error {
 	source, err := s.FindSourceForProject(ctx, projectID, sourceID)
 	if err != nil {
+		return err
+	}
+	if err := s.requireVerified(source); err != nil {
 		return err
 	}
 	projectIDCopy := projectID
@@ -236,6 +398,10 @@ func (s *Service) enqueueSync(ctx context.Context, sourceID uint64, trigger stri
 		lock.Unlock()
 		return nil, err
 	}
+	if err := s.requireVerified(source); err != nil {
+		lock.Unlock()
+		return nil, err
+	}
 	job := &SyncJob{ProjectID: source.ProjectID, SourceID: source.ID, PreviousJobID: previousJobID, Status: "queued", Trigger: trigger, StartedAt: s.now(), ErrorSummary: ""}
 	if err := s.repository.CreateJob(ctx, job); err != nil {
 		lock.Unlock()
@@ -253,19 +419,22 @@ func (s *Service) enqueueSync(ctx context.Context, sourceID uint64, trigger stri
 }
 
 // RetryJob 仅为当前项目的失败或部分成功任务创建新任务，历史记录保持不变。
-func (s *Service) RetryJob(ctx context.Context, projectID, jobID uint64, collectors map[string]Collector) (*SyncJob, error) {
+func (s *Service) RetryJob(ctx context.Context, projectID, jobID uint64) (*SyncJob, error) {
 	job, err := s.repository.FindJob(ctx, jobID)
 	if err != nil || job.ProjectID != projectID {
 		return nil, gorm.ErrRecordNotFound
-	}
-	if job.Status != "failed" && job.Status != "partial_success" {
-		return nil, errors.New("同步任务当前不可重试")
 	}
 	source, err := s.FindSourceForProject(ctx, projectID, job.SourceID)
 	if err != nil {
 		return nil, err
 	}
-	collector := collectors[source.Provider]
+	if err := s.requireVerified(source); err != nil {
+		return nil, err
+	}
+	if job.Status != "failed" && job.Status != "partial_success" {
+		return nil, errors.New("同步任务当前不可重试")
+	}
+	collector := s.adapters[source.Provider]
 	if collector == nil {
 		return nil, errors.New("平台采集器不可用")
 	}
@@ -276,6 +445,9 @@ func (s *Service) RetryJob(ctx context.Context, projectID, jobID uint64, collect
 func (s *Service) TestConnection(ctx context.Context, projectID, sourceID uint64, collector Collector) (*ConnectionTestResult, error) {
 	source, err := s.FindSourceForProject(ctx, projectID, sourceID)
 	if err != nil {
+		return nil, err
+	}
+	if err := s.requireVerified(source); err != nil {
 		return nil, err
 	}
 	credential, err := s.cipher.Decrypt(source.EncryptedCredential)
@@ -334,6 +506,13 @@ func (s *Service) executeSync(ctx context.Context, sourceID uint64, trigger stri
 
 	source, err := s.repository.FindSource(ctx, sourceID)
 	if err != nil {
+		return nil, err
+	}
+	if err := s.requireVerified(source); err != nil {
+		if existingJob != nil {
+			existingJob.Statistics = nil
+			return s.finishFailed(ctx, existingJob, ErrSourceIdentityPending.Error(), err)
+		}
 		return nil, err
 	}
 	now := s.now()
@@ -552,10 +731,10 @@ func (s *Service) applyType(ctx context.Context, tx *gorm.DB, source Source, res
 	return counts, nil
 }
 
-// withAuditTransaction 在启用审计时把接入源变更和审计绑定到同一数据库事务。
+// withAuditTransaction 始终提供真实事务；启用审计时将业务变更和审计绑定提交。
 func (s *Service) withAuditTransaction(ctx context.Context, operation func(*Repository, audit.Recorder) error) error {
 	if s.auditRecorder == nil {
-		return operation(s.repository, nil)
+		return s.repository.Transaction(ctx, func(tx *gorm.DB) error { return operation(NewRepository(tx), nil) })
 	}
 	return s.repository.WithAuditTransaction(ctx, operation)
 }
@@ -577,7 +756,7 @@ func (s *Service) recordAudit(ctx context.Context, entry audit.Entry) error {
 }
 
 // SyncDueSources 并行执行所有已到期接入源；同源互斥仍由 Sync 统一保证。
-func (s *Service) SyncDueSources(ctx context.Context, collectors map[string]Collector) {
+func (s *Service) SyncDueSources(ctx context.Context) {
 	sources, err := s.repository.ListDueSources(ctx, s.now())
 	if err != nil {
 		return
@@ -585,7 +764,7 @@ func (s *Service) SyncDueSources(ctx context.Context, collectors map[string]Coll
 	var group sync.WaitGroup
 	for index := range sources {
 		source := sources[index]
-		collector := collectors[source.Provider]
+		collector := s.adapters[source.Provider]
 		if collector == nil {
 			continue
 		}
@@ -599,14 +778,18 @@ func (s *Service) SyncDueSources(ctx context.Context, collectors map[string]Coll
 }
 
 // StartScheduler 启动资源后台调度，并在服务上下文结束时自动退出。
-func (s *Service) StartScheduler(ctx context.Context, collectors map[string]Collector) {
+func (s *Service) StartScheduler(ctx context.Context) {
 	// 启动恢复先结束异常中断任务，再继续执行已持久化但尚未开始的排队任务。
+	// 历史待验证来源不进入采集，也不保留旧统计；失败与审计沿用任务终态事务。
+	if err := s.failPendingSourceJobs(ctx); err != nil {
+		return
+	}
 	_ = s.repository.FailInterruptedJobs(ctx, s.now())
 	if queued, err := s.repository.RecoverableJobs(ctx); err == nil {
 		for index := range queued {
 			job := &queued[index]
 			source, sourceErr := s.repository.FindSource(ctx, job.SourceID)
-			if sourceErr != nil || collectors[source.Provider] == nil {
+			if sourceErr != nil || s.adapters[source.Provider] == nil {
 				continue
 			}
 			lock, ok := s.trySourceLock(job.SourceID)
@@ -616,12 +799,12 @@ func (s *Service) StartScheduler(ctx context.Context, collectors map[string]Coll
 			go func(collector Collector) {
 				defer lock.Unlock()
 				_, _ = s.executeSync(context.Background(), job.SourceID, job.Trigger, collector, job)
-			}(collectors[source.Provider])
+			}(s.adapters[source.Provider])
 		}
 	}
 	go func() {
 		// 服务启动后立即补跑已到期任务，再按分钟检查；资源清理由成功类型同步负责并记录任务统计。
-		s.SyncDueSources(ctx, collectors)
+		s.SyncDueSources(ctx)
 		ticker := time.NewTicker(time.Minute)
 		defer ticker.Stop()
 		for {
@@ -629,8 +812,23 @@ func (s *Service) StartScheduler(ctx context.Context, collectors map[string]Coll
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				s.SyncDueSources(ctx, collectors)
+				s.SyncDueSources(ctx)
 			}
 		}
 	}()
+}
+
+// failPendingSourceJobs 在恢复任何工作器前安全结束历史来源遗留的排队和运行任务。
+func (s *Service) failPendingSourceJobs(ctx context.Context) error {
+	jobs, err := s.repository.PendingSourceJobs(ctx)
+	if err != nil {
+		return err
+	}
+	for i := range jobs {
+		jobs[i].Statistics = nil
+		if _, err := s.finishFailed(ctx, &jobs[i], ErrSourceIdentityPending.Error(), nil); err != nil {
+			return err
+		}
+	}
+	return nil
 }

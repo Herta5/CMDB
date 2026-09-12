@@ -70,17 +70,21 @@ func newResourceServiceTest(t *testing.T) (*Service, *gorm.DB, *Source, *time.Ti
 		t.Fatal("创建资源测试表失败")
 	}
 	// 统一审计会读取项目名称快照，资源测试只建立必要的最小关联表。
-	if err := db.Exec("CREATE TABLE projects (id integer primary key, name text)").Error; err != nil {
+	if err := db.Exec("CREATE TABLE projects (id integer primary key, name text, status text)").Error; err != nil {
 		t.Fatal("创建审计项目关联表失败")
+	}
+	if err := db.Exec("INSERT INTO projects (id, name, status) VALUES (1, '身份测试项目', 'enabled'), (2, '另一测试项目', 'enabled')").Error; err != nil {
+		t.Fatal("准备身份验证项目失败")
 	}
 	cipher := NewCredentialCipher("resource-service-test-key")
 	encrypted, _ := cipher.Encrypt([]byte(`{"token":"example"}`))
-	source := &Source{ProjectID: 1, Provider: ProviderAWS, Name: "测试接入源", Region: "cn-test", EncryptedCredential: encrypted, Enabled: true, SyncIntervalMinutes: 60}
+	verified := time.Date(2026, 9, 9, 11, 0, 0, 0, time.UTC)
+	source := &Source{ProjectID: 1, Provider: ProviderAWS, Name: "测试接入源", Region: "cn-test", EncryptedCredential: encrypted, Enabled: true, SyncIntervalMinutes: 60, CloudAccountID: "123456789012", IdentityStatus: IdentityStatusVerified, IdentityVerifiedAt: &verified}
 	if err := db.Create(source).Error; err != nil {
 		t.Fatal("准备接入源失败")
 	}
 	now := time.Date(2026, 9, 9, 12, 0, 0, 0, time.UTC)
-	service := NewService(NewRepository(db), cipher, audit.NewRepository(db))
+	service := NewService(NewRepository(db), cipher, identityTestAdapters(), audit.NewRepository(db))
 	service.now = func() time.Time { return now }
 	return service, db, source, &now
 }
@@ -548,11 +552,12 @@ func TestSyncFinalStateRollsBackWhenAuditWriteFails(t *testing.T) {
 			if encryptErr != nil {
 				t.Fatalf("准备同步凭证失败：%v", encryptErr)
 			}
-			source := &Source{ProjectID: 1, Provider: ProviderAWS, Name: "同步接入源", EncryptedCredential: encrypted, Enabled: true, SyncIntervalMinutes: 60}
+			verified := time.Now()
+			source := &Source{ProjectID: 1, Provider: ProviderAWS, Name: "同步接入源", EncryptedCredential: encrypted, Enabled: true, SyncIntervalMinutes: 60, CloudAccountID: "123456789012", IdentityStatus: IdentityStatusVerified, IdentityVerifiedAt: &verified}
 			if err := db.Create(source).Error; err != nil {
 				t.Fatalf("准备同步接入源失败：%v", err)
 			}
-			service := NewService(NewRepository(db), cipher, audit.NewRepository(db))
+			service := NewService(NewRepository(db), cipher, identityTestAdapters(), audit.NewRepository(db))
 
 			if _, err := service.Sync(context.Background(), source.ID, "manual", testCase.collector); err == nil {
 				t.Fatal("汇总审计写入失败时同步必须返回错误")
@@ -746,11 +751,12 @@ func TestSyncDueSourcesOnlyRunsEnabledDueSources(t *testing.T) {
 	past := now.Add(-time.Minute)
 	future := now.Add(time.Hour)
 	_ = db.Model(source).Updates(map[string]any{"next_sync_at": past, "enabled": true}).Error
-	disabled := Source{ProjectID: 1, Provider: ProviderAWS, Name: "停用源", EncryptedCredential: source.EncryptedCredential, Enabled: false, SyncIntervalMinutes: 60, NextSyncAt: &past}
-	upcoming := Source{ProjectID: 1, Provider: ProviderAWS, Name: "未到期源", EncryptedCredential: source.EncryptedCredential, Enabled: true, SyncIntervalMinutes: 60, NextSyncAt: &future}
+	// 两个排除样本也必须已验证，避免身份门禁掩盖启用状态和到期时间的调度规则。
+	disabled := Source{ProjectID: 1, Provider: ProviderAWS, Name: "停用源", EncryptedCredential: source.EncryptedCredential, Enabled: false, SyncIntervalMinutes: 60, NextSyncAt: &past, CloudAccountID: "123456789013", IdentityStatus: IdentityStatusVerified, IdentityVerifiedAt: source.IdentityVerifiedAt}
+	upcoming := Source{ProjectID: 1, Provider: ProviderAWS, Name: "未到期源", EncryptedCredential: source.EncryptedCredential, Enabled: true, SyncIntervalMinutes: 60, NextSyncAt: &future, CloudAccountID: "123456789014", IdentityStatus: IdentityStatusVerified, IdentityVerifiedAt: source.IdentityVerifiedAt}
 	_ = db.Create(&disabled).Error
 	_ = db.Create(&upcoming).Error
-	service.SyncDueSources(context.Background(), map[string]Collector{ProviderAWS: collectorStub{}})
+	service.SyncDueSources(context.Background())
 	var jobs []SyncJob
 	_ = db.Find(&jobs).Error
 	if len(jobs) != 1 || jobs[0].SourceID != source.ID || jobs[0].Trigger != "scheduled" {

@@ -13,8 +13,7 @@ import (
 
 // HTTPHandler 将资源服务适配为项目级 HTTP 接口。
 type HTTPHandler struct {
-	service    *Service
-	collectors map[string]Collector
+	service *Service
 }
 
 // UpdateSource 更新接入源非敏感配置，并允许调用方选择性替换凭证。
@@ -68,8 +67,8 @@ func (h *HTTPHandler) DeleteSource(c *gin.Context) {
 }
 
 // NewHTTPHandler 创建统一资源 HTTP 处理器。
-func NewHTTPHandler(service *Service, collectors map[string]Collector) *HTTPHandler {
-	return &HTTPHandler{service: service, collectors: collectors}
+func NewHTTPHandler(service *Service) *HTTPHandler {
+	return &HTTPHandler{service: service}
 }
 
 // CreateSource 创建已加密凭证的接入源，项目权限由前置中间件验证。
@@ -127,7 +126,7 @@ func (h *HTTPHandler) SyncSource(c *gin.Context) {
 		c.JSON(http.StatusNotFound, gin.H{"code": "SOURCE_NOT_FOUND", "message": "接入源不存在"})
 		return
 	}
-	collector := h.collectors[source.Provider]
+	collector := h.service.adapters[source.Provider]
 	if collector == nil {
 		c.JSON(http.StatusServiceUnavailable, gin.H{"code": "SOURCE_COLLECTOR_UNAVAILABLE", "message": "平台采集器暂不可用"})
 		return
@@ -157,7 +156,7 @@ func (h *HTTPHandler) TestSourceConnection(c *gin.Context) {
 		c.JSON(http.StatusNotFound, gin.H{"code": "SOURCE_NOT_FOUND", "message": "接入源不存在"})
 		return
 	}
-	collector := h.collectors[source.Provider]
+	collector := h.service.adapters[source.Provider]
 	if collector == nil {
 		c.JSON(http.StatusServiceUnavailable, gin.H{"code": "SOURCE_COLLECTOR_UNAVAILABLE", "message": "平台采集器暂不可用"})
 		return
@@ -186,7 +185,7 @@ func (h *HTTPHandler) RetryJob(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"code": "SYNC_JOB_INVALID_REQUEST", "message": "请求格式错误"})
 		return
 	}
-	job, err := h.service.RetryJob(c.Request.Context(), projectID, jobID, h.collectors)
+	job, err := h.service.RetryJob(c.Request.Context(), projectID, jobID)
 	if errors.Is(err, ErrSyncAlreadyRunning) {
 		c.JSON(http.StatusConflict, gin.H{"code": "SOURCE_SYNC_RUNNING", "message": "接入源同步任务正在执行"})
 		return

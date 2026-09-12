@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"cmdb/internal/audit"
+	awscollector "cmdb/internal/aws"
 	"cmdb/internal/identity"
 	"cmdb/internal/platform/httpserver"
 	"cmdb/internal/project"
@@ -481,6 +482,9 @@ func TestProjectSourceAPINeverReturnsCredentials(t *testing.T) {
 	path := "/api/v1/projects/" + strconv.FormatUint(created.ID, 10)
 	integrationRequest(t, server, admin, http.MethodPost, path+"/members", map[string]any{"username": "member_a", "role": "member"}, http.StatusCreated)
 	response := integrationRequest(t, server, admin, http.MethodPost, path+"/sources", map[string]any{"provider": "aws", "name": "AWS 生产账号", "region": "cn-north-1", "credential": map[string]any{"access_key_id": "example-id", "secret_access_key": "example-secret"}}, http.StatusCreated)
+	if !strings.Contains(response.Body.String(), `"identity_status":"verified"`) || strings.Contains(response.Body.String(), "123456789012") || strings.Contains(response.Body.String(), "identity_verified_at") {
+		t.Fatal("HTTP 新建来源必须公开已验证状态，但不得公开账号或验证时间")
+	}
 	if strings.Contains(response.Body.String(), "example") || strings.Contains(response.Body.String(), "encrypted") {
 		t.Fatal("接入源响应不得暴露凭证明文或密文字段")
 	}
@@ -507,7 +511,7 @@ func TestProjectSourceAPINeverReturnsCredentials(t *testing.T) {
 		}
 		time.Sleep(time.Millisecond)
 	}
-	updated := integrationRequest(t, server, admin, http.MethodPut, path+"/sources/"+strconv.FormatUint(source.ID, 10), map[string]any{"name": "AWS 更新账号", "region": "ap-east-1", "config": map[string]any{"environment": "production"}, "enabled": true, "sync_interval_minutes": 120}, http.StatusOK)
+	updated := integrationRequest(t, server, admin, http.MethodPut, path+"/sources/"+strconv.FormatUint(source.ID, 10), map[string]any{"name": "AWS 更新账号", "region": "ap-east-1", "config": map[string]any{}, "enabled": true, "sync_interval_minutes": 120}, http.StatusOK)
 	if strings.Contains(updated.Body.String(), "example") || !strings.Contains(updated.Body.String(), "AWS 更新账号") {
 		t.Fatal("更新接入源必须保留凭证且响应不得暴露凭证")
 	}
@@ -541,7 +545,13 @@ func TestProjectSourceAPINeverReturnsCredentials(t *testing.T) {
 	}
 }
 
-type integrationCollector struct{}
+// integrationCollector 保留真实 AWS 输入校验，只替换会访问云端的适配器边界。
+type integrationCollector struct{ *awscollector.Collector }
+
+// ResolveCloudAccountID 返回虚构稳定账号，HTTP 验收不访问真实 AWS。
+func (integrationCollector) ResolveCloudAccountID(context.Context, cloudresource.Source, []byte) (string, error) {
+	return "123456789012", nil
+}
 
 func (integrationCollector) Collect(context.Context, cloudresource.Source, []byte) ([]cloudresource.CollectionResult, error) {
 	return []cloudresource.CollectionResult{{ResourceType: "ec2", Snapshots: []cloudresource.Snapshot{{ResourceType: "ec2", ExternalID: "i-integration", Name: "集成计算节点", CloudStatus: "running", Endpoints: []cloudresource.EndpointSnapshot{{Kind: "private", Address: "10.0.0.8"}}}}}}, nil
@@ -701,7 +711,7 @@ func integrationServerWithDatabase(t *testing.T) (http.Handler, string, *gorm.DB
 	if _, err := rand.Read(secret); err != nil {
 		t.Fatal("生成签名密钥失败")
 	}
-	return httpserver.New(httpserver.Dependencies{Database: db, JWTSecret: hex.EncodeToString(secret), EncryptionKey: "integration-encryption-key", Collectors: map[string]cloudresource.Collector{"aws": integrationCollector{}}}), password, db
+	return httpserver.New(httpserver.Dependencies{Database: db, JWTSecret: hex.EncodeToString(secret), EncryptionKey: "integration-encryption-key", Adapters: map[string]cloudresource.ProviderAdapter{"aws": integrationCollector{Collector: awscollector.NewCollector()}}}), password, db
 }
 
 // loginUser 必须通过公开登录流程获取 JWT，不能以自行签发令牌跳过密码认证。

@@ -3,21 +3,62 @@ package resource
 
 import (
 	"context"
+	"errors"
 	"sort"
+	"strings"
 	"time"
 
 	"cmdb/internal/audit"
+	"github.com/jackc/pgx/v5/pgconn"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
+	"gorm.io/gorm/logger"
 )
 
 // CreateSource 保存已加密的接入源，仓储永远不接收明文凭证。
 func (r *Repository) CreateSource(ctx context.Context, source *Source) error {
-	return r.db.WithContext(ctx).Create(source).Error
+	// 即便上层启用 SQL 日志，凭证专用写入也不能把绑定的完整密文带入日志。
+	return sourceIdentityWriteError(r.db.Session(&gorm.Session{Logger: logger.Default.LogMode(logger.Silent)}).WithContext(ctx).Create(source).Error)
 }
 
 // UpdateSource 保存经过服务层校验的非敏感配置和可选新密文。
 func (r *Repository) UpdateSource(ctx context.Context, source *Source, updates map[string]any) error {
-	return r.db.WithContext(ctx).Model(source).Updates(updates).Error
+	return sourceIdentityWriteError(r.db.Session(&gorm.Session{Logger: logger.Default.LogMode(logger.Silent)}).WithContext(ctx).Model(source).Updates(updates).Error)
+}
+
+// sourceIdentityWriteError 以数据库唯一约束作为并发归属的最终裁决，禁止将账号值或底层 SQL 返回给调用方。
+func sourceIdentityWriteError(err error) error {
+	// 生产统一开启 TranslateError；来源更新不修改主键，唯一业务索引只有云账号归属。
+	if errors.Is(err, gorm.ErrDuplicatedKey) {
+		return ErrCloudAccountConflict
+	}
+	var pgError *pgconn.PgError
+	if errors.As(err, &pgError) && pgError.Code == "23505" && pgError.ConstraintName == "uk_resource_sources_provider_account_verified" {
+		return ErrCloudAccountConflict
+	}
+	// SQLite 用于离线业务测试，错误文本只参与内部分类，绝不作为业务响应。
+	if err != nil && strings.Contains(err.Error(), "UNIQUE constraint failed: resource_sources.provider, resource_sources.cloud_account_id") {
+		return ErrCloudAccountConflict
+	}
+	return err
+}
+
+// ProjectIsEnabled 只供新增身份验证动作检查项目状态；事务内共享锁防止检查后项目被并发停用。
+func (r *Repository) ProjectIsEnabled(ctx context.Context, projectID uint64) (bool, error) {
+	var project struct{ Status string }
+	if err := r.db.WithContext(ctx).Table("projects").Clauses(clause.Locking{Strength: "SHARE"}).Where("id = ?", projectID).Take(&project).Error; err != nil {
+		return false, err
+	}
+	return project.Status == "enabled", nil
+}
+
+// lockSourceForProject 在身份提交事务内重读并锁定来源，避免并发验证覆盖其他事务已经确认的账号。
+func (r *Repository) lockSourceForProject(ctx context.Context, projectID, sourceID uint64) (*Source, error) {
+	var source Source
+	if err := r.db.WithContext(ctx).Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ? AND project_id = ?", sourceID, projectID).Take(&source).Error; err != nil {
+		return nil, err
+	}
+	return &source, nil
 }
 
 // DeleteSource 删除接入源及数据库外键约束下的资源和同步任务。
@@ -48,7 +89,7 @@ func (r *Repository) ListJobs(ctx context.Context, projectID, sourceID uint64, p
 // ListDueSources 返回当前应调度的已启用接入源。
 func (r *Repository) ListDueSources(ctx context.Context, now time.Time) ([]Source, error) {
 	var sources []Source
-	err := r.db.WithContext(ctx).Where("enabled = ? AND (next_sync_at IS NULL OR next_sync_at <= ?)", true, now).Find(&sources).Error
+	err := r.db.WithContext(ctx).Where("enabled = ? AND identity_status = ? AND cloud_account_id <> '' AND (next_sync_at IS NULL OR next_sync_at <= ?)", true, IdentityStatusVerified, now).Find(&sources).Error
 	return sources, err
 }
 
@@ -157,6 +198,13 @@ func (r *Repository) FindJob(ctx context.Context, id uint64) (*SyncJob, error) {
 func (r *Repository) RecoverableJobs(ctx context.Context) ([]SyncJob, error) {
 	var jobs []SyncJob
 	err := r.db.WithContext(ctx).Where("status = ?", "queued").Order("id ASC").Find(&jobs).Error
+	return jobs, err
+}
+
+// PendingSourceJobs 返回尚未终结的历史待验证来源任务，交给服务层沿用失败审计事务。
+func (r *Repository) PendingSourceJobs(ctx context.Context) ([]SyncJob, error) {
+	var jobs []SyncJob
+	err := r.db.WithContext(ctx).Where("status IN ? AND source_id IN (?)", []string{"queued", "running"}, r.db.Model(&Source{}).Select("id").Where("identity_status <> ? OR cloud_account_id IS NULL OR cloud_account_id = ''", IdentityStatusVerified)).Find(&jobs).Error
 	return jobs, err
 }
 

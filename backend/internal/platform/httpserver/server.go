@@ -18,7 +18,7 @@ type Dependencies struct {
 	UserRepository  identity.UserRepository
 	JWTSecret       string
 	EncryptionKey   string
-	Collectors      map[string]cloudresource.Collector
+	Adapters        map[string]cloudresource.ProviderAdapter
 	ResourceService *cloudresource.Service
 }
 
@@ -51,9 +51,9 @@ func New(dependencies Dependencies) *gin.Engine {
 	auditHandler := audit.NewHTTPHandler(audit.NewService(auditRepository))
 	resourceService := dependencies.ResourceService
 	if resourceService == nil {
-		resourceService = cloudresource.NewService(cloudresource.NewRepository(dependencies.Database), cloudresource.NewCredentialCipher(dependencies.EncryptionKey), auditRepository)
+		resourceService = cloudresource.NewService(cloudresource.NewRepository(dependencies.Database), cloudresource.NewCredentialCipher(dependencies.EncryptionKey), dependencies.Adapters, auditRepository)
 	}
-	resourceHandler := cloudresource.NewHTTPHandler(resourceService, dependencies.Collectors)
+	resourceHandler := cloudresource.NewHTTPHandler(resourceService)
 	engine.POST("/api/v1/auth/login", handler.Login)
 	engine.GET("/api/v1/me", authenticator.RequireUser(), func(c *gin.Context) {
 		handler.Me(c, CurrentUser(c))
