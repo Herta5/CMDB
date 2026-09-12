@@ -34,22 +34,12 @@ func main() {
 	if err != nil {
 		log.Fatalf("连接数据库失败：%v", err)
 	}
-	if err := startAfterSchemaCheck(context.Background(), db, func() error {
-		return serve(configuration, db)
-	}); err != nil {
+	if err := serve(configuration, db); err != nil {
 		log.Fatalf("启动服务失败：%v", err)
 	}
 }
 
-// startAfterSchemaCheck 将数据库版本门禁放在所有长期运行组件之前，失败时不启动任何后台任务或端口监听。
-func startAfterSchemaCheck(ctx context.Context, db *gorm.DB, start func() error) error {
-	if err := database.CheckSchemaVersion(ctx, db); err != nil {
-		return err
-	}
-	return start()
-}
-
-// serve 在版本门禁通过后装配并启动调度器与 HTTP 服务。
+// serve 在数据库连接建立后装配并启动调度器与 HTTP 服务。
 func serve(configuration config.Config, db *gorm.DB) error {
 	adapters := map[string]cloudresource.ProviderAdapter{
 		cloudresource.ProviderAliyun: aliyuncollector.NewCollector(),

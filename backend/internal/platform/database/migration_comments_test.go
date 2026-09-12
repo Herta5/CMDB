@@ -14,10 +14,12 @@ const (
 	applicationRoleInitializationPath = "../../../database/init/001_create_app_role.sh"
 	// schemaInitializationPath 是由 PostgreSQL 管理员执行的唯一业务结构初始化文件。
 	schemaInitializationPath = "../../../database/init/002_schema.sql"
-	// p0SafetyMigrationPath 是管理员命令嵌入执行的 P0 增量迁移文件。
-	p0SafetyMigrationPath = "migrations/002_p0_safety.sql"
-	// dockerfilePath 是同时构建服务和管理员工具的应用镜像定义。
+	// dockerfilePath 是构建服务和首次管理员初始化工具的应用镜像定义。
 	dockerfilePath = "../../../../Dockerfile"
+	// composePath 是只支持空数据卷首次初始化的单机部署定义。
+	composePath = "../../../../docker-compose.yml"
+	// migrationCommandPath 是旧数据库升级命令入口，首次安装基线中不得存在。
+	migrationCommandPath = "../../../cmd/migrate/main.go"
 )
 
 // TestPostgreSQLInitializationCreatesRestrictedApplicationRole 防止应用账号取得管理员或建库权限。
@@ -129,9 +131,6 @@ func TestPostgreSQLSchemaDefinesBusinessStructure(t *testing.T) {
 		"sync_jobs": {
 			"id", "project_id", "source_id", "previous_job_id", "status", "trigger", "statistics", "error_summary", "started_at", "finished_at",
 		},
-		"schema_migrations": {
-			"version", "applied_at",
-		},
 	}
 
 	for table, columns := range expectedColumns {
@@ -168,7 +167,7 @@ func TestPostgreSQLSchemaDefinesBusinessStructure(t *testing.T) {
 		}
 	}
 
-	allInitialization := string(readInitializationFile(t, applicationRoleInitializationPath)) + schema + string(readInitializationFile(t, p0SafetyMigrationPath))
+	allInitialization := string(readInitializationFile(t, applicationRoleInitializationPath)) + schema
 	for _, forbidden := range []string{"AUTO_INCREMENT", "ENUM(", string(rune(96)), "ON UPDATE"} {
 		if strings.Contains(allInitialization, forbidden) {
 			t.Errorf("PostgreSQL 初始化文件不得包含 MySQL 方言：%s", forbidden)
@@ -176,33 +175,22 @@ func TestPostgreSQLSchemaDefinesBusinessStructure(t *testing.T) {
 	}
 }
 
-// TestP0MigrationKeepsChineseMetadata 验证增量迁移为新表字段补充中文职责与业务语义。
-func TestP0MigrationKeepsChineseMetadata(t *testing.T) {
-	migration := string(readInitializationFile(t, p0SafetyMigrationPath))
-	for _, fragment := range []string{
-		"COMMENT ON TABLE public.schema_migrations IS",
-		"COMMENT ON COLUMN public.schema_migrations.version IS",
-		"COMMENT ON COLUMN public.schema_migrations.applied_at IS",
-		"COMMENT ON COLUMN public.resource_sources.cloud_account_id IS",
-		"COMMENT ON COLUMN public.resource_sources.identity_status IS",
-		"COMMENT ON COLUMN public.resource_sources.identity_verified_at IS",
-	} {
-		if !strings.Contains(migration, fragment) {
-			t.Errorf("P0 增量迁移缺少中文元数据：%s", fragment)
+// TestInitialInstallationOmitsVersionUpgradeInfrastructure 防止初建项目重新引入结构版本和旧库升级入口。
+func TestInitialInstallationOmitsVersionUpgradeInfrastructure(t *testing.T) {
+	schema := string(readInitializationFile(t, schemaInitializationPath))
+	dockerfile := string(readInitializationFile(t, dockerfilePath))
+	compose := string(readInitializationFile(t, composePath))
+	for name, content := range map[string]string{"初始化结构": schema, "镜像定义": dockerfile, "Compose 定义": compose} {
+		for _, forbidden := range []string{"schema_migrations", "cmdb-migrate", "DB_MIGRATION_USER", "DB_MIGRATION_PASSWORD"} {
+			if strings.Contains(content, forbidden) {
+				t.Errorf("%s 不得包含版本升级能力：%s", name, forbidden)
+			}
 		}
 	}
-}
-
-// TestDockerfileIncludesMigrationCommand 验证应用镜像同时交付显式管理员迁移工具。
-func TestDockerfileIncludesMigrationCommand(t *testing.T) {
-	dockerfile := string(readInitializationFile(t, dockerfilePath))
-	for _, fragment := range []string{
-		"go build -buildvcs=false -o cmdb-migrate ./cmd/migrate",
-		"COPY --from=backend-builder /src/backend/cmdb-migrate ./cmdb-migrate",
-	} {
-		if !strings.Contains(dockerfile, fragment) {
-			t.Errorf("镜像定义缺少管理员迁移工具：%s", fragment)
-		}
+	if _, err := os.Stat(migrationCommandPath); err == nil {
+		t.Fatal("首次安装基线不得包含数据库升级命令")
+	} else if !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("检查数据库升级命令目录失败：%v", err)
 	}
 }
 
