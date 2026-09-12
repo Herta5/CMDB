@@ -72,4 +72,33 @@ describe('云资源状态层', () => {
     expect(store.connectionError).toBe('阿里云 RAM 权限不足，请授权资源只读权限')
     expect(store.connectionMessage).toBe('')
   })
+
+  it('验证待确认身份后使用服务端刷新结果且不保留新凭证', async () => {
+    get.mockImplementation((url: string) => Promise.resolve(url.endsWith('/sources') ? [{ id: 4, project_id: 7, provider: 'aws', name: '账号', identity_status: 'verified', enabled: true, sync_interval_minutes: 60 }] : { items: [], total: 0 }))
+    let submitted: unknown
+    post.mockImplementation((_url: string, body: unknown) => { submitted = structuredClone(body); return Promise.resolve({ id: 4, project_id: 7, provider: 'aws', name: '账号', identity_status: 'verified', enabled: true, sync_interval_minutes: 60 }) })
+    const store = useResourceStore()
+    const credential = { access_key_id: 'test-access-key', secret_access_key: 'test-secret' }
+
+    await store.verifyIdentity(7, 'aws', 4, credential)
+
+    expect(post).toHaveBeenCalledWith('/projects/7/sources/4/verify-identity', expect.any(Object))
+    expect(submitted).toEqual({ credential: { access_key_id: 'test-access-key', secret_access_key: 'test-secret' } })
+    expect(store.sources[0]?.identityStatus).toBe('verified')
+    expect(store.verifyingSourceId).toBeNull()
+    expect(credential).toEqual({})
+  })
+
+  it('验证身份使用现有安全凭证时不提交凭证，并在失败后清理提交状态', async () => {
+    get.mockImplementation((url: string) => Promise.resolve(url.endsWith('/sources') ? [{ id: 4, project_id: 7, provider: 'aliyun', name: '历史账号', identity_status: 'pending', enabled: true, sync_interval_minutes: 60 }] : { items: [], total: 0 }))
+    post.mockRejectedValue({ response: { data: { message: '云账号权限不足，请检查只读权限' } } })
+    const store = useResourceStore()
+
+    await expect(store.verifyIdentity(7, 'aliyun', 4)).rejects.toBeTruthy()
+
+    expect(post).toHaveBeenCalledWith('/projects/7/sources/4/verify-identity', {})
+    expect(store.mutationError).toBe('云账号权限不足，请检查只读权限')
+    expect(store.verifyingSourceId).toBeNull()
+    expect(store.sources[0]?.identityStatus).toBe('pending')
+  })
 })

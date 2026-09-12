@@ -2,7 +2,7 @@
 import request from '@/utils/request'
 
 export type Provider = 'aliyun' | 'aws'
-export interface Source { id: number; projectId: number; provider: Provider; name: string; region: string; credentialHint: string; enabled: boolean; syncIntervalMinutes: number; lastSyncAt?: string; nextSyncAt?: string }
+export interface Source { id: number; projectId: number; provider: Provider; identityStatus: 'pending' | 'verified'; name: string; region: string; credentialHint: string; enabled: boolean; syncIntervalMinutes: number; lastSyncAt?: string; nextSyncAt?: string }
 export interface Endpoint { id?: number; kind: 'private' | 'public' | 'hostname'; address: string; port: number; protocol: string; resolvedIps: string[] }
 export interface CloudResource { id: number; sourceId: number; provider: Provider; resourceType: string; externalId: string; name: string; region: string; zone: string; cloudStatus: string; assetStatus: 'active' | 'lost'; endpoints: Endpoint[]; lastSeenAt: string; missingSince?: string }
 // 云平台由双平台管理视图补充，单平台接口模型无需重复携带该字段。
@@ -15,7 +15,7 @@ type ResourceDTO = Record<string, any>
 type JobDTO = Record<string, any>
 
 /** 将后端字段转换为页面稳定模型，动态解析 IP 仍保留在域名端点下。 */
-const toSource = (v: SourceDTO): Source => ({ id: v.id, projectId: v.project_id, provider: v.provider, name: v.name, region: v.region ?? '', credentialHint: v.credential_hint ?? '', enabled: v.enabled, syncIntervalMinutes: v.sync_interval_minutes, lastSyncAt: v.last_sync_at, nextSyncAt: v.next_sync_at })
+const toSource = (v: SourceDTO): Source => ({ id: v.id, projectId: v.project_id, provider: v.provider, identityStatus: v.identity_status === 'pending' ? 'pending' : 'verified', name: v.name, region: v.region ?? '', credentialHint: v.credential_hint ?? '', enabled: v.enabled, syncIntervalMinutes: v.sync_interval_minutes, lastSyncAt: v.last_sync_at, nextSyncAt: v.next_sync_at })
 const toResource = (v: ResourceDTO): CloudResource => ({ id: v.id, sourceId: v.source_id, provider: v.provider, resourceType: v.resource_type, externalId: v.external_id, name: v.name, region: v.region, zone: v.zone, cloudStatus: v.cloud_status, assetStatus: v.asset_status, lastSeenAt: v.last_seen_at, missingSince: v.missing_since, endpoints: (v.endpoints ?? []).map((e: Record<string, any>) => ({ id: e.id, kind: e.kind, address: e.address, port: e.port, protocol: e.protocol, resolvedIps: e.resolved_ips ?? [] })) })
 const toJob = (v: JobDTO): SyncJob => ({ id: v.id, sourceId: v.source_id, status: v.status, trigger: v.trigger, statistics: v.statistics ?? {}, errorSummary: v.error_summary ?? '', startedAt: v.started_at, finishedAt: v.finished_at })
 
@@ -35,5 +35,7 @@ export async function deleteSource(projectId: number, sourceId: number) { await 
 export async function syncSource(projectId: number, sourceId: number) { return toJob(await request.post(`/projects/${projectId}/sources/${sourceId}/sync`) as JobDTO) }
 /** 测试现有凭证和网络，仅返回资源类型可达性。 */
 export async function testSourceConnection(projectId: number, sourceId: number) { return await request.post(`/projects/${projectId}/sources/${sourceId}/test`) as { reachable_types: string[]; failed_types: string[] } }
+/** 确认历史接入源的云账号身份；凭证缺失时由服务端使用已加密的现有凭证。 */
+export async function verifySourceIdentity(projectId: number, sourceId: number, credential?: Record<string, unknown>) { return toSource(await request.post(`/projects/${projectId}/sources/${sourceId}/verify-identity`, credential === undefined ? {} : { credential }) as SourceDTO) }
 /** 为失败任务创建新任务，原任务保留用于审计。 */
 export async function retrySyncJob(projectId: number, jobId: number) { return toJob(await request.post(`/projects/${projectId}/sync-jobs/${jobId}/retry`) as JobDTO) }
