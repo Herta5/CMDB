@@ -2,7 +2,7 @@
 
 ## 文档用途
 
-本目录是 CMDB 产品规范的统一入口，面向产品、研发、测试和维护人员，定义公有云资源配置管理平台的长期业务要求、领域约束、交互要求和验收口径。本文档只负责导航、说明权威关系和划分文件职责，不复制具体业务规则；部署与已有数据升级的操作步骤位于根目录 [README](../../README.md)，但其凭证、版本和失败边界仍以本目录规范为准。
+本目录是 CMDB 产品规范的统一入口，面向产品、研发、测试和维护人员，定义公有云资源配置管理平台的长期业务要求、领域约束、交互要求和验收口径。本文档只负责导航、说明权威关系和划分文件职责，不复制具体业务规则；PostgreSQL 17 空库首次安装步骤位于根目录 [README](../../README.md)，其凭证和初始化边界仍以本目录规范为准。
 
 ## 权威顺序
 
@@ -19,7 +19,7 @@
 
 首次了解产品时，先阅读 [overview.md](overview.md)，确认产品定位、首期范围、角色和公共能力边界；再阅读 [domain-model.md](domain-model.md)，掌握数据归属、资源身份和领域关系。
 
-涉及同步流程、并发、采集结果或资源生命周期时，阅读 [resource-sync.md](resource-sync.md)；涉及身份、权限、凭证和审计时，阅读 [security.md](security.md)；涉及页面、导航、交互或响应式适配时，阅读 [frontend-guidelines.md](frontend-guidelines.md)。执行 PostgreSQL 已有数据升级前，先阅读 [数据库迁移凭证与版本边界](security.md#数据库迁移凭证与版本边界)，再按根目录 [已有数据卷升级](../../README.md#已有数据卷升级) 操作并以 [AC-041](acceptance.md#ac-041-postgresql-已有数据升级与版本门禁安全场景) 验收。完成其他跨领域开发或测试前，使用 [acceptance.md](acceptance.md) 按场景核对验收要求，最后参阅 [implementation-status.md](implementation-status.md) 了解指定提交的交付状态和证据。
+涉及同步流程、并发、采集结果或资源生命周期时，阅读 [resource-sync.md](resource-sync.md)；涉及身份、权限、凭证和审计时，阅读 [security.md](security.md)；涉及页面、导航、交互或响应式适配时，阅读 [frontend-guidelines.md](frontend-guidelines.md)。首次安装前，先阅读 [数据库首次初始化边界](security.md#数据库首次初始化边界)，再按根目录 [首次安装](../../README.md#首次安装) 操作并以 [AC-041](acceptance.md#ac-041-postgresql-17-空库首次初始化安全场景) 验收。完成其他跨领域开发或测试前，使用 [acceptance.md](acceptance.md) 按场景核对验收要求，最后参阅 [implementation-status.md](implementation-status.md) 了解指定提交的交付状态和证据。
 
 ## 文档职责
 
@@ -30,7 +30,7 @@
 | [resource-sync.md](resource-sync.md) | 接入源配置、同步触发与并发、采集结果、资源生命周期和失败保护。 |
 | [security.md](security.md) | 身份认证、授权矩阵、凭证保护、审计和错误披露边界。 |
 | [frontend-guidelines.md](frontend-guidelines.md) | 导航、页面职责、列表交互、状态展示、可访问性和中文界面要求。 |
-| [acceptance.md](acceptance.md) | 以“前置条件—操作—预期结果”组织跨领域端到端验收场景，包括已有 PostgreSQL 数据升级与版本门禁。 |
+| [acceptance.md](acceptance.md) | 以“前置条件—操作—预期结果”组织跨领域端到端验收场景，包括 PostgreSQL 17 空库首次初始化。 |
 | [implementation-status.md](implementation-status.md) | 以指定提交为基线的实现状态、差距和代码或测试证据。 |
 
 跨文档规则只在一个主责文件中完整定义，其他文件通过相对链接引用；具体职责以表中说明为准。
@@ -41,5 +41,5 @@
 - 除 `implementation-status.md` 外，本目录文件不得把尚未实现的目标能力写成当前实现事实；实现差距统一记录在实现状态文件中。
 - 新需求与现有规范冲突时，必须先确认用户口径和 `AGENTS.md` 约束，再更新唯一主责文档及受影响的引用和验收场景。
 - 修改规范后必须检查相对链接、文档覆盖范围和关键业务红线；不得通过 README 或代码说明绕过本目录的权威关系。
-- 根目录部署或升级步骤变化时，必须同步核对本目录中的安全边界、验收场景和实现状态；管理员迁移凭证不得常驻应用环境。
+- 根目录首次安装步骤变化时，必须同步核对本目录中的安全边界、验收场景和实现状态；不得把只用于首次初始化的 PostgreSQL 管理员凭证配置给长期应用服务。
 - 文档中的角色、状态、动作和错误语义使用中文；云平台、资源类型和协议等业界固定名称可保留英文。
