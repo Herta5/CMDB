@@ -23,6 +23,7 @@ func TestWriteVerifySourceIdentityError(t *testing.T) {
 		{name: "账号冲突", err: ErrCloudAccountConflict, status: http.StatusConflict, code: "CLOUD_ACCOUNT_CONFLICT"},
 		{name: "身份不一致", err: ErrSourceIdentityMismatch, status: http.StatusConflict, code: "SOURCE_IDENTITY_MISMATCH"},
 		{name: "待验证", err: ErrSourceIdentityPending, status: http.StatusConflict, code: "SOURCE_IDENTITY_PENDING"},
+		{name: "已验证", err: ErrSourceIdentityAlreadyVerified, status: http.StatusConflict, code: "SOURCE_IDENTITY_ALREADY_VERIFIED"},
 		{name: "项目停用", err: ErrProjectDisabled, status: http.StatusConflict, code: "PROJECT_DISABLED"},
 		{name: "云认证失败", err: ErrCloudAuthentication, status: http.StatusBadGateway, code: "CLOUD_IDENTITY_UNAVAILABLE"},
 		{name: "云权限失败", err: ErrCloudPermission, status: http.StatusBadGateway, code: "CLOUD_IDENTITY_UNAVAILABLE"},

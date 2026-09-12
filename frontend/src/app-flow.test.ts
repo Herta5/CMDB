@@ -59,9 +59,41 @@ async function mount(component: Component) {
   return { root, app }
 }
 
+/** 准备可管理具体项目的页面上下文，所有写入仍经过真实状态层和 Axios 请求转换。 */
+function selectManagedProject() {
+  const projects = useProjectStore()
+  projects.projects = [{ id: 1, code: 'cloud-a', name: '云项目甲', description: '', status: 'enabled', ownerUsername: null, currentRole: 'project_admin', createdAt: '', updatedAt: '' }]
+  projects.listState = 'ready'
+  projects.selectProject(1)
+}
+
+/** 触发原生表单控件的真实 v-model 处理器。 */
+function enter(root: Node, name: string, value: string) {
+  const field = all(root).find(entry => entry.props.name === name)
+  if (!field) throw new Error(`缺少表单字段：${name}`)
+  const directModelUpdate = field.props['onUpdate:modelValue']
+  if (directModelUpdate) directModelUpdate(value)
+  else {
+    const handler = field.props.onInput || field.props.onChange
+    if (!handler) throw new Error(`表单字段缺少值更新处理器：${name}`)
+    handler({ target: { value } })
+  }
+  return field
+}
+
+const awsSourceDTO = { id: 9, project_id: 1, provider: 'aws', identity_status: 'verified', name: 'AWS 生产账号', region: 'ap-east-1', credential_hint: '已安全配置', enabled: true, sync_interval_minutes: 60 }
+
+/** 让管理页读请求返回完整空分页，并在 AWS 平台返回指定来源。 */
+function resourceResponse(config: any, awsSources: Record<string, any>[] = []) {
+  const sources = config.params?.provider === 'aws' ? awsSources : []
+  return { config, status: 200, statusText: '成功', headers: {}, data: config.url?.endsWith('/sources') ? sources : { items: [], total: 0, page: 1, page_size: 20 } }
+}
+
 beforeEach(() => {
   vi.stubGlobal('localStorage', new MemoryStorage())
   vi.stubGlobal('document', { title: '' })
+  vi.stubGlobal('Document', class {})
+  vi.stubGlobal('ShadowRoot', class {})
   pinia = createPinia()
   setActivePinia(pinia)
   expired = false
@@ -162,6 +194,114 @@ describe('CMDB 第一阶段应用流程', () => {
     expect(pageText(root)).toContain('正在验证云账号身份…')
     resolveIdentity({ config: {}, status: 200, statusText: '成功', headers: {}, data: { id: 9, project_id: 1, provider: 'aws', identity_status: 'verified', name: '历史 AWS 账号', enabled: true, sync_interval_minutes: 60 } })
     await flush()
+    app.unmount()
+  })
+
+  it('创建 AWS 接入源时不发送空 Session Token，并在提交后清理凭证', async () => {
+    let submitted: Record<string, any> | undefined
+    request.defaults.adapter = async config => {
+      if (config.method === 'post' && config.url?.endsWith('/sources')) {
+        submitted = JSON.parse(String(config.data))
+        return { config, status: 201, statusText: '已创建', headers: {}, data: awsSourceDTO }
+      }
+      return resourceResponse(config)
+    }
+    selectManagedProject()
+    const { root, app } = await mount(CloudSyncManagementPage)
+
+    await all(root).find(entry => entry.type === 'button' && pageText(entry) === '创建云同步')!.props.onClick()
+    await flush()
+    enter(root, 'provider', 'aws')
+    await flush()
+    enter(root, 'name', 'AWS 生产账号')
+    enter(root, 'region', 'ap-east-1')
+    enter(root, 'access-key-id', 'test-access-key')
+    enter(root, 'secret', 'test-secret')
+    await all(root).find(entry => entry.type === 'form')!.props.onSubmit({ preventDefault() {} })
+    await flush()
+
+    expect(submitted?.credential).toEqual({ access_key_id: 'test-access-key', secret_access_key: 'test-secret' })
+    await all(root).find(entry => entry.type === 'button' && pageText(entry) === '创建云同步')!.props.onClick()
+    await flush()
+    enter(root, 'provider', 'aws')
+    await flush()
+    expect(all(root).find(entry => entry.props.name === 'access-key-id')?.value).toBe('')
+    expect(all(root).find(entry => entry.props.name === 'secret')?.value).toBe('')
+    expect(all(root).find(entry => entry.props.name === 'session-token')?.value).toBe('')
+    app.unmount()
+  })
+
+  it('替换 AWS 凭证时不发送空 Session Token，并在提交后清理凭证', async () => {
+    let submitted: Record<string, any> | undefined
+    request.defaults.adapter = async config => {
+      if (config.method === 'put' && config.url?.endsWith('/sources/9')) {
+        submitted = JSON.parse(String(config.data))
+        return { config, status: 200, statusText: '成功', headers: {}, data: awsSourceDTO }
+      }
+      return resourceResponse(config, [awsSourceDTO])
+    }
+    selectManagedProject()
+    const { root, app } = await mount(CloudSyncManagementPage)
+
+    await all(root).find(entry => entry.type === 'button' && pageText(entry) === '编辑')!.props.onClick()
+    await flush()
+    enter(root, 'access-key-id', 'replacement-access-key')
+    enter(root, 'secret', 'replacement-secret')
+    await all(root).find(entry => entry.type === 'form')!.props.onSubmit({ preventDefault() {} })
+    await flush()
+
+    expect(submitted?.credential).toEqual({ access_key_id: 'replacement-access-key', secret_access_key: 'replacement-secret' })
+    await all(root).find(entry => entry.type === 'button' && pageText(entry) === '编辑')!.props.onClick()
+    await flush()
+    expect(all(root).find(entry => entry.props.name === 'access-key-id')?.value).toBe('')
+    expect(all(root).find(entry => entry.props.name === 'secret')?.value).toBe('')
+    expect(all(root).find(entry => entry.props.name === 'session-token')?.value).toBe('')
+    app.unmount()
+  })
+
+  it('历史 AWS 来源使用新凭证验证时不发送空 Session Token，并在提交后清理凭证', async () => {
+    let submitted: Record<string, any> | undefined
+    const pendingSource = { ...awsSourceDTO, identity_status: 'pending', name: '历史 AWS 账号' }
+    request.defaults.adapter = async config => {
+      if (config.method === 'post' && config.url?.endsWith('/verify-identity')) {
+        submitted = JSON.parse(String(config.data))
+        return { config, status: 200, statusText: '成功', headers: {}, data: awsSourceDTO }
+      }
+      return resourceResponse(config, [pendingSource])
+    }
+    selectManagedProject()
+    const { root, app } = await mount(CloudSyncManagementPage)
+
+    await all(root).find(entry => entry.type === 'button' && pageText(entry) === '验证身份')!.props.onClick()
+    await flush()
+    enter(root, 'verification-mode', 'new')
+    await flush()
+    enter(root, 'verification-access-key-id', 'verification-access-key')
+    enter(root, 'verification-secret', 'verification-secret')
+    await all(root).find(entry => entry.type === 'form' && pageText(entry).includes('验证身份'))!.props.onSubmit({ preventDefault() {} })
+    await flush()
+
+    expect(submitted?.credential).toEqual({ access_key_id: 'verification-access-key', secret_access_key: 'verification-secret' })
+    await all(root).find(entry => entry.type === 'button' && pageText(entry) === '验证身份')!.props.onClick()
+    await flush()
+    enter(root, 'verification-mode', 'new')
+    await flush()
+    expect(all(root).find(entry => entry.props.name === 'verification-access-key-id')?.value).toBe('')
+    expect(all(root).find(entry => entry.props.name === 'verification-secret')?.value).toBe('')
+    expect(all(root).find(entry => entry.props.name === 'verification-session-token')?.value).toBe('')
+    app.unmount()
+  })
+
+  it('删除接入源时说明资产和活动任务会阻止删除', async () => {
+    const confirm = vi.fn(() => false)
+    vi.stubGlobal('window', { confirm, location: { pathname: '/cloud-sync', href: '' } })
+    request.defaults.adapter = async config => resourceResponse(config, [awsSourceDTO])
+    selectManagedProject()
+    const { root, app } = await mount(CloudSyncManagementPage)
+
+    await all(root).find(entry => entry.type === 'button' && pageText(entry) === '删除')!.props.onClick()
+
+    expect(confirm).toHaveBeenCalledWith('确认删除接入源“AWS 生产账号”吗？存在资产或排队、运行中的同步任务时无法删除。')
     app.unmount()
   })
 })

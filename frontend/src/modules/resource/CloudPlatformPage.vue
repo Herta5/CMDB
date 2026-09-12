@@ -24,7 +24,7 @@ async function applyFilters() { store.page = 1; if (projects.currentProjectId) a
 /** 按平台构造仅在传输期间存在的凭证对象。 */
 function credential(): Record<string, unknown> {
   if (selectedProvider.value === 'aliyun') return { access_key_id: form.accessKeyId, access_key_secret: form.secret }
-  return { access_key_id: form.accessKeyId, secret_access_key: form.secret, session_token: form.sessionToken }
+  return { access_key_id: form.accessKeyId, secret_access_key: form.secret, ...(form.sessionToken ? { session_token: form.sessionToken } : {}) }
 }
 /** 来源编辑与验证均只在短生命周期表单中保存密钥，关闭或提交后立即清空。 */
 function clearSourceCredentials() { form.accessKeyId = ''; form.secret = ''; form.sessionToken = '' }
@@ -49,7 +49,7 @@ function openVerification(source: Source) { verificationSource.value = source; s
 /** 仅在用户明确选择替换时构造完整平台凭证；AWS 的 Session Token 保持可选。 */
 function verificationCredential(): Record<string, unknown> {
   if (verificationSource.value?.provider === 'aliyun') return { access_key_id: verificationForm.accessKeyId, access_key_secret: verificationForm.secret }
-  return { access_key_id: verificationForm.accessKeyId, secret_access_key: verificationForm.secret, session_token: verificationForm.sessionToken }
+  return { access_key_id: verificationForm.accessKeyId, secret_access_key: verificationForm.secret, ...(verificationForm.sessionToken ? { session_token: verificationForm.sessionToken } : {}) }
 }
 /** 身份确认无论结果如何清理凭证，页面状态随后由服务端重新加载。 */
 async function submitVerification() {
@@ -60,8 +60,8 @@ async function submitVerification() {
   try { await store.verifyIdentity(projects.currentProjectId, source.provider, source.id, value, props.syncOnly); closeVerificationDialog() }
   finally { clearVerificationCredentials() }
 }
-/** 删除前使用浏览器确认，防止误删接入源及其资源。 */
-async function remove(source: Source) { if (window.confirm(`确认删除接入源“${source.name}”及其资源吗？`) && projects.currentProjectId) await store.remove(projects.currentProjectId, source.provider, source.id, props.syncOnly) }
+/** 删除前说明服务端依赖保护，避免用户误以为来源删除会级联清理资产。 */
+async function remove(source: Source) { if (window.confirm(`确认删除接入源“${source.name}”吗？存在资产或排队、运行中的同步任务时无法删除。`) && projects.currentProjectId) await store.remove(projects.currentProjectId, source.provider, source.id, props.syncOnly) }
 /** 统一格式化空值，保持高密度表格可快速扫描。 */
 const display = (value?: string | number) => value === undefined || value === null || value === '' ? '—' : String(value)
 /** 汇总当前页失联资源，服务端总数仍用于总体资源指标。 */

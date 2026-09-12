@@ -77,7 +77,7 @@ export const useResourceStore = defineStore('cmdb-resource', () => {
   async function create(projectId: number, provider: Provider, input: SourceInput, syncManagement = false) { await createSourceRequest(projectId, { ...input, provider }); await reload(projectId, provider, syncManagement) }
   /** 更新后刷新统一视图。 */
   async function update(projectId: number, provider: Provider, sourceId: number, input: SourceInput, syncManagement = false) { await updateSourceRequest(projectId, sourceId, { ...input, provider }); await reload(projectId, provider, syncManagement) }
-  /** 删除后由服务端级联资源，随后刷新页面。 */
+  /** 服务端确认不存在资产或活动任务依赖后删除来源，随后刷新页面。 */
   async function remove(projectId: number, provider: Provider, sourceId: number, syncManagement = false) { await deleteSourceRequest(projectId, sourceId); await reload(projectId, provider, syncManagement) }
   /** 使用现有凭证执行无副作用连接测试。 */
   async function testConnection(projectId: number, sourceId: number) {

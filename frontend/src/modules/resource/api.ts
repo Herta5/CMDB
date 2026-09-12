@@ -29,7 +29,7 @@ export async function listJobs(projectId: number, provider: Provider, sourceId?:
 export async function createSource(projectId: number, input: SourceInput) { return toSource(await request.post(`/projects/${projectId}/sources`, { provider: input.provider, name: input.name, region: input.region, credential: input.credential, config: input.config, sync_interval_minutes: input.syncIntervalMinutes }) as SourceDTO) }
 /** 更新接入源；未传 credential 时后端保留原密文。 */
 export async function updateSource(projectId: number, sourceId: number, input: SourceInput) { return toSource(await request.put(`/projects/${projectId}/sources/${sourceId}`, { name: input.name, region: input.region, credential: input.credential, config: input.config, enabled: input.enabled, sync_interval_minutes: input.syncIntervalMinutes }) as SourceDTO) }
-/** 删除接入源及其资源。 */
+/** 删除无资产且无活动同步任务依赖的接入源。 */
 export async function deleteSource(projectId: number, sourceId: number) { await request.delete(`/projects/${projectId}/sources/${sourceId}`) }
 /** 手工执行一次同步。 */
 export async function syncSource(projectId: number, sourceId: number) { return toJob(await request.post(`/projects/${projectId}/sources/${sourceId}/sync`) as JobDTO) }

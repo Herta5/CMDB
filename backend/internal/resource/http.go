@@ -72,19 +72,32 @@ func writeVerifySourceIdentityError(c *gin.Context, err error) {
 		c.JSON(http.StatusNotFound, gin.H{"code": "SOURCE_NOT_FOUND", "message": "接入源不存在"})
 	case errors.Is(err, ErrInvalidProviderCredential), errors.Is(err, ErrInvalidProviderConfig):
 		c.JSON(http.StatusBadRequest, gin.H{"code": "SOURCE_INVALID_INPUT", "message": "接入源参数无效"})
+	case errors.Is(err, ErrProjectDisabled):
+		c.JSON(http.StatusConflict, gin.H{"code": "PROJECT_DISABLED", "message": "项目已停用，不能验证接入源身份"})
+	default:
+		if !writeSourceIdentityError(c, err) {
+			c.JSON(http.StatusInternalServerError, gin.H{"code": "SOURCE_SERVICE_UNAVAILABLE", "message": "接入源服务暂不可用"})
+		}
+	}
+}
+
+// writeSourceIdentityError 为所有可能触发身份门禁的接入源入口提供同一组稳定公开分类。
+func writeSourceIdentityError(c *gin.Context, err error) bool {
+	switch {
 	case errors.Is(err, ErrCloudAccountConflict):
 		c.JSON(http.StatusConflict, gin.H{"code": "CLOUD_ACCOUNT_CONFLICT", "message": "该云账号已接入 CMDB"})
 	case errors.Is(err, ErrSourceIdentityMismatch):
 		c.JSON(http.StatusConflict, gin.H{"code": "SOURCE_IDENTITY_MISMATCH", "message": "新凭证所属云账号与原接入源不一致"})
 	case errors.Is(err, ErrSourceIdentityPending):
 		c.JSON(http.StatusConflict, gin.H{"code": "SOURCE_IDENTITY_PENDING", "message": "接入源身份待验证，请先验证云账号身份"})
-	case errors.Is(err, ErrProjectDisabled):
-		c.JSON(http.StatusConflict, gin.H{"code": "PROJECT_DISABLED", "message": "项目已停用，不能验证接入源身份"})
+	case errors.Is(err, ErrSourceIdentityAlreadyVerified):
+		c.JSON(http.StatusConflict, gin.H{"code": "SOURCE_IDENTITY_ALREADY_VERIFIED", "message": "接入源身份已验证，无需重复验证"})
 	case errors.Is(err, ErrCloudAuthentication), errors.Is(err, ErrCloudPermission), errors.Is(err, ErrCloudNetwork):
 		c.JSON(http.StatusBadGateway, gin.H{"code": "CLOUD_IDENTITY_UNAVAILABLE", "message": "云账号身份验证暂不可用"})
 	default:
-		c.JSON(http.StatusInternalServerError, gin.H{"code": "SOURCE_SERVICE_UNAVAILABLE", "message": "接入源服务暂不可用"})
+		return false
 	}
+	return true
 }
 
 // UpdateSource 更新接入源非敏感配置，并允许调用方选择性替换凭证。
@@ -113,6 +126,9 @@ func (h *HTTPHandler) UpdateSource(c *gin.Context) {
 		return
 	}
 	if err != nil {
+		if writeSourceIdentityError(c, err) {
+			return
+		}
 		c.JSON(http.StatusBadRequest, gin.H{"code": "SOURCE_INVALID_INPUT", "message": "接入源参数无效"})
 		return
 	}
@@ -134,6 +150,9 @@ func (h *HTTPHandler) DeleteSource(c *gin.Context) {
 		c.JSON(http.StatusConflict, gin.H{"code": "SOURCE_DELETE_CONFLICT", "message": "接入源仍有资产或运行中的同步任务，暂不能删除"})
 		return
 	} else if err != nil {
+		if writeSourceIdentityError(c, err) {
+			return
+		}
 		c.JSON(http.StatusInternalServerError, gin.H{"code": "SOURCE_DELETE_FAILED", "message": "删除接入源失败"})
 		return
 	}
@@ -166,6 +185,9 @@ func (h *HTTPHandler) CreateSource(c *gin.Context) {
 	}
 	source, err := h.service.CreateSource(c.Request.Context(), CreateSourceInput{ProjectID: projectID, Provider: request.Provider, Name: request.Name, Region: request.Region, Credential: request.Credential, Config: request.Config, SyncIntervalMinutes: request.SyncIntervalMinutes})
 	if err != nil {
+		if writeSourceIdentityError(c, err) {
+			return
+		}
 		c.JSON(http.StatusBadRequest, gin.H{"code": "SOURCE_INVALID_INPUT", "message": "接入源参数无效"})
 		return
 	}
@@ -211,6 +233,9 @@ func (h *HTTPHandler) SyncSource(c *gin.Context) {
 		return
 	}
 	if err != nil {
+		if writeSourceIdentityError(c, err) {
+			return
+		}
 		c.JSON(http.StatusInternalServerError, gin.H{"code": "SOURCE_SYNC_FAILED", "message": "同步任务执行失败"})
 		return
 	}
@@ -237,6 +262,9 @@ func (h *HTTPHandler) TestSourceConnection(c *gin.Context) {
 	}
 	result, err := h.service.TestConnection(c.Request.Context(), projectID, sourceID, collector)
 	if err != nil {
+		if writeSourceIdentityError(c, err) {
+			return
+		}
 		if errors.Is(err, ErrPermissionDenied) {
 			c.JSON(http.StatusForbidden, gin.H{"code": "SOURCE_PERMISSION_DENIED", "message": "云账号权限不足，请授予 ECS、RDS 和负载均衡只读权限"})
 			return
@@ -269,6 +297,9 @@ func (h *HTTPHandler) RetryJob(c *gin.Context) {
 		return
 	}
 	if err != nil {
+		if writeSourceIdentityError(c, err) {
+			return
+		}
 		c.JSON(http.StatusConflict, gin.H{"code": "SYNC_JOB_NOT_RETRYABLE", "message": "同步任务当前不可重试"})
 		return
 	}

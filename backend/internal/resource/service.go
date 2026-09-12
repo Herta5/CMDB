@@ -34,6 +34,8 @@ var (
 	ErrSourceIdentityPending = errors.New("接入源身份待验证，请先验证云账号身份")
 	// ErrSourceIdentityMismatch 防止通过替换凭证将接入源指向另一个云账号。
 	ErrSourceIdentityMismatch = errors.New("新凭证所属云账号与原接入源不一致")
+	// ErrSourceIdentityAlreadyVerified 阻止历史身份验证入口重复修改已确认来源。
+	ErrSourceIdentityAlreadyVerified = errors.New("接入源身份已经验证")
 	// ErrProjectDisabled 阻止停用项目发起新的身份确认，避免恢复项目运行前产生新的外部调用。
 	ErrProjectDisabled = errors.New("项目已停用，不能验证接入源身份")
 	// ErrSchedulerRecoveryFailed 阻止恢复未完成的进程开放服务，不携带底层数据库或审计错误。
@@ -193,6 +195,14 @@ func (s *Service) requireVerified(source *Source) error {
 	return nil
 }
 
+// requirePendingIdentity 将专门身份验证入口限制为历史待验证来源，避免重复刷新验证时间或替换凭证。
+func (s *Service) requirePendingIdentity(source *Source) error {
+	if source.IdentityStatus != IdentityStatusPending {
+		return ErrSourceIdentityAlreadyVerified
+	}
+	return nil
+}
+
 // hasCredential 将缺失、null 和空字符串视为未提交；空对象仍须通过平台完整凭证校验。
 func hasCredential(raw json.RawMessage) bool {
 	value := bytes.TrimSpace(raw)
@@ -239,6 +249,9 @@ func (s *Service) VerifySourceIdentity(ctx context.Context, projectID, sourceID 
 	if err != nil {
 		return nil, err
 	}
+	if err := s.requirePendingIdentity(source); err != nil {
+		return nil, err
+	}
 	enabled, err := s.repository.ProjectIsEnabled(ctx, projectID)
 	if err != nil {
 		return nil, err
@@ -263,9 +276,6 @@ func (s *Service) VerifySourceIdentity(ctx context.Context, projectID, sourceID 
 	if err != nil {
 		return nil, err
 	}
-	if source.IdentityStatus == IdentityStatusVerified && source.CloudAccountID != accountID {
-		return nil, ErrSourceIdentityMismatch
-	}
 	updates := map[string]any{"cloud_account_id": accountID, "identity_status": IdentityStatusVerified, "identity_verified_at": s.now()}
 	if replace {
 		encrypted, err := s.cipher.Encrypt(plain)
@@ -287,8 +297,8 @@ func (s *Service) VerifySourceIdentity(ctx context.Context, projectID, sourceID 
 		if err != nil {
 			return err
 		}
-		if current.IdentityStatus == IdentityStatusVerified && current.CloudAccountID != accountID {
-			return ErrSourceIdentityMismatch
+		if err := s.requirePendingIdentity(current); err != nil {
+			return err
 		}
 		if err := repository.UpdateSource(ctx, current, updates); err != nil {
 			return err

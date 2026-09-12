@@ -412,6 +412,56 @@ func TestVerifyHistoricalSourceIdentity(t *testing.T) {
 	}
 }
 
+// TestVerifySourceIdentityRejectsVerifiedSourceBeforeCloudCall 防止专门入口重复刷新已验证来源或替换其凭证。
+func TestVerifySourceIdentityRejectsVerifiedSourceBeforeCloudCall(t *testing.T) {
+	service, _, source, _ := newResourceServiceTest(t)
+	cloudCalls := 0
+	service.adapters[ProviderAWS] = identityAdapterStub{resolve: func(context.Context, Source, []byte) (string, error) {
+		cloudCalls++
+		return "123456789012", nil
+	}}
+
+	if _, err := service.VerifySourceIdentity(context.Background(), source.ProjectID, source.ID, nil); !errors.Is(err, ErrSourceIdentityAlreadyVerified) {
+		t.Fatal("已验证来源必须返回稳定冲突")
+	}
+	if cloudCalls != 0 {
+		t.Fatal("已验证来源必须在云调用前被拒绝")
+	}
+}
+
+// TestVerifySourceIdentityRechecksPendingInsideTransaction 防止联网期间发生的并发验证被后到请求覆盖。
+func TestVerifySourceIdentityRechecksPendingInsideTransaction(t *testing.T) {
+	service, db, source, now := newResourceServiceTest(t)
+	plain := identityInput(1).Credential
+	encrypted, err := service.cipher.Encrypt(plain)
+	if err != nil {
+		t.Fatal("准备待验证凭证失败")
+	}
+	if err := db.Model(source).Updates(map[string]any{"identity_status": IdentityStatusPending, "cloud_account_id": nil, "identity_verified_at": nil, "encrypted_credential": encrypted}).Error; err != nil {
+		t.Fatal("准备待验证来源失败")
+	}
+	concurrentVerifiedAt := now.Add(-time.Minute)
+	service.adapters[ProviderAWS] = identityAdapterStub{resolve: func(context.Context, Source, []byte) (string, error) {
+		return "123456789012", db.Model(&Source{}).Where("id = ?", source.ID).Updates(map[string]any{
+			"identity_status":      IdentityStatusVerified,
+			"cloud_account_id":     "123456789012",
+			"identity_verified_at": concurrentVerifiedAt,
+		}).Error
+	}}
+
+	if _, err := service.VerifySourceIdentity(context.Background(), source.ProjectID, source.ID, nil); !errors.Is(err, ErrSourceIdentityAlreadyVerified) {
+		t.Fatal("事务内发现来源已验证时必须返回稳定冲突")
+	}
+	current, err := service.repository.FindSource(context.Background(), source.ID)
+	if err != nil || current.IdentityVerifiedAt == nil || !current.IdentityVerifiedAt.Equal(concurrentVerifiedAt) || current.EncryptedCredential != encrypted {
+		t.Fatal("后到验证不得覆盖并发请求已经提交的身份、验证时间或凭证")
+	}
+	var audits int64
+	if err := db.Model(&audit.Log{}).Where("resource_id = ? AND action = ?", source.ID, audit.ActionSourceUpdated).Count(&audits).Error; err != nil || audits != 0 {
+		t.Fatal("被并发验证阻止的请求不得留下成功审计")
+	}
+}
+
 // TestPendingSourceStartupRecoveryPreservesAssets 防止重启继续采集历史 pending 来源，或者遗留统计误报资产变化。
 func TestPendingSourceStartupRecoveryPreservesAssets(t *testing.T) {
 	service, db, source, now := newResourceServiceTest(t)

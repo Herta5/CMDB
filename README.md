@@ -69,34 +69,52 @@ unset CMDB_INITIAL_PASSWORD
    read -rp '数据库迁移管理员用户名：' DB_MIGRATION_USER
    read -rsp '数据库迁移管理员密码：' DB_MIGRATION_PASSWORD; echo
    export DB_MIGRATION_USER DB_MIGRATION_PASSWORD
-   docker compose run --rm \
-     -e DB_MIGRATION_USER \
-     -e DB_MIGRATION_PASSWORD \
-     app ./cmdb-migrate
+   migration_status=1
+   if docker compose run --rm \
+       -e DB_MIGRATION_USER \
+       -e DB_MIGRATION_PASSWORD \
+       app ./cmdb-migrate; then
+     migration_status=0
+   fi
    ```
 
 4. 确认迁移命令输出“数据库迁移成功”，再核对数据库最高版本为 `2`。重复执行同一迁移命令必须安全成功且不重复修改结构或数据。
 
    ```bash
-   docker compose exec -T postgresql \
-     psql -U postgres -d cmdb -Atc 'SELECT COALESCE(MAX(version), 0) FROM schema_migrations;'
-   docker compose run --rm \
-     -e DB_MIGRATION_USER \
-     -e DB_MIGRATION_PASSWORD \
-     app ./cmdb-migrate
+   version_status=1
+   idempotency_status=1
+   schema_version=''
+   if [ "$migration_status" -eq 0 ] && \
+      schema_version="$(docker compose exec -T postgresql psql -U postgres -d cmdb -Atc 'SELECT COALESCE(MAX(version), 0) FROM schema_migrations;')" && \
+      [ "$schema_version" = '2' ]; then
+     version_status=0
+     if docker compose run --rm \
+         -e DB_MIGRATION_USER \
+         -e DB_MIGRATION_PASSWORD \
+         app ./cmdb-migrate; then
+       idempotency_status=0
+     fi
+   fi
    ```
 
-5. 无论迁移成功或失败，都先清除当前终端中的管理员迁移凭证。只有迁移成功且版本核对为 `2` 后才启动应用。
+5. 无论迁移成功或失败，都先清除当前终端中的管理员迁移凭证。只有首次迁移、版本核对和幂等复跑全部成功后才启动应用；任一失败都保持应用停止，并立即进入已验证的备份恢复流程。
 
    ```bash
    unset DB_MIGRATION_USER DB_MIGRATION_PASSWORD
-   docker compose up -d app
-   docker compose ps
+   if [ "$migration_status" -eq 0 ] && [ "$version_status" -eq 0 ] && [ "$idempotency_status" -eq 0 ]; then
+     docker compose up -d app
+     docker compose ps
+   else
+     docker compose stop app
+     printf '%s\n' "迁移或版本核对失败，应用保持停止；请使用备份 ${CMDB_BACKUP_FILE} 按已验证流程恢复后重新升级。" >&2
+     false
+   fi
+   unset migration_status version_status idempotency_status schema_version
    ```
 
 6. 登录“云同步管理”，逐个处理显示为“待验证”的历史接入源。可以使用已安全保存的原凭证，也可以输入一套完整新凭证；验证成功前，该接入源只能读取，不能编辑、启停、删除、连接测试、立即同步或重试。
 
-迁移会先精确识别受支持旧结构，并在单版本事务中将历史接入源置为待验证、建立账号唯一约束和三类资产限制外键；未知或部分结构、孤儿及跨项目资产会安全拒绝并回滚。迁移失败时必须保持 `app` 停止，清除管理员迁移变量，并按已验证的恢复流程从升级前备份恢复；不要启动应用继续使用不匹配结构，不要用 `cmdb` 应用账号执行 DDL，也不要尝试自动降级已提交的结构版本。失败终端输出仅用于识别安全错误阶段，不应包含或记录连接密码和底层数据库详情。
+迁移会先精确识别受支持旧结构，并在单版本事务中将历史接入源置为待验证、建立账号唯一约束和三类资产限制外键；未知或部分结构、孤儿及跨项目资产会安全拒绝并回滚。上一步返回失败时不得继续执行后续身份验证：必须确认 `app` 仍为停止状态，使用第 2 步的 `$CMDB_BACKUP_FILE` 按已验证恢复流程还原并核验数据库，再从第 3 步重新升级。不要启动应用继续使用不匹配结构，不要用 `cmdb` 应用账号执行 DDL，也不要尝试自动降级已提交的结构版本。失败终端输出仅用于识别安全错误阶段，不应包含或记录连接密码和底层数据库详情。
 
 ## API 与权限
 
