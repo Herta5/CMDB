@@ -121,6 +121,60 @@ beforeEach(() => {
 })
 
 describe('CMDB 第一阶段应用流程', () => {
+  for (const operation of ['验证', '新建', '编辑'] as const) {
+    for (const outcome of ['成功', '失败'] as const) {
+      for (const transition of ['切换项目', '关闭后重开'] as const) {
+        it(`${operation}迟到${outcome}不得干扰${transition}后的新弹窗和输入`, async () => {
+          let finish!: () => void
+          request.defaults.adapter = config => {
+            const source = { ...awsSourceDTO, project_id: config.url?.includes('/projects/2/') ? 2 : 1, identity_status: operation === '验证' ? 'pending' : 'verified' }
+            if (config.method === 'post' || config.method === 'put') return new Promise((resolve, reject) => {
+              finish = () => {
+                const response = { config, status: outcome === '成功' ? 200 : 502, statusText: '处理结果', headers: {}, data: outcome === '成功' ? source : { code: 'SOURCE_SERVICE_UNAVAILABLE', message: '提交失败，请重试' } }
+                if (outcome === '成功') resolve(response); else reject(new AxiosError('提交失败', undefined, config, undefined, response))
+              }
+            })
+            return Promise.resolve(resourceResponse(config, operation === '验证' ? [source, { ...source, id: 10, name: '另一历史来源' }] : [source]))
+          }
+          selectManagedProject()
+          const projects = useProjectStore()
+          projects.projects.push({ ...projects.projects[0]!, id: 2, code: 'cloud-b', name: '云项目乙' })
+          const { root, app } = await mount(CloudSyncManagementPage)
+          try {
+            const open = async () => {
+              const label = operation === '验证' ? '验证身份' : operation === '新建' ? '创建云同步' : '编辑'
+              all(root).find(entry => entry.type === 'button' && pageText(entry) === label)!.props.onClick()
+              await flush()
+              if (operation === '验证') enter(root, 'verification-mode', 'new')
+              else if (operation === '新建') enter(root, 'provider', 'aws')
+              await flush()
+            }
+            const keyField = operation === '验证' ? 'verification-access-key-id' : 'access-key-id'
+            const secretField = operation === '验证' ? 'verification-secret' : 'secret'
+            await open()
+            enter(root, keyField, '虚构旧输入'); enter(root, secretField, '虚构旧秘密')
+            const oldSubmission = Promise.resolve(all(root).find(entry => entry.type === 'form')!.props.onSubmit({ preventDefault() {} })).catch(() => {})
+            await flush()
+            if (transition === '切换项目') projects.selectProject(2)
+            else all(root).find(entry => entry.type === 'button' && pageText(entry) === '取消')!.props.onClick()
+            await flush()
+            await open()
+            expect(all(root).find(entry => entry.props.name === keyField)?.value).toBe('')
+            enter(root, keyField, '虚构新输入'); enter(root, secretField, '虚构新秘密')
+            await flush()
+            finish()
+            await oldSubmission
+            await flush()
+            expect(all(root).some(entry => entry.type === 'form')).toBe(true)
+            expect(all(root).find(entry => entry.props.name === keyField)?.value).toBe('虚构新输入')
+            expect(all(root).find(entry => entry.props.name === secretField)?.value).toBe('虚构新秘密')
+            expect(useResourceStore().sources.every(source => source.projectId === (transition === '切换项目' ? 2 : 1))).toBe(true)
+          } finally { app.unmount() }
+        })
+      }
+    }
+  }
+
   it('登录恢复项目地址、只接受授权项目切换，并在退出后阻止访问', async () => {
     await router.push('/projects/1')
     expect(router.currentRoute.value.path).toBe('/login')

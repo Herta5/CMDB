@@ -83,6 +83,19 @@ func writeVerifySourceIdentityError(c *gin.Context, err error) {
 
 // writeSourceIdentityError 为所有可能触发身份门禁的接入源入口提供同一组稳定公开分类。
 func writeSourceIdentityError(c *gin.Context, err error) bool {
+	if writeSourceIdentityConflict(c, err) {
+		return true
+	}
+	switch {
+	case errors.Is(err, ErrCloudAuthentication), errors.Is(err, ErrCloudPermission), errors.Is(err, ErrCloudNetwork):
+		c.JSON(http.StatusBadGateway, gin.H{"code": "CLOUD_IDENTITY_UNAVAILABLE", "message": "云账号身份验证暂不可用"})
+		return true
+	}
+	return false
+}
+
+// writeSourceIdentityConflict 只处理身份状态与归属门禁，不把连接 Probe 的错误当作身份识别故障。
+func writeSourceIdentityConflict(c *gin.Context, err error) bool {
 	switch {
 	case errors.Is(err, ErrCloudAccountConflict):
 		c.JSON(http.StatusConflict, gin.H{"code": "CLOUD_ACCOUNT_CONFLICT", "message": "该云账号已接入 CMDB"})
@@ -92,12 +105,22 @@ func writeSourceIdentityError(c *gin.Context, err error) bool {
 		c.JSON(http.StatusConflict, gin.H{"code": "SOURCE_IDENTITY_PENDING", "message": "接入源身份待验证，请先验证云账号身份"})
 	case errors.Is(err, ErrSourceIdentityAlreadyVerified):
 		c.JSON(http.StatusConflict, gin.H{"code": "SOURCE_IDENTITY_ALREADY_VERIFIED", "message": "接入源身份已验证，无需重复验证"})
-	case errors.Is(err, ErrCloudAuthentication), errors.Is(err, ErrCloudPermission), errors.Is(err, ErrCloudNetwork):
-		c.JSON(http.StatusBadGateway, gin.H{"code": "CLOUD_IDENTITY_UNAVAILABLE", "message": "云账号身份验证暂不可用"})
 	default:
 		return false
 	}
 	return true
+}
+
+// writeSourceMutationError 仅有限输入领域错误属于 400，未知事务、加密和依赖失败统一安全 500。
+func writeSourceMutationError(c *gin.Context, err error) {
+	if writeSourceIdentityError(c, err) {
+		return
+	}
+	if errors.Is(err, ErrInvalidSourceInput) || errors.Is(err, ErrInvalidProviderCredential) || errors.Is(err, ErrInvalidProviderConfig) {
+		c.JSON(http.StatusBadRequest, gin.H{"code": "SOURCE_INVALID_INPUT", "message": "接入源参数无效"})
+		return
+	}
+	c.JSON(http.StatusInternalServerError, gin.H{"code": "SOURCE_SERVICE_UNAVAILABLE", "message": "接入源服务暂不可用"})
 }
 
 // UpdateSource 更新接入源非敏感配置，并允许调用方选择性替换凭证。
@@ -126,10 +149,7 @@ func (h *HTTPHandler) UpdateSource(c *gin.Context) {
 		return
 	}
 	if err != nil {
-		if writeSourceIdentityError(c, err) {
-			return
-		}
-		c.JSON(http.StatusBadRequest, gin.H{"code": "SOURCE_INVALID_INPUT", "message": "接入源参数无效"})
+		writeSourceMutationError(c, err)
 		return
 	}
 	c.JSON(http.StatusOK, source)
@@ -185,10 +205,7 @@ func (h *HTTPHandler) CreateSource(c *gin.Context) {
 	}
 	source, err := h.service.CreateSource(c.Request.Context(), CreateSourceInput{ProjectID: projectID, Provider: request.Provider, Name: request.Name, Region: request.Region, Credential: request.Credential, Config: request.Config, SyncIntervalMinutes: request.SyncIntervalMinutes})
 	if err != nil {
-		if writeSourceIdentityError(c, err) {
-			return
-		}
-		c.JSON(http.StatusBadRequest, gin.H{"code": "SOURCE_INVALID_INPUT", "message": "接入源参数无效"})
+		writeSourceMutationError(c, err)
 		return
 	}
 	c.JSON(http.StatusCreated, source)
@@ -262,7 +279,7 @@ func (h *HTTPHandler) TestSourceConnection(c *gin.Context) {
 	}
 	result, err := h.service.TestConnection(c.Request.Context(), projectID, sourceID, collector)
 	if err != nil {
-		if writeSourceIdentityError(c, err) {
+		if writeSourceIdentityConflict(c, err) {
 			return
 		}
 		if errors.Is(err, ErrPermissionDenied) {

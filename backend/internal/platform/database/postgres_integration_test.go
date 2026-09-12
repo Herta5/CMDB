@@ -237,7 +237,60 @@ type postgresTestDatabase struct {
 	db            *gorm.DB
 }
 
-// TestPostgreSQLMigrationUpgradesLegacySchema 验证无版本旧库被精确识别、历史来源保持待验证，且重复迁移不改写版本。
+// TestPostgreSQLMigrationRejectsLegacyConfigBeforeDDL 验证历史配置必须由旧版显式清空，迁移不得先改结构再回滚。
+func TestPostgreSQLMigrationRejectsLegacyConfigBeforeDDL(t *testing.T) {
+	for _, versioned := range []bool{false, true} {
+		for _, config := range []string{`{"region_option":"虚构历史配置"}`, `{"secret":"虚构敏感配置"}`, `[]`, `null`, `"虚构字符串"`} {
+			t.Run(fmt.Sprintf("已登记版本=%t/配置形态=%d", versioned, len(config)), func(t *testing.T) {
+				fixture := newPostgresTestDatabase(t)
+				installLegacySchema(t, fixture, true)
+				projectID := insertLegacyProject(t, fixture.db, "配置迁移项目")
+				sourceID := insertLegacySource(t, fixture.db, projectID, "aws", "历史配置来源")
+				requireExec(t, fixture.db, "UPDATE resource_sources SET config = ?::jsonb WHERE id = ?", "准备历史配置失败", config, sourceID)
+				if versioned {
+					if err := createLegacyVersionRecord(fixture.db); err != nil {
+						t.Fatal("登记旧版本失败")
+					}
+				}
+				var before string
+				if err := fixture.db.Raw("SELECT row_to_json(s)::text FROM resource_sources s WHERE id = ?", sourceID).Scan(&before).Error; err != nil {
+					t.Fatal("读取迁移前来源失败")
+				}
+				// sequence 不随事务回滚，能够证明迁移从未尝试 DDL，而不只是最终结构相同。
+				execScript(t, fixture.configuration, `CREATE SEQUENCE migration_ddl_attempts;
+CREATE FUNCTION observe_migration_ddl() RETURNS event_trigger LANGUAGE plpgsql AS $$ BEGIN PERFORM nextval('migration_ddl_attempts'); END $$;
+CREATE EVENT TRIGGER observe_migration_ddl ON ddl_command_start EXECUTE FUNCTION observe_migration_ddl();`, "建立迁移前置检查探针失败")
+				err := Migrate(context.Background(), fixture.db)
+				if err == nil {
+					t.Error("非空历史配置必须拒绝升级")
+				} else {
+					if !strings.Contains(err.Error(), "旧版本") || !strings.Contains(err.Error(), "清空") {
+						t.Error("迁移错误必须提供旧版本显式清空的恢复步骤")
+					}
+					for _, forbidden := range []string{config, "虚构", "历史配置来源", "配置迁移项目", "SELECT", "resource_sources"} {
+						if strings.Contains(err.Error(), forbidden) {
+							t.Error("迁移错误不得泄露历史配置、归属或数据库正文")
+						}
+					}
+				}
+				var attempted bool
+				if err := fixture.db.Raw("SELECT is_called FROM migration_ddl_attempts").Scan(&attempted).Error; err != nil || attempted {
+					t.Error("拒绝必须发生在任何结构变化之前")
+				}
+				var after string
+				if err := fixture.db.Raw("SELECT row_to_json(s)::text FROM resource_sources s WHERE id = ?", sourceID).Scan(&after).Error; err != nil || after != before {
+					t.Error("拒绝迁移必须完整保留原来源数据")
+				}
+				if relationExists(t, fixture.db, "schema_migrations") != versioned || columnExists(t, fixture.db, "resource_sources", "identity_status") {
+					t.Error("拒绝迁移不得改变原版本和身份结构")
+				}
+				assertDeleteRule(t, fixture.db, "fk_resources_servers_source", "CASCADE")
+			})
+		}
+	}
+}
+
+// TestPostgreSQLMigrationUpgradesLegacySchema 验证空配置旧库被精确识别、历史来源保持待验证，且重复迁移不改写版本。
 func TestPostgreSQLMigrationUpgradesLegacySchema(t *testing.T) {
 	testDatabase := newPostgresTestDatabase(t)
 	installLegacySchema(t, testDatabase, true)
@@ -695,8 +748,8 @@ func insertLegacySource(t *testing.T, database *gorm.DB, projectID int64, provid
 	t.Helper()
 	var id int64
 	if err := database.Raw(`
-		INSERT INTO resource_sources (project_id, provider, name, encrypted_credential)
-		VALUES (?, ?, ?, 'integration-ciphertext') RETURNING id
+		INSERT INTO resource_sources (project_id, provider, name, encrypted_credential, config)
+		VALUES (?, ?, ?, 'integration-ciphertext', '{}') RETURNING id
 	`, projectID, provider, name).Row().Scan(&id); err != nil {
 		t.Fatal("写入版本 1 接入源失败")
 	}

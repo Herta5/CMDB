@@ -131,6 +131,10 @@ func migrationDatabaseAtVersion(t *testing.T, version int) *gorm.DB {
 	if err := db.Exec("INSERT INTO schema_migrations (version) VALUES (?)", version).Error; err != nil {
 		t.Fatal("写入迁移版本失败")
 	}
+	// 版本框架也执行来源配置前置检查；具体 JSONB 语义仍由 PostgreSQL 17 场景验证。
+	if err := db.Exec("CREATE TABLE resource_sources (id INTEGER PRIMARY KEY, config TEXT NOT NULL DEFAULT '{}')").Error; err != nil {
+		t.Fatal("创建迁移来源配置夹具失败")
+	}
 	return db
 }
 

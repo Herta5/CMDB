@@ -28,6 +28,8 @@ type Service struct {
 var ErrSyncAlreadyRunning = errors.New("接入源同步任务正在执行")
 
 var (
+	// ErrInvalidSourceInput 只标识调用方可纠正的来源基础字段和周期错误，与内部失败分离。
+	ErrInvalidSourceInput = errors.New("接入源参数无效")
 	// ErrCloudAccountConflict 表示同平台云账号已由一个接入源占用，不披露其归属。
 	ErrCloudAccountConflict = errors.New("该云账号已接入 CMDB")
 	// ErrSourceIdentityPending 阻止未确认归属的历史来源执行普通写入或采集。
@@ -84,14 +86,14 @@ func (s *Service) CreateSource(ctx context.Context, input CreateSourceInput) (*S
 		return nil, errors.New("资源服务不可用")
 	}
 	if input.ProjectID == 0 || input.Name == "" || !validProvider(input.Provider) || len(input.Credential) == 0 || !json.Valid(input.Credential) {
-		return nil, errors.New("接入源参数无效")
+		return nil, ErrInvalidSourceInput
 	}
 	interval := input.SyncIntervalMinutes
 	if interval == 0 {
 		interval = 60
 	}
 	if interval < 5 || interval > 10080 {
-		return nil, errors.New("同步周期无效")
+		return nil, ErrInvalidSourceInput
 	}
 	config := input.Config
 	if len(config) == 0 {
@@ -132,7 +134,7 @@ func (s *Service) UpdateSource(ctx context.Context, projectID, sourceID uint64, 
 		return nil, err
 	}
 	if input.Name == "" || input.SyncIntervalMinutes < 5 || input.SyncIntervalMinutes > 10080 {
-		return nil, errors.New("接入源参数无效")
+		return nil, ErrInvalidSourceInput
 	}
 	config := input.Config
 	if len(config) == 0 {
@@ -354,7 +356,11 @@ func (s *Service) ListSources(ctx context.Context, projectID uint64, provider st
 // FindSourceForProject 验证接入源确实属于当前项目。
 func (s *Service) FindSourceForProject(ctx context.Context, projectID, sourceID uint64) (*Source, error) {
 	source, err := s.repository.FindSource(ctx, sourceID)
-	if err != nil || source.ProjectID != projectID {
+	if err != nil {
+		// 数据库故障不是对象不存在，保留错误类别供 HTTP 边界返回安全内部故障。
+		return nil, err
+	}
+	if source.ProjectID != projectID {
 		return nil, gorm.ErrRecordNotFound
 	}
 	return source, nil

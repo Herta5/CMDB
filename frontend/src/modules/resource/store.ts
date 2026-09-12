@@ -19,6 +19,7 @@ export const useResourceStore = defineStore('cmdb-resource', () => {
   const resourceType = ref(''); const assetStatus = ref(''); const page = ref(1); const pageSize = ref(20); const total = ref(0)
   let requestVersion = 0
   let verificationToken = 0
+  let sourceMutationToken = 0
   let activeProjectId: number | null = null
 
   /** 新项目请求立即作废旧数据与提交状态，晚到响应只能在同一版本内写回。 */
@@ -30,6 +31,7 @@ export const useResourceStore = defineStore('cmdb-resource', () => {
     if (projectChanged) {
       // 新项目不会继承旧项目的身份验证按钮状态，旧请求只能自行清理凭证。
       ++verificationToken
+      ++sourceMutationToken
       sources.value = []; resources.value = []; jobs.value = []; total.value = 0
       connectionMessage.value = ''; connectionError.value = ''
       syncingSourceId.value = null; testingSourceId.value = null; retryingJobId.value = null; verifyingSourceId.value = null
@@ -73,10 +75,31 @@ export const useResourceStore = defineStore('cmdb-resource', () => {
   }
   /** 写操作完成后按调用页面恢复单平台或双平台视图。 */
   async function reload(projectId: number, provider: Provider, syncManagement: boolean) { if (syncManagement) await loadSyncManagement(projectId); else await load(projectId, provider) }
-  /** 新建后刷新统一视图，确保资源和任务数据来自服务端。 */
-  async function create(projectId: number, provider: Provider, input: SourceInput, syncManagement = false) { await createSourceRequest(projectId, { ...input, provider }); await reload(projectId, provider, syncManagement) }
-  /** 更新后刷新统一视图。 */
-  async function update(projectId: number, provider: Provider, sourceId: number, input: SourceInput, syncManagement = false) { await updateSourceRequest(projectId, sourceId, { ...input, provider }); await reload(projectId, provider, syncManagement) }
+  /** 创建与编辑共享提交归属；迟到请求只清理自身凭证，不得重新接管其他项目。 */
+  async function mutateSource(projectId: number, provider: Provider, input: SourceInput, syncManagement: boolean, request: () => Promise<unknown>) {
+    activeProjectId ??= projectId
+    const token = ++sourceMutationToken
+    const version = requestVersion
+    let finalVersion = version
+    let failure: unknown
+    mutationError.value = ''
+    try { await request() } catch (error) { failure = error }
+    finally { clearCredential(input.credential) }
+    if (version === requestVersion && token === sourceMutationToken) {
+      const refresh = reload(projectId, provider, syncManagement)
+      // 刷新同步取得自己的读版本；等待完成后读取全局版本会冒用新项目的版本。
+      finalVersion = requestVersion
+      await refresh
+    }
+    if (failure) {
+      if (finalVersion === requestVersion && token === sourceMutationToken) mutationError.value = (failure as { response?: { data?: { message?: string } } })?.response?.data?.message || '保存接入源失败，请稍后重试'
+      throw failure
+    }
+  }
+  /** 新建后刷新仍有效的页面视图。 */
+  async function create(projectId: number, provider: Provider, input: SourceInput, syncManagement = false) { await mutateSource(projectId, provider, input, syncManagement, () => createSourceRequest(projectId, { ...input, provider })) }
+  /** 编辑后刷新仍有效的页面视图。 */
+  async function update(projectId: number, provider: Provider, sourceId: number, input: SourceInput, syncManagement = false) { await mutateSource(projectId, provider, input, syncManagement, () => updateSourceRequest(projectId, sourceId, { ...input, provider })) }
   /** 服务端确认不存在资产或活动任务依赖后删除来源，随后刷新页面。 */
   async function remove(projectId: number, provider: Provider, sourceId: number, syncManagement = false) { await deleteSourceRequest(projectId, sourceId); await reload(projectId, provider, syncManagement) }
   /** 使用现有凭证执行无副作用连接测试。 */
@@ -99,6 +122,8 @@ export const useResourceStore = defineStore('cmdb-resource', () => {
   }
   /** 待验证来源仅可确认身份；无新凭证时服务端使用已安全保存的凭证。 */
   async function verifyIdentity(projectId: number, provider: Provider, sourceId: number, credential?: Record<string, unknown>, syncManagement = false) {
+    // 首次直接提交也建立项目归属，后续自身刷新不应被当成项目切换。
+    activeProjectId ??= projectId
     verifyingSourceId.value = sourceId; mutationError.value = ''
     const currentVerificationToken = ++verificationToken
     const verificationVersion = requestVersion
@@ -113,12 +138,13 @@ export const useResourceStore = defineStore('cmdb-resource', () => {
       // 新项目或另一来源验证已接管提交状态时，旧请求不得解除其按钮锁定。
       if (currentVerificationToken === verificationToken) verifyingSourceId.value = null
       // 只允许当前项目上下文刷新服务端事实，项目切换后的旧请求不得覆盖新列表。
-      if (verificationVersion === requestVersion) {
-        try { await reload(projectId, provider, syncManagement) } catch (error) { if (!verificationError) throw error }
-        finally { finalVersion = requestVersion }
+      if (verificationVersion === requestVersion && currentVerificationToken === verificationToken) {
+        const refresh = reload(projectId, provider, syncManagement)
+        finalVersion = requestVersion
+        try { await refresh } catch (error) { if (!verificationError) throw error }
       }
     }
-    if (verificationError) { if (finalVersion === requestVersion) mutationError.value = verificationFailureMessage(verificationError); throw verificationError }
+    if (verificationError) { if (finalVersion === requestVersion && currentVerificationToken === verificationToken) mutationError.value = verificationFailureMessage(verificationError); throw verificationError }
   }
   return { sources, resources, jobs, state, mutationError, syncingSourceId, testingSourceId, retryingJobId, verifyingSourceId, connectionMessage, connectionError, resourceType, assetStatus, page, pageSize, total, load, loadSyncManagement, create, update, remove, testConnection, toggle, retry, sync, verifyIdentity }
 })

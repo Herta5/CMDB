@@ -702,6 +702,116 @@ func TestVerifySourceIdentityAPI(t *testing.T) {
 	}
 }
 
+// TestSourceUpdateReadFailureIsInternal 验证编辑前数据库读取故障不能伪装成来源不存在。
+func TestSourceUpdateReadFailureIsInternal(t *testing.T) {
+	server, password, db := integrationServerWithDatabase(t)
+	admin := loginUser(t, server, "operator", password)
+	var parent project.Project
+	decodeIntegration(t, integrationRequest(t, server, admin, http.MethodPost, "/api/v1/projects", map[string]any{"code": "read-failure", "name": "读取故障项目"}, http.StatusCreated), &parent)
+	source := integrationIdentitySource(t, db, parent.ID, cloudresource.IdentityStatusVerified, "111111111111", "identity-ok")
+	if err := db.Callback().Query().Before("gorm:query").Register("integration:source_read_failure", func(tx *gorm.DB) {
+		if tx.Statement.Table == "resource_sources" {
+			tx.AddError(fmt.Errorf("虚构来源数据库连接原文"))
+		}
+	}); err != nil {
+		t.Fatal("安装读取失败夹具失败")
+	}
+	response := integrationRequest(t, server, admin, http.MethodPut, fmt.Sprintf("/api/v1/projects/%d/sources/%d", parent.ID, source.ID), map[string]any{"name": "新名称", "sync_interval_minutes": 60}, http.StatusInternalServerError)
+	assertIdentityVerificationError(t, response.Body.String(), "SOURCE_SERVICE_UNAVAILABLE")
+	if strings.Contains(response.Body.String(), "虚构来源数据库") {
+		t.Fatal("数据库连接故障不得公开原文")
+	}
+	if err := db.Callback().Query().Remove("integration:source_read_failure"); err != nil {
+		t.Fatal("撤销读取故障失败")
+	}
+	var current cloudresource.Source
+	if err := db.First(&current, source.ID).Error; err != nil || current.Name != source.Name || current.EncryptedCredential != source.EncryptedCredential {
+		t.Fatal("读取失败不得影响已保存来源")
+	}
+}
+
+// TestSourceProbeErrorsKeepConnectionClassification 验证 Probe 认证与权限失败不会误用身份识别错误分类。
+func TestSourceProbeErrorsKeepConnectionClassification(t *testing.T) {
+	for _, scenario := range []struct {
+		name, code string
+		status     int
+	}{
+		{"集成探测权限失败", "SOURCE_PERMISSION_DENIED", http.StatusForbidden},
+		{"集成探测认证失败", "SOURCE_AUTHENTICATION_FAILED", http.StatusBadGateway},
+	} {
+		t.Run(scenario.name, func(t *testing.T) {
+			server, password, db := integrationServerWithDatabase(t)
+			admin := loginUser(t, server, "operator", password)
+			var parent project.Project
+			decodeIntegration(t, integrationRequest(t, server, admin, http.MethodPost, "/api/v1/projects", map[string]any{"code": "probe-errors", "name": "探测错误项目"}, http.StatusCreated), &parent)
+			source := integrationIdentitySource(t, db, parent.ID, cloudresource.IdentityStatusVerified, "111111111111", "identity-ok")
+			if err := db.Model(&source).Update("name", scenario.name).Error; err != nil {
+				t.Fatal("准备探测场景失败")
+			}
+			response := integrationRequest(t, server, admin, http.MethodPost, fmt.Sprintf("/api/v1/projects/%d/sources/%d/test", parent.ID, source.ID), nil, scenario.status)
+			assertIdentityVerificationError(t, response.Body.String(), scenario.code)
+			if strings.Contains(response.Body.String(), "虚构探测原文") {
+				t.Fatal("连接测试不得回显云原文")
+			}
+			var audits []audit.Log
+			if err := db.Where("action = ?", audit.ActionSourceConnectionTested).Find(&audits).Error; err != nil || len(audits) != 1 {
+				t.Fatal("连接失败必须记录一次安全审计")
+			}
+			if strings.Contains(string(audits[0].Detail), "虚构探测原文") {
+				t.Fatal("失败审计不得保存云原文")
+			}
+		})
+	}
+}
+
+// TestSourceMutationInternalFailureIsSafeAndAtomic 验证真实来源和审计写入后内部失败会一起回滚并返回安全 500。
+func TestSourceMutationInternalFailureIsSafeAndAtomic(t *testing.T) {
+	for _, method := range []string{http.MethodPost, http.MethodPut} {
+		t.Run(map[string]string{http.MethodPost: "创建", http.MethodPut: "编辑"}[method], func(t *testing.T) {
+			server, password, db := integrationServerWithDatabase(t)
+			admin := loginUser(t, server, "operator", password)
+			var parent project.Project
+			decodeIntegration(t, integrationRequest(t, server, admin, http.MethodPost, "/api/v1/projects", map[string]any{"code": "internal-errors", "name": "内部错误项目"}, http.StatusCreated), &parent)
+			path := fmt.Sprintf("/api/v1/projects/%d/sources", parent.ID)
+			var original cloudresource.Source
+			if method == http.MethodPut {
+				original = integrationIdentitySource(t, db, parent.ID, cloudresource.IdentityStatusVerified, "111111111111", "identity-ok")
+				path += fmt.Sprintf("/%d", original.ID)
+			}
+			// 故障位于真实审计 INSERT 之后，必须回滚已发生的来源与审计写入。
+			if err := db.Callback().Create().After("gorm:create").Register("integration:source_audit_failure", func(tx *gorm.DB) {
+				if tx.Statement.Table == "audit_logs" {
+					tx.AddError(fmt.Errorf("虚构数据库审计正文及敏感参数"))
+				}
+			}); err != nil {
+				t.Fatal("安装审计失败夹具失败")
+			}
+			response := integrationRequest(t, server, admin, method, path, map[string]any{"provider": "aws", "name": "未提交的新名称", "region": "ap-east-1", "credential": map[string]string{"access_key_id": "identity-ok", "secret_access_key": "identity-test-secret"}, "config": map[string]any{}, "enabled": true, "sync_interval_minutes": 60}, http.StatusInternalServerError)
+			assertIdentityVerificationError(t, response.Body.String(), "SOURCE_SERVICE_UNAVAILABLE")
+			if strings.Contains(response.Body.String(), "虚构数据库") {
+				t.Fatal("内部故障不得暴露数据库原文")
+			}
+			var count int64
+			if err := db.Model(&audit.Log{}).Where("action IN ?", []string{audit.ActionSourceCreated, audit.ActionSourceUpdated}).Count(&count).Error; err != nil || count != 0 {
+				t.Fatal("失败必须回滚来源成功审计")
+			}
+			var sources []cloudresource.Source
+			if err := db.Find(&sources).Error; err != nil {
+				t.Fatal("读取回滚结果失败")
+			}
+			if method == http.MethodPost {
+				if len(sources) != 0 {
+					t.Fatal("失败创建不得保留来源")
+				}
+			} else {
+				if len(sources) != 1 || sources[0].Name != original.Name || sources[0].Region != original.Region || sources[0].EncryptedCredential != original.EncryptedCredential || sources[0].CloudAccountID != original.CloudAccountID || !sources[0].IdentityVerifiedAt.Equal(*original.IdentityVerifiedAt) || string(sources[0].Config) != string(original.Config) {
+					t.Fatal("失败编辑必须保留名称、配置、凭证和身份")
+				}
+			}
+		})
+	}
+}
+
 // TestSourceIdentityErrorsUseStableHTTPContract 验证普通接入源入口不会把身份领域错误降级为泛化失败。
 func TestSourceIdentityErrorsUseStableHTTPContract(t *testing.T) {
 	server, password, db := integrationServerWithDatabase(t)
@@ -717,6 +827,8 @@ func TestSourceIdentityErrorsUseStableHTTPContract(t *testing.T) {
 		status int
 		code   string
 	}{
+		{name: "创建基础字段无效", body: map[string]any{"provider": "aws", "name": "", "credential": map[string]string{"access_key_id": "identity-ok", "secret_access_key": "identity-secret"}}, status: http.StatusBadRequest, code: "SOURCE_INVALID_INPUT"},
+		{name: "创建周期无效", body: map[string]any{"provider": "aws", "name": "周期无效", "sync_interval_minutes": 1, "credential": map[string]string{"access_key_id": "identity-ok", "secret_access_key": "identity-secret"}}, status: http.StatusBadRequest, code: "SOURCE_INVALID_INPUT"},
 		{name: "创建账号冲突", body: map[string]any{"provider": "aws", "name": "重复账号", "region": "ap-east-1", "credential": map[string]any{"access_key_id": "identity-conflict", "secret_access_key": "identity-secret"}}, status: http.StatusConflict, code: "CLOUD_ACCOUNT_CONFLICT"},
 		{name: "创建时云身份不可用", body: map[string]any{"provider": "aws", "name": "云故障账号", "region": "ap-east-1", "credential": map[string]any{"access_key_id": "identity-network", "secret_access_key": "identity-secret"}}, status: http.StatusBadGateway, code: "CLOUD_IDENTITY_UNAVAILABLE"},
 	} {
@@ -727,6 +839,8 @@ func TestSourceIdentityErrorsUseStableHTTPContract(t *testing.T) {
 	}
 
 	verified := integrationIdentitySource(t, db, parent.ID, cloudresource.IdentityStatusVerified, "111111111111", "identity-ok")
+	invalidUpdate := integrationRequest(t, server, admin, http.MethodPut, projectPath+"/sources/"+strconv.FormatUint(verified.ID, 10), map[string]any{"name": "", "sync_interval_minutes": 60}, http.StatusBadRequest)
+	assertIdentityVerificationError(t, invalidUpdate.Body.String(), "SOURCE_INVALID_INPUT")
 	updateResponse := integrationRequest(t, server, admin, http.MethodPut, projectPath+"/sources/"+strconv.FormatUint(verified.ID, 10), map[string]any{
 		"name": "替换凭证", "region": "ap-east-1", "credential": map[string]any{"access_key_id": "identity-object", "secret_access_key": "identity-secret"}, "config": map[string]any{}, "enabled": true, "sync_interval_minutes": 60,
 	}, http.StatusConflict)
@@ -897,7 +1011,13 @@ func (integrationCollector) Collect(_ context.Context, source cloudresource.Sour
 }
 
 // Probe 为集成测试提供不含快照的轻量连接结果，避免连接测试与同步行为混淆。
-func (integrationCollector) Probe(context.Context, cloudresource.Source, []byte) ([]cloudresource.CollectionResult, error) {
+func (integrationCollector) Probe(_ context.Context, source cloudresource.Source, _ []byte) ([]cloudresource.CollectionResult, error) {
+	if source.Name == "集成探测权限失败" {
+		return nil, fmt.Errorf("虚构探测原文：%w", cloudresource.ErrPermissionDenied)
+	}
+	if source.Name == "集成探测认证失败" {
+		return nil, fmt.Errorf("虚构探测原文：%w", cloudresource.ErrAuthenticationFailed)
+	}
 	return []cloudresource.CollectionResult{{ResourceType: "ec2"}}, nil
 }
 

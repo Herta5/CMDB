@@ -7,8 +7,86 @@ vi.mock('@/utils/request', () => ({ default: { get, post, put, delete: remove } 
 
 import { useResourceStore } from './store'
 
+/** 可控传输只延迟外部响应，项目归属、请求转换和状态更新仍执行真实实现。 */
+function deferred<T = any>() { let resolve!: (value: T) => void; let reject!: (error: unknown) => void; const promise = new Promise<T>((yes, no) => { resolve = yes; reject = no }); return { promise, resolve, reject } }
+function projectResponse(url: string, options?: { params?: { provider?: string } }) {
+  const projectId = Number(url.split('/')[2])
+  if (url.endsWith('/sources')) return [{ id: projectId * 10, project_id: projectId, provider: options?.params?.provider, name: `项目${projectId}来源`, region: '', identity_status: 'pending', credential_hint: '已安全配置', enabled: true, sync_interval_minutes: 60 }]
+  return { items: [{ id: projectId * 100, source_id: projectId * 10, status: 'failed', trigger: 'manual', statistics: {}, error_summary: '', started_at: '' }], total: 1, page: 1, page_size: 20 }
+}
+
 describe('云资源状态层', () => {
   beforeEach(() => { setActivePinia(createPinia()); get.mockReset(); post.mockReset(); put.mockReset(); remove.mockReset() })
+
+  it('验证失败后的旧项目刷新返回时不得把错误写入新项目', async () => {
+    get.mockImplementation((url, options) => Promise.resolve(projectResponse(url, options)))
+    const store = useResourceStore()
+    await store.loadSyncManagement(1)
+    const refresh = deferred(); const refreshStarted = deferred<void>()
+    get.mockImplementation((url, options) => { if (url.includes('/1/') && url.endsWith('/sources')) { refreshStarted.resolve(); return refresh.promise }; return Promise.resolve(projectResponse(url, options)) })
+    post.mockRejectedValue({ response: { data: { message: '旧项目验证失败' } } })
+    const verification = store.verifyIdentity(1, 'aws', 10, undefined, true).catch(error => error)
+    await refreshStarted.promise
+    await store.loadSyncManagement(2)
+    refresh.resolve(projectResponse('/projects/1/sources', { params: { provider: 'aws' } }))
+    await verification
+    expect(store.sources.map(source => source.projectId)).toEqual([2, 2])
+    expect(store.jobs.map(job => job.sourceId)).toEqual([20, 20])
+    expect(store.mutationError).toBe('')
+  })
+
+  for (const operation of ['新建', '编辑'] as const) {
+    it(`${operation}失败后的刷新迟到不得把旧项目错误写回新项目`, async () => {
+      get.mockImplementation((url, options) => Promise.resolve(projectResponse(url, options)))
+      const store = useResourceStore()
+      await store.loadSyncManagement(1)
+      const refresh = deferred(); const refreshStarted = deferred<void>()
+      get.mockImplementation((url, options) => { if (url.includes('/1/') && url.endsWith('/sources')) { refreshStarted.resolve(); return refresh.promise }; return Promise.resolve(projectResponse(url, options)) })
+      post.mockRejectedValue({ response: { data: { message: '旧项目保存失败' } } }); put.mockRejectedValue({ response: { data: { message: '旧项目保存失败' } } })
+      const input = { provider: 'aws' as const, name: '来源', region: '', config: {}, syncIntervalMinutes: 60 }
+      const pending = (operation === '新建' ? store.create(1, 'aws', input, true) : store.update(1, 'aws', 10, input, true)).catch(error => error)
+      await refreshStarted.promise
+      await store.loadSyncManagement(2)
+      refresh.resolve(projectResponse('/projects/1/sources', { params: { provider: 'aws' } }))
+      await pending
+      expect(store.sources.map(source => source.projectId)).toEqual([2, 2])
+      expect(store.jobs.map(job => job.sourceId)).toEqual([20, 20])
+      expect(store.mutationError).toBe('')
+    })
+    for (const outcome of ['成功', '失败'] as const) {
+      it(`${operation}迟到${outcome}不得刷新旧项目或污染新项目状态`, async () => {
+        get.mockImplementation((url, options) => Promise.resolve(projectResponse(url, options)))
+        const store = useResourceStore()
+        await store.loadSyncManagement(1)
+        const mutation = deferred()
+        post.mockReturnValue(mutation.promise); put.mockReturnValue(mutation.promise)
+        const credential = { access_key_id: '虚构输入', secret_access_key: '虚构秘密' }
+        const input = { provider: 'aws' as const, name: '来源', region: '', credential, config: {}, syncIntervalMinutes: 60 }
+        const pending = (operation === '新建' ? store.create(1, 'aws', input, true) : store.update(1, 'aws', 10, input, true)).catch(error => error)
+        await store.loadSyncManagement(2)
+        if (outcome === '成功') mutation.resolve(projectResponse('/projects/1/sources')[0])
+        else mutation.reject({ response: { data: { message: '旧项目提交失败' } } })
+        await pending
+        expect(store.sources.map(source => source.projectId)).toEqual([2, 2])
+        expect(store.jobs.map(job => job.sourceId)).toEqual([20, 20])
+        expect(store.mutationError).toBe('')
+        expect(store.state).toBe('ready')
+        expect(credential).toEqual({})
+      })
+    }
+    it(`${operation}失败后刷新当前项目事实并保留安全提示`, async () => {
+      get.mockImplementation((url, options) => Promise.resolve(projectResponse(url, options)))
+      const store = useResourceStore()
+      await store.loadSyncManagement(1)
+      get.mockImplementation((url, options) => Promise.resolve(url.endsWith('/sources') ? [] : { items: [], total: 0 }))
+      post.mockRejectedValue({ response: { data: { message: '当前项目提交失败' } } }); put.mockRejectedValue({ response: { data: { message: '当前项目提交失败' } } })
+      const input = { provider: 'aws' as const, name: '来源', region: '', config: {}, syncIntervalMinutes: 60 }
+      await (operation === '新建' ? store.create(1, 'aws', input, true) : store.update(1, 'aws', 10, input, true)).catch(() => {})
+      expect(store.sources).toEqual([])
+      expect(store.jobs).toEqual([])
+      expect(store.mutationError).toBe('当前项目提交失败')
+    })
+  }
 
   it('按当前项目与平台加载接入源、资源和任务', async () => {
     get.mockImplementation((url: string) => {

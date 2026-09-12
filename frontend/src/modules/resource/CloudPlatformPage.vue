@@ -16,6 +16,9 @@ const verificationFormError = ref('')
 const platform = computed(() => ({ aliyun: { name: '阿里云', types: ['ecs', 'rds', 'slb'] }, aws: { name: 'AWS', types: ['ec2', 'rds', 'elb'] } }[selectedProvider.value]))
 const form = reactive({ name: '', region: '', accessKeyId: '', secret: '', sessionToken: '', interval: 60 })
 const verificationForm = reactive({ accessKeyId: '', secret: '', sessionToken: '' })
+// 每次弹窗会话独立编号，旧提交的 finally 只能清理原会话，不能碰新输入。
+let sourceDialogToken = 0
+let verificationDialogToken = 0
 
 /** 项目或平台切换后从服务端重新建立页面状态。 */
 watch(() => [projects.currentProjectId, props.provider], ([projectId]) => { closeSourceDialog(); closeVerificationDialog(); if (projectId) { if (props.syncOnly) void store.loadSyncManagement(Number(projectId)); else void store.load(Number(projectId), props.provider) } }, { immediate: true })
@@ -29,23 +32,24 @@ function credential(): Record<string, unknown> {
 /** 来源编辑与验证均只在短生命周期表单中保存密钥，关闭或提交后立即清空。 */
 function clearSourceCredentials() { form.accessKeyId = ''; form.secret = ''; form.sessionToken = '' }
 function clearVerificationCredentials() { verificationForm.accessKeyId = ''; verificationForm.secret = ''; verificationForm.sessionToken = ''; verificationFormError.value = '' }
-function closeSourceDialog() { dialogOpen.value = false; clearSourceCredentials() }
-function closeVerificationDialog() { verificationDialogOpen.value = false; verificationSource.value = null; verificationMode.value = 'existing'; clearVerificationCredentials() }
+function closeSourceDialog() { ++sourceDialogToken; dialogOpen.value = false; submitting.value = false; clearSourceCredentials() }
+function closeVerificationDialog() { ++verificationDialogToken; verificationDialogOpen.value = false; verificationSource.value = null; verificationMode.value = 'existing'; clearVerificationCredentials() }
 /** 打开编辑窗口时不回填任何凭证，空凭证表示后端保留原密文。 */
-function edit(source: Source) { editingSourceId.value = source.id; selectedProvider.value = source.provider; form.name = source.name; form.region = source.region; form.interval = source.syncIntervalMinutes; clearSourceCredentials(); dialogOpen.value = true }
+function edit(source: Source) { ++sourceDialogToken; editingSourceId.value = source.id; selectedProvider.value = source.provider; form.name = source.name; form.region = source.region; form.interval = source.syncIntervalMinutes; clearSourceCredentials(); dialogOpen.value = true }
 /** 打开新建窗口并清理上一接入源的表单状态。 */
-function createNew() { editingSourceId.value = null; selectedProvider.value = props.provider; form.name = ''; form.region = ''; form.interval = 60; clearSourceCredentials(); dialogOpen.value = true }
+function createNew() { ++sourceDialogToken; editingSourceId.value = null; selectedProvider.value = props.provider; form.name = ''; form.region = ''; form.interval = 60; clearSourceCredentials(); dialogOpen.value = true }
 /** 创建成功即清空敏感输入并关闭弹窗。 */
 async function submit() {
   if (!projects.currentProjectId) return
+  const token = sourceDialogToken
   submitting.value = true
   const replacingCredential = form.accessKeyId !== '' || form.secret !== ''
   const existing = store.sources.find(source => source.id === editingSourceId.value)
   const input: SourceInput = { provider: selectedProvider.value, name: form.name, region: form.region, credential: editingSourceId.value && !replacingCredential ? undefined : credential(), config: {}, enabled: existing?.enabled ?? true, syncIntervalMinutes: form.interval }
-  try { if (editingSourceId.value) await store.update(projects.currentProjectId, selectedProvider.value, editingSourceId.value, input, props.syncOnly); else await store.create(projects.currentProjectId, selectedProvider.value, input, props.syncOnly); dialogOpen.value = false } finally { clearSourceCredentials(); submitting.value = false }
+  try { if (editingSourceId.value) await store.update(projects.currentProjectId, selectedProvider.value, editingSourceId.value, input, props.syncOnly); else await store.create(projects.currentProjectId, selectedProvider.value, input, props.syncOnly); if (token === sourceDialogToken) dialogOpen.value = false } finally { if (token === sourceDialogToken) { clearSourceCredentials(); submitting.value = false } }
 }
 /** 打开身份确认窗口时不读取任何历史凭证或云账号标识。 */
-function openVerification(source: Source) { verificationSource.value = source; selectedProvider.value = source.provider; verificationMode.value = 'existing'; clearVerificationCredentials(); verificationDialogOpen.value = true }
+function openVerification(source: Source) { ++verificationDialogToken; verificationSource.value = source; selectedProvider.value = source.provider; verificationMode.value = 'existing'; clearVerificationCredentials(); verificationDialogOpen.value = true }
 /** 仅在用户明确选择替换时构造完整平台凭证；AWS 的 Session Token 保持可选。 */
 function verificationCredential(): Record<string, unknown> {
   if (verificationSource.value?.provider === 'aliyun') return { access_key_id: verificationForm.accessKeyId, access_key_secret: verificationForm.secret }
@@ -54,11 +58,12 @@ function verificationCredential(): Record<string, unknown> {
 /** 身份确认无论结果如何清理凭证，页面状态随后由服务端重新加载。 */
 async function submitVerification() {
   const source = verificationSource.value
+  const token = verificationDialogToken
   if (!projects.currentProjectId || !source) return
   if (verificationMode.value === 'new' && (!verificationForm.accessKeyId || !verificationForm.secret)) { verificationFormError.value = '请输入完整的 AccessKey 和 Secret'; return }
   const value = verificationMode.value === 'new' ? verificationCredential() : undefined
-  try { await store.verifyIdentity(projects.currentProjectId, source.provider, source.id, value, props.syncOnly); closeVerificationDialog() }
-  finally { clearVerificationCredentials() }
+  try { await store.verifyIdentity(projects.currentProjectId, source.provider, source.id, value, props.syncOnly); if (token === verificationDialogToken) closeVerificationDialog() }
+  finally { if (token === verificationDialogToken) clearVerificationCredentials() }
 }
 /** 删除前说明服务端依赖保护，避免用户误以为来源删除会级联清理资产。 */
 async function remove(source: Source) { if (window.confirm(`确认删除接入源“${source.name}”吗？存在资产或排队、运行中的同步任务时无法删除。`) && projects.currentProjectId) await store.remove(projects.currentProjectId, source.provider, source.id, props.syncOnly) }

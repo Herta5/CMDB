@@ -14,6 +14,7 @@ const migrationAdvisoryLockID int64 = 0x434D444200000002
 var (
 	errUnsupportedSchema = errors.New("数据库结构不受支持，未执行迁移")
 	errMigrationFailed   = errors.New("数据库迁移失败，未完成任何结构变更")
+	errLegacyConfig      = errors.New("历史接入源配置非空，未执行迁移；请恢复旧版本，通过原有管理入口显式清空配置，重新备份后重试")
 )
 
 //go:embed migrations/002_p0_safety.sql
@@ -67,13 +68,25 @@ func migrate(ctx context.Context, db *gorm.DB, plan []migration) error {
 			if err != nil || !matches {
 				return errUnsupportedSchema
 			}
-			if err := createLegacyVersionRecord(tx); err != nil {
-				return err
-			}
 			version = 1
 		}
 		if version < 1 || version > CurrentSchemaVersion {
 			return errUnsupportedSchema
+		}
+		if version == 1 {
+			// 必须先确认历史配置可由新版本验证，再登记版本或执行 DDL；不得静默丢弃旧值。
+			var hasLegacyConfig bool
+			if err := tx.Raw("SELECT EXISTS (SELECT 1 FROM resource_sources WHERE config IS DISTINCT FROM '{}')").Scan(&hasLegacyConfig).Error; err != nil {
+				return err
+			}
+			if hasLegacyConfig {
+				return errLegacyConfig
+			}
+		}
+		if !hasVersionTable {
+			if err := createLegacyVersionRecord(tx); err != nil {
+				return err
+			}
 		}
 
 		for _, step := range plan {
@@ -98,6 +111,9 @@ func migrate(ctx context.Context, db *gorm.DB, plan []migration) error {
 	})
 	if errors.Is(err, errUnsupportedSchema) {
 		return errUnsupportedSchema
+	}
+	if errors.Is(err, errLegacyConfig) {
+		return errLegacyConfig
 	}
 	if err != nil {
 		return errMigrationFailed
