@@ -34,6 +34,11 @@ func (c *Collector) ValidateCredential(raw json.RawMessage) error {
 	return err
 }
 
+// NormalizeStoredCredential 兼容旧版前端曾保存的空 Session Token；该空值只在历史密文读取时移除。
+func (c *Collector) NormalizeStoredCredential(raw json.RawMessage) (json.RawMessage, error) {
+	return resource.NormalizeStoredStringObject(raw, []string{"access_key_id", "secret_access_key"}, []string{"session_token"})
+}
+
 // ValidateConfig 首期 AWS 模块不定义额外采集配置，只允许空对象。
 func (c *Collector) ValidateConfig(raw json.RawMessage) error {
 	return resource.ValidateEmptyConfig(raw)

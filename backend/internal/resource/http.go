@@ -87,8 +87,14 @@ func writeSourceIdentityError(c *gin.Context, err error) bool {
 		return true
 	}
 	switch {
-	case errors.Is(err, ErrCloudAuthentication), errors.Is(err, ErrCloudPermission), errors.Is(err, ErrCloudNetwork):
-		c.JSON(http.StatusBadGateway, gin.H{"code": "CLOUD_IDENTITY_UNAVAILABLE", "message": "云账号身份验证暂不可用"})
+	case errors.Is(err, ErrCloudAuthentication):
+		c.JSON(http.StatusBadGateway, gin.H{"code": "CLOUD_IDENTITY_UNAVAILABLE", "message": "AccessKey 无效或签名校验失败，请检查凭证"})
+		return true
+	case errors.Is(err, ErrCloudPermission):
+		c.JSON(http.StatusBadGateway, gin.H{"code": "CLOUD_IDENTITY_UNAVAILABLE", "message": "云账号身份查询权限不足，请检查云账号授权"})
+		return true
+	case errors.Is(err, ErrCloudNetwork):
+		c.JSON(http.StatusBadGateway, gin.H{"code": "CLOUD_IDENTITY_UNAVAILABLE", "message": "云账号身份服务连接失败，请检查服务端网络"})
 		return true
 	}
 	return false

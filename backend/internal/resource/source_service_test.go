@@ -113,6 +113,17 @@ type identityAdapterStub struct {
 	resolve func(context.Context, Source, []byte) (string, error)
 }
 
+// legacyIdentityAdapterStub 模拟平台只在读取历史密文时规范化旧凭证，不能放宽新提交凭证校验。
+type legacyIdentityAdapterStub struct {
+	identityAdapterStub
+	normalize func(json.RawMessage) (json.RawMessage, error)
+}
+
+// NormalizeStoredCredential 返回平台识别后的历史凭证规范格式，原密文仍由服务保留。
+func (a legacyIdentityAdapterStub) NormalizeStoredCredential(raw json.RawMessage) (json.RawMessage, error) {
+	return a.normalize(raw)
+}
+
 // ValidateCredential 保留平台格式校验的业务边界，不让模拟身份绕过完整凭证要求。
 func (a identityAdapterStub) ValidateCredential(raw json.RawMessage) error {
 	if a.aliyun {
@@ -409,6 +420,55 @@ func TestVerifyHistoricalSourceIdentity(t *testing.T) {
 				t.Fatal("身份验证审计必须与状态提交结果一致")
 			}
 		})
+	}
+}
+
+// TestVerifyHistoricalSourceIdentityNormalizesOnlyStoredCredential 防止旧版本保存的可选空字段阻断升级后的身份验证。
+func TestVerifyHistoricalSourceIdentityNormalizesOnlyStoredCredential(t *testing.T) {
+	service, db, source, _ := newResourceServiceTest(t)
+	legacy := json.RawMessage(`{"access_key_id":"虚构旧标识","secret_access_key":"虚构旧密钥","session_token":""}`)
+	encrypted, err := service.cipher.Encrypt(legacy)
+	if err != nil {
+		t.Fatal("准备历史凭证失败")
+	}
+	if err := db.Model(source).Updates(map[string]any{"identity_status": IdentityStatusPending, "cloud_account_id": nil, "identity_verified_at": nil, "encrypted_credential": encrypted}).Error; err != nil {
+		t.Fatal("准备待验证来源失败")
+	}
+	normalizeCalls := 0
+	service.adapters[ProviderAWS] = legacyIdentityAdapterStub{
+		identityAdapterStub: identityAdapterStub{resolve: func(_ context.Context, _ Source, plain []byte) (string, error) {
+			if string(plain) != `{"access_key_id":"虚构旧标识","secret_access_key":"虚构旧密钥"}` {
+				t.Fatal("云身份识别只能接收移除空可选字段后的规范凭证")
+			}
+			return "123456789012", nil
+		}},
+		normalize: func(raw json.RawMessage) (json.RawMessage, error) {
+			normalizeCalls++
+			if string(raw) != string(legacy) {
+				t.Fatal("历史格式规范化必须读取已解密的原凭证")
+			}
+			return json.RawMessage(`{"access_key_id":"虚构旧标识","secret_access_key":"虚构旧密钥"}`), nil
+		},
+	}
+
+	verified, err := service.VerifySourceIdentity(context.Background(), source.ProjectID, source.ID, nil)
+	if err != nil || verified.IdentityStatus != IdentityStatusVerified {
+		t.Fatalf("历史空可选字段规范化后应完成身份验证：%v", err)
+	}
+	if normalizeCalls != 1 {
+		t.Fatalf("使用已保存凭证时必须规范化一次，实际调用 %d 次", normalizeCalls)
+	}
+	if verified.EncryptedCredential != encrypted {
+		t.Fatal("兼容读取不得静默改写历史密文")
+	}
+	if err := db.Model(source).Updates(map[string]any{"identity_status": IdentityStatusPending, "cloud_account_id": nil, "identity_verified_at": nil}).Error; err != nil {
+		t.Fatal("重置待验证来源失败")
+	}
+	if _, err := service.VerifySourceIdentity(context.Background(), source.ProjectID, source.ID, legacy); !errors.Is(err, ErrInvalidProviderCredential) {
+		t.Fatalf("显式提交的空可选字段必须保持严格拒绝：%v", err)
+	}
+	if normalizeCalls != 1 {
+		t.Fatal("显式提交的新凭证不得进入历史格式规范化")
 	}
 }
 

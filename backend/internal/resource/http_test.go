@@ -14,10 +14,11 @@ import (
 // TestWriteVerifySourceIdentityError 验证专门身份确认的所有领域失败均有稳定的公开分类。
 func TestWriteVerifySourceIdentityError(t *testing.T) {
 	for _, scenario := range []struct {
-		name   string
-		err    error
-		status int
-		code   string
+		name    string
+		err     error
+		status  int
+		code    string
+		message string
 	}{
 		{name: "字段错误", err: ErrInvalidProviderCredential, status: http.StatusBadRequest, code: "SOURCE_INVALID_INPUT"},
 		{name: "账号冲突", err: ErrCloudAccountConflict, status: http.StatusConflict, code: "CLOUD_ACCOUNT_CONFLICT"},
@@ -25,9 +26,9 @@ func TestWriteVerifySourceIdentityError(t *testing.T) {
 		{name: "待验证", err: ErrSourceIdentityPending, status: http.StatusConflict, code: "SOURCE_IDENTITY_PENDING"},
 		{name: "已验证", err: ErrSourceIdentityAlreadyVerified, status: http.StatusConflict, code: "SOURCE_IDENTITY_ALREADY_VERIFIED"},
 		{name: "项目停用", err: ErrProjectDisabled, status: http.StatusConflict, code: "PROJECT_DISABLED"},
-		{name: "云认证失败", err: ErrCloudAuthentication, status: http.StatusBadGateway, code: "CLOUD_IDENTITY_UNAVAILABLE"},
-		{name: "云权限失败", err: ErrCloudPermission, status: http.StatusBadGateway, code: "CLOUD_IDENTITY_UNAVAILABLE"},
-		{name: "云网络失败", err: ErrCloudNetwork, status: http.StatusBadGateway, code: "CLOUD_IDENTITY_UNAVAILABLE"},
+		{name: "云认证失败", err: ErrCloudAuthentication, status: http.StatusBadGateway, code: "CLOUD_IDENTITY_UNAVAILABLE", message: "AccessKey 无效或签名校验失败，请检查凭证"},
+		{name: "云权限失败", err: ErrCloudPermission, status: http.StatusBadGateway, code: "CLOUD_IDENTITY_UNAVAILABLE", message: "云账号身份查询权限不足，请检查云账号授权"},
+		{name: "云网络失败", err: ErrCloudNetwork, status: http.StatusBadGateway, code: "CLOUD_IDENTITY_UNAVAILABLE", message: "云账号身份服务连接失败，请检查服务端网络"},
 		{name: "内部失败", err: errors.New("上游内部错误正文"), status: http.StatusInternalServerError, code: "SOURCE_SERVICE_UNAVAILABLE"},
 	} {
 		t.Run(scenario.name, func(t *testing.T) {
@@ -39,6 +40,9 @@ func TestWriteVerifySourceIdentityError(t *testing.T) {
 			}
 			if body := response.Body.String(); !strings.Contains(body, `"code":"`+scenario.code+`"`) || strings.Contains(body, "上游内部错误正文") {
 				t.Fatal("身份验证错误必须使用稳定分类且不得泄露内部正文")
+			}
+			if scenario.message != "" && !strings.Contains(response.Body.String(), scenario.message) {
+				t.Fatal("云身份失败必须返回可操作的安全分类提示")
 			}
 		})
 	}

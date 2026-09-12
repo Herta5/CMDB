@@ -263,17 +263,29 @@ func (s *Service) VerifySourceIdentity(ctx context.Context, projectID, sourceID 
 	}
 	replace := hasCredential(credential)
 	plain := append([]byte(nil), credential...)
-	if !replace {
-		plain, err = s.cipher.Decrypt(source.EncryptedCredential)
-		if err != nil {
-			return nil, err
-		}
-	}
 	defer func() {
 		for i := range plain {
 			plain[i] = 0
 		}
 	}()
+	if !replace {
+		plain, err = s.cipher.Decrypt(source.EncryptedCredential)
+		if err != nil {
+			return nil, err
+		}
+		if normalizer, ok := s.adapters[source.Provider].(StoredCredentialNormalizer); ok {
+			stored := plain
+			defer func() {
+				for i := range stored {
+					stored[i] = 0
+				}
+			}()
+			plain, err = normalizer.NormalizeStoredCredential(stored)
+			if err != nil {
+				return nil, ErrInvalidProviderCredential
+			}
+		}
+	}
 	accountID, err := s.resolveSourceIdentity(ctx, source, plain)
 	if err != nil {
 		return nil, err
