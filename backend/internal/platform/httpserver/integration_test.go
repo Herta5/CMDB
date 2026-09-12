@@ -7,6 +7,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -545,12 +546,141 @@ func TestProjectSourceAPINeverReturnsCredentials(t *testing.T) {
 	}
 }
 
+// TestVerifySourceIdentityAPI 验证身份确认仅允许具备写权限的操作者执行，并将领域失败收敛为稳定脱敏响应。
+func TestVerifySourceIdentityAPI(t *testing.T) {
+	server, password, db := integrationServerWithDatabase(t)
+	systemAdmin := loginUser(t, server, "operator", password)
+	projectMember := loginUser(t, server, "member_a", password)
+
+	var firstProject, secondProject project.Project
+	decodeIntegration(t, integrationRequest(t, server, systemAdmin, http.MethodPost, "/api/v1/projects", map[string]any{"code": "identity-api-one", "name": "身份验证项目"}, http.StatusCreated), &firstProject)
+	decodeIntegration(t, integrationRequest(t, server, systemAdmin, http.MethodPost, "/api/v1/projects", map[string]any{"code": "identity-api-two", "name": "另一身份验证项目"}, http.StatusCreated), &secondProject)
+	firstPath := "/api/v1/projects/" + strconv.FormatUint(firstProject.ID, 10)
+	integrationRequest(t, server, systemAdmin, http.MethodPost, firstPath+"/members", map[string]any{"username": "member_a", "role": "member"}, http.StatusCreated)
+
+	verified := integrationIdentitySource(t, db, firstProject.ID, cloudresource.IdentityStatusPending, "", "identity-ok")
+	mismatch := integrationIdentitySource(t, db, firstProject.ID, cloudresource.IdentityStatusVerified, "222222222222", "identity-mismatch")
+	conflict := integrationIdentitySource(t, db, firstProject.ID, cloudresource.IdentityStatusPending, "", "identity-conflict")
+	_ = integrationIdentitySource(t, db, firstProject.ID, cloudresource.IdentityStatusVerified, "333333333333", "identity-occupied")
+	cloudFailure := integrationIdentitySource(t, db, firstProject.ID, cloudresource.IdentityStatusPending, "", "identity-network")
+	providedCredential := integrationIdentitySource(t, db, firstProject.ID, cloudresource.IdentityStatusPending, "", "identity-network")
+	crossProject := integrationIdentitySource(t, db, secondProject.ID, cloudresource.IdentityStatusPending, "", "identity-ok")
+	disabled := integrationIdentitySource(t, db, secondProject.ID, cloudresource.IdentityStatusPending, "", "identity-ok")
+	if err := db.Model(&project.Project{}).Where("id = ?", secondProject.ID).Update("status", "disabled").Error; err != nil {
+		t.Fatal("准备停用项目失败")
+	}
+
+	verifyPath := func(sourceID uint64) string {
+		return firstPath + "/sources/" + strconv.FormatUint(sourceID, 10) + "/verify-identity"
+	}
+	integrationRequest(t, server, projectMember, http.MethodPost, verifyPath(verified.ID), map[string]any{}, http.StatusNotFound)
+	integrationRequest(t, server, systemAdmin, http.MethodPut, firstPath+"/members/member_a", map[string]any{"role": "project_admin"}, http.StatusOK)
+	response := integrationRequest(t, server, projectMember, http.MethodPost, verifyPath(verified.ID), map[string]any{}, http.StatusOK)
+	assertIdentityVerificationResponseSafe(t, response.Body.String())
+	response = integrationRequest(t, server, systemAdmin, http.MethodPost, verifyPath(verified.ID), map[string]any{"credential": nil}, http.StatusOK)
+	assertIdentityVerificationResponseSafe(t, response.Body.String())
+	response = integrationRequest(t, server, projectMember, http.MethodPost, verifyPath(providedCredential.ID), map[string]any{"credential": map[string]any{"access_key_id": "identity-object", "secret_access_key": "identity-object-secret"}}, http.StatusOK)
+	assertIdentityVerificationResponseSafe(t, response.Body.String())
+
+	for _, scenario := range []struct {
+		name   string
+		path   string
+		body   any
+		status int
+		code   string
+	}{
+		{name: "字段错误", path: verifyPath(verified.ID), body: map[string]any{"credential": "无效凭证"}, status: http.StatusBadRequest, code: "SOURCE_INVALID_INPUT"},
+		{name: "来源标识错误", path: firstPath + "/sources/not-a-number/verify-identity", body: map[string]any{}, status: http.StatusBadRequest, code: "SOURCE_INVALID_INPUT"},
+		{name: "账号冲突", path: verifyPath(conflict.ID), body: map[string]any{}, status: http.StatusConflict, code: "CLOUD_ACCOUNT_CONFLICT"},
+		{name: "身份不一致", path: verifyPath(mismatch.ID), body: map[string]any{}, status: http.StatusConflict, code: "SOURCE_IDENTITY_MISMATCH"},
+		{name: "云故障", path: verifyPath(cloudFailure.ID), body: map[string]any{}, status: http.StatusBadGateway, code: "CLOUD_IDENTITY_UNAVAILABLE"},
+		{name: "跨项目来源", path: verifyPath(crossProject.ID), body: map[string]any{}, status: http.StatusNotFound, code: "SOURCE_NOT_FOUND"},
+		{name: "停用项目", path: "/api/v1/projects/" + strconv.FormatUint(secondProject.ID, 10) + "/sources/" + strconv.FormatUint(disabled.ID, 10) + "/verify-identity", body: map[string]any{}, status: http.StatusConflict, code: "PROJECT_DISABLED"},
+	} {
+		t.Run(scenario.name, func(t *testing.T) {
+			response := integrationRequest(t, server, systemAdmin, http.MethodPost, scenario.path, scenario.body, scenario.status)
+			assertIdentityVerificationError(t, response.Body.String(), scenario.code)
+		})
+	}
+	crossResponse := integrationRequest(t, server, systemAdmin, http.MethodPost, verifyPath(crossProject.ID), map[string]any{}, http.StatusNotFound)
+	notFoundResponse := integrationRequest(t, server, systemAdmin, http.MethodPost, verifyPath(999999), map[string]any{}, http.StatusNotFound)
+	if crossResponse.Body.String() != notFoundResponse.Body.String() {
+		t.Fatal("跨项目来源与不存在来源必须返回完全一致的公开响应")
+	}
+	var identityAudits []audit.Log
+	if err := db.Where("project_id = ? AND action = ? AND resource_id IN ?", firstProject.ID, audit.ActionSourceUpdated, []string{strconv.FormatUint(verified.ID, 10), strconv.FormatUint(providedCredential.ID, 10)}).Find(&identityAudits).Error; err != nil || len(identityAudits) != 3 {
+		t.Fatal("身份验证成功必须只记录对应的安全审计")
+	}
+	for _, entry := range identityAudits {
+		assertIdentityVerificationResponseSafe(t, string(entry.Detail))
+	}
+}
+
+// integrationIdentitySource 直接准备历史待验证来源，避免测试把待验证迁移前提误当作本接口的职责。
+func integrationIdentitySource(t *testing.T, db *gorm.DB, projectID uint64, identityStatus, accountID, accessKeyID string) cloudresource.Source {
+	t.Helper()
+	credential, err := json.Marshal(map[string]string{"access_key_id": accessKeyID, "secret_access_key": "identity-test-secret"})
+	if err != nil {
+		t.Fatal("编码虚构身份凭证失败")
+	}
+	encrypted, err := cloudresource.NewCredentialCipher("integration-encryption-key").Encrypt(credential)
+	if err != nil {
+		t.Fatal("加密虚构身份凭证失败")
+	}
+	source := cloudresource.Source{ProjectID: projectID, Provider: cloudresource.ProviderAWS, CloudAccountID: accountID, IdentityStatus: identityStatus, Name: "历史待验证接入源", Region: "cn-test-1", EncryptedCredential: encrypted, CredentialHint: "已安全配置", Config: json.RawMessage(`{}`), Enabled: true, SyncIntervalMinutes: 60}
+	if identityStatus == cloudresource.IdentityStatusVerified {
+		verifiedAt := time.Now()
+		source.IdentityVerifiedAt = &verifiedAt
+	}
+	if err := db.Create(&source).Error; err != nil {
+		t.Fatal("准备历史待验证来源失败")
+	}
+	return source
+}
+
+// assertIdentityVerificationResponseSafe 防止身份接口响应泄露云账号、凭证、密文或内部验证时间。
+func assertIdentityVerificationResponseSafe(t *testing.T, body string) {
+	t.Helper()
+	for _, forbidden := range []string{"111111111111", "222222222222", "333333333333", "444444444444", "identity-test-secret", "identity-object-secret", "identity-ok", "identity-object", "identity-network", "identity-conflict", "云端原始身份错误", "encrypted_credential", "cloud_account_id", "identity_verified_at", "user_id", "actor_id"} {
+		if strings.Contains(body, forbidden) {
+			t.Fatal("身份验证响应不得泄露账号、凭证、密文或内部验证字段")
+		}
+	}
+}
+
+// assertIdentityVerificationError 只验证公开错误分类，不将响应体或上游错误正文回显到测试日志。
+func assertIdentityVerificationError(t *testing.T, body, wantCode string) {
+	t.Helper()
+	var payload struct {
+		Code string `json:"code"`
+	}
+	if err := json.Unmarshal([]byte(body), &payload); err != nil || payload.Code != wantCode {
+		t.Fatal("身份验证错误必须使用稳定公开分类")
+	}
+	assertIdentityVerificationResponseSafe(t, body)
+}
+
 // integrationCollector 保留真实 AWS 输入校验，只替换会访问云端的适配器边界。
 type integrationCollector struct{ *awscollector.Collector }
 
 // ResolveCloudAccountID 返回虚构稳定账号，HTTP 验收不访问真实 AWS。
-func (integrationCollector) ResolveCloudAccountID(context.Context, cloudresource.Source, []byte) (string, error) {
-	return "123456789012", nil
+func (integrationCollector) ResolveCloudAccountID(_ context.Context, _ cloudresource.Source, plain []byte) (string, error) {
+	var credential struct {
+		AccessKeyID string `json:"access_key_id"`
+	}
+	if err := json.Unmarshal(plain, &credential); err != nil {
+		return "", cloudresource.ErrCloudAuthentication
+	}
+	switch credential.AccessKeyID {
+	case "identity-conflict", "identity-occupied":
+		return "333333333333", nil
+	case "identity-object":
+		return "444444444444", nil
+	case "identity-network":
+		return "", fmt.Errorf("云端原始身份错误：%w", cloudresource.ErrCloudNetwork)
+	default:
+		return "111111111111", nil
+	}
 }
 
 func (integrationCollector) Collect(context.Context, cloudresource.Source, []byte) ([]cloudresource.CollectionResult, error) {

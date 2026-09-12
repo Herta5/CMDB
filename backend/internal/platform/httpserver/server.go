@@ -101,6 +101,7 @@ func New(dependencies Dependencies) *gin.Engine {
 	sources.POST("", project.RequireRole(projectRepository, project.MemberRoleProjectAdmin), resourceHandler.CreateSource)
 	sources.PUT("/:sourceId", project.RequireRole(projectRepository, project.MemberRoleProjectAdmin), resourceHandler.UpdateSource)
 	sources.DELETE("/:sourceId", project.RequireRole(projectRepository, project.MemberRoleProjectAdmin), resourceHandler.DeleteSource)
+	sources.POST("/:sourceId/verify-identity", project.RequireRole(projectRepository, project.MemberRoleProjectAdmin), resourceHandler.VerifySourceIdentity)
 	sources.POST("/:sourceId/sync", project.RequireRole(projectRepository, project.MemberRoleProjectAdmin), resourceHandler.SyncSource)
 	sources.POST("/:sourceId/test", project.RequireRole(projectRepository, project.MemberRoleProjectAdmin), resourceHandler.TestSourceConnection)
 	projects.GET("/:id/resources", project.RequireRole(projectRepository, projectReadRoles...), resourceHandler.ListResources)

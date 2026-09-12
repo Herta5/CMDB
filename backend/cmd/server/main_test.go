@@ -78,18 +78,20 @@ func TestBuildServerServesConsoleAndAPI(t *testing.T) {
 		t.Fatalf("装配服务失败：%v", err)
 	}
 	for _, test := range []struct {
+		method string
 		path   string
 		status int
 		body   string
 	}{
-		{"/", 200, "CMDB 验收页面"},
-		{"/projects/1", 200, "CMDB 验收页面"},
-		{"/health", 200, `"status":"ok"`},
-		{"/api/v1/projects", 401, "身份认证已失效"},
-		{"/api/v1/missing", 404, "接口不存在"},
+		{http.MethodGet, "/", 200, "CMDB 验收页面"},
+		{http.MethodGet, "/projects/1", 200, "CMDB 验收页面"},
+		{http.MethodGet, "/health", 200, `"status":"ok"`},
+		{http.MethodGet, "/api/v1/projects", 401, "身份认证已失效"},
+		{http.MethodPost, "/api/v1/projects/1/sources/1/verify-identity", 401, "身份认证已失效"},
+		{http.MethodGet, "/api/v1/missing", 404, "接口不存在"},
 	} {
 		response := httptest.NewRecorder()
-		server.ServeHTTP(response, httptest.NewRequest(http.MethodGet, test.path, nil))
+		server.ServeHTTP(response, httptest.NewRequest(test.method, test.path, nil))
 		if response.Code != test.status || !strings.Contains(response.Body.String(), test.body) {
 			t.Fatalf("%s 装配结果错误：状态=%d", test.path, response.Code)
 		}

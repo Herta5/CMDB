@@ -16,6 +16,51 @@ type HTTPHandler struct {
 	service *Service
 }
 
+// VerifySourceIdentity 确认历史接入源的云账号归属；凭证可缺失或为 null，分别表示使用已保存的加密凭证。
+func (h *HTTPHandler) VerifySourceIdentity(c *gin.Context) {
+	projectID, ok := projectID(c)
+	sourceID, err := strconv.ParseUint(c.Param("sourceId"), 10, 64)
+	if !ok || err != nil || sourceID == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"code": "SOURCE_INVALID_INPUT", "message": "接入源参数无效"})
+		return
+	}
+	var request struct {
+		Credential json.RawMessage `json:"credential"`
+	}
+	if err := c.ShouldBindJSON(&request); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"code": "SOURCE_INVALID_INPUT", "message": "接入源参数无效"})
+		return
+	}
+	source, err := h.service.VerifySourceIdentity(c.Request.Context(), projectID, sourceID, request.Credential)
+	if err != nil {
+		writeVerifySourceIdentityError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, source)
+}
+
+// writeVerifySourceIdentityError 在 HTTP 边界将有限领域错误映射为稳定摘要，禁止返回云端或内部错误正文。
+func writeVerifySourceIdentityError(c *gin.Context, err error) {
+	switch {
+	case errors.Is(err, gorm.ErrRecordNotFound):
+		c.JSON(http.StatusNotFound, gin.H{"code": "SOURCE_NOT_FOUND", "message": "接入源不存在"})
+	case errors.Is(err, ErrInvalidProviderCredential), errors.Is(err, ErrInvalidProviderConfig):
+		c.JSON(http.StatusBadRequest, gin.H{"code": "SOURCE_INVALID_INPUT", "message": "接入源参数无效"})
+	case errors.Is(err, ErrCloudAccountConflict):
+		c.JSON(http.StatusConflict, gin.H{"code": "CLOUD_ACCOUNT_CONFLICT", "message": "该云账号已接入 CMDB"})
+	case errors.Is(err, ErrSourceIdentityMismatch):
+		c.JSON(http.StatusConflict, gin.H{"code": "SOURCE_IDENTITY_MISMATCH", "message": "新凭证所属云账号与原接入源不一致"})
+	case errors.Is(err, ErrSourceIdentityPending):
+		c.JSON(http.StatusConflict, gin.H{"code": "SOURCE_IDENTITY_PENDING", "message": "接入源身份待验证，请先验证云账号身份"})
+	case errors.Is(err, ErrProjectDisabled):
+		c.JSON(http.StatusConflict, gin.H{"code": "PROJECT_DISABLED", "message": "项目已停用，不能验证接入源身份"})
+	case errors.Is(err, ErrCloudAuthentication), errors.Is(err, ErrCloudPermission), errors.Is(err, ErrCloudNetwork):
+		c.JSON(http.StatusBadGateway, gin.H{"code": "CLOUD_IDENTITY_UNAVAILABLE", "message": "云账号身份验证暂不可用"})
+	default:
+		c.JSON(http.StatusInternalServerError, gin.H{"code": "SOURCE_SERVICE_UNAVAILABLE", "message": "接入源服务暂不可用"})
+	}
+}
+
 // UpdateSource 更新接入源非敏感配置，并允许调用方选择性替换凭证。
 func (h *HTTPHandler) UpdateSource(c *gin.Context) {
 	projectID, ok := projectID(c)

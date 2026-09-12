@@ -34,6 +34,8 @@ var (
 	ErrSourceIdentityPending = errors.New("接入源身份待验证，请先验证云账号身份")
 	// ErrSourceIdentityMismatch 防止通过替换凭证将接入源指向另一个云账号。
 	ErrSourceIdentityMismatch = errors.New("新凭证所属云账号与原接入源不一致")
+	// ErrProjectDisabled 阻止停用项目发起新的身份确认，避免恢复项目运行前产生新的外部调用。
+	ErrProjectDisabled = errors.New("项目已停用，不能验证接入源身份")
 	// ErrSchedulerRecoveryFailed 阻止恢复未完成的进程开放服务，不携带底层数据库或审计错误。
 	ErrSchedulerRecoveryFailed = errors.New("恢复同步任务失败，服务未启动")
 )
@@ -242,7 +244,7 @@ func (s *Service) VerifySourceIdentity(ctx context.Context, projectID, sourceID 
 		return nil, err
 	}
 	if !enabled {
-		return nil, errors.New("项目已停用，不能验证接入源身份")
+		return nil, ErrProjectDisabled
 	}
 	replace := hasCredential(credential)
 	plain := append([]byte(nil), credential...)
@@ -279,7 +281,7 @@ func (s *Service) VerifySourceIdentity(ctx context.Context, projectID, sourceID 
 			return err
 		}
 		if !enabled {
-			return errors.New("项目已停用，不能验证接入源身份")
+			return ErrProjectDisabled
 		}
 		current, err := repository.lockSourceForProject(ctx, projectID, sourceID)
 		if err != nil {
