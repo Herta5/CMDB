@@ -17,26 +17,43 @@ export const useResourceStore = defineStore('cmdb-resource', () => {
   const state = ref<ResourceLoadState>('idle'); const mutationError = ref(''); const syncingSourceId = ref<number | null>(null)
   const testingSourceId = ref<number | null>(null); const retryingJobId = ref<number | null>(null); const verifyingSourceId = ref<number | null>(null); const connectionMessage = ref(''); const connectionError = ref('')
   const resourceType = ref(''); const assetStatus = ref(''); const page = ref(1); const pageSize = ref(20); const total = ref(0)
+  let requestVersion = 0
+  let activeProjectId: number | null = null
+
+  /** 新项目请求立即作废旧数据与提交状态，晚到响应只能在同一版本内写回。 */
+  function beginLoad(projectId: number) {
+    const projectChanged = activeProjectId !== projectId
+    activeProjectId = projectId
+    const version = ++requestVersion
+    state.value = 'loading'; mutationError.value = ''
+    if (projectChanged) {
+      sources.value = []; resources.value = []; jobs.value = []; total.value = 0
+      connectionMessage.value = ''; connectionError.value = ''
+      syncingSourceId.value = null; testingSourceId.value = null; retryingJobId.value = null; verifyingSourceId.value = null
+    }
+    return version
+  }
 
   /** 并行加载页面三块数据，任一失败都显示明确故障状态。 */
   async function load(projectId: number, provider: Provider) {
-    state.value = 'loading'; mutationError.value = ''
+    const version = beginLoad(projectId)
     try {
       const [sourcePage, resourcePage, jobPage] = await Promise.all([
         listSources(projectId, provider),
         listResources(projectId, { provider, resource_type: resourceType.value, asset_status: assetStatus.value, page: page.value, page_size: pageSize.value }),
         listJobs(projectId, provider),
       ])
+      if (version !== requestVersion) return
       const sourceIds = new Set(sourcePage.map(source => source.id))
       sources.value = sourcePage; resources.value = resourcePage.items; total.value = resourcePage.total
       // 同步任务接口属于项目公共核心，平台页只展示当前平台接入源产生的任务。
       jobs.value = jobPage.items.filter(job => sourceIds.has(job.sourceId))
       state.value = sourcePage.length || resourcePage.items.length || jobPage.items.length ? 'ready' : 'empty'
-    } catch (error) { state.value = errorState(error) }
+    } catch (error) { if (version === requestVersion) state.value = errorState(error) }
   }
   /** 云同步管理并行汇总两个平台，不加载该页面不展示的资源清单。 */
   async function loadSyncManagement(projectId: number) {
-    state.value = 'loading'; mutationError.value = ''
+    const version = beginLoad(projectId)
     try {
       const providers: Provider[] = ['aliyun', 'aws']
       const pages = await Promise.all(providers.map(async provider => {
@@ -44,11 +61,12 @@ export const useResourceStore = defineStore('cmdb-resource', () => {
         const sourceIds = new Set(sourcePage.map(source => source.id))
         return { sources: sourcePage, jobs: jobPage.items.filter(job => sourceIds.has(job.sourceId)).map(job => ({ ...job, provider })) }
       }))
+      if (version !== requestVersion) return
       sources.value = pages.flatMap(page => page.sources)
       jobs.value = pages.flatMap(page => page.jobs)
       resources.value = []; total.value = 0
       state.value = sources.value.length || jobs.value.length ? 'ready' : 'empty'
-    } catch (error) { state.value = errorState(error) }
+    } catch (error) { if (version === requestVersion) state.value = errorState(error) }
   }
   /** 写操作完成后按调用页面恢复单平台或双平台视图。 */
   async function reload(projectId: number, provider: Provider, syncManagement: boolean) { if (syncManagement) await loadSyncManagement(projectId); else await load(projectId, provider) }
@@ -79,6 +97,8 @@ export const useResourceStore = defineStore('cmdb-resource', () => {
   /** 待验证来源仅可确认身份；无新凭证时服务端使用已安全保存的凭证。 */
   async function verifyIdentity(projectId: number, provider: Provider, sourceId: number, credential?: Record<string, unknown>, syncManagement = false) {
     verifyingSourceId.value = sourceId; mutationError.value = ''
+    const verificationVersion = requestVersion
+    let finalVersion = verificationVersion
     let verificationError: unknown
     let credentialInput = credential
     try { await verifySourceIdentity(projectId, sourceId, credentialInput) }
@@ -87,10 +107,13 @@ export const useResourceStore = defineStore('cmdb-resource', () => {
       clearCredential(credentialInput)
       credentialInput = undefined
       verifyingSourceId.value = null
-      // 无论服务端确认成功或拒绝，都重新读取其最终事实，不能凭客户端推断更新卡片。
-      try { await reload(projectId, provider, syncManagement) } catch (error) { if (!verificationError) throw error }
+      // 只允许当前项目上下文刷新服务端事实，项目切换后的旧请求不得覆盖新列表。
+      if (verificationVersion === requestVersion) {
+        try { await reload(projectId, provider, syncManagement) } catch (error) { if (!verificationError) throw error }
+        finally { finalVersion = requestVersion }
+      }
     }
-    if (verificationError) { mutationError.value = verificationFailureMessage(verificationError); throw verificationError }
+    if (verificationError) { if (finalVersion === requestVersion) mutationError.value = verificationFailureMessage(verificationError); throw verificationError }
   }
   return { sources, resources, jobs, state, mutationError, syncingSourceId, testingSourceId, retryingJobId, verifyingSourceId, connectionMessage, connectionError, resourceType, assetStatus, page, pageSize, total, load, loadSyncManagement, create, update, remove, testConnection, toggle, retry, sync, verifyIdentity }
 })

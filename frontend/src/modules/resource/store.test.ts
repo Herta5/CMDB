@@ -101,4 +101,28 @@ describe('云资源状态层', () => {
     expect(store.verifyingSourceId).toBeNull()
     expect(store.sources[0]?.identityStatus).toBe('pending')
   })
+
+  it('项目切换后忽略旧项目晚到的身份验证刷新和错误', async () => {
+    get.mockImplementation((url: string, options?: { params?: { provider?: string } }) => {
+      const projectId = url.split('/')[2]
+      const provider = options?.params?.provider
+      if (url.endsWith('/sources')) return Promise.resolve([{ id: projectId === '1' ? 4 : 8, project_id: Number(projectId), provider, name: projectId === '1' ? '旧项目账号' : '新项目账号', identity_status: 'verified', enabled: true, sync_interval_minutes: 60 }])
+      return Promise.resolve({ items: [{ id: projectId === '1' ? 14 : 18, source_id: projectId === '1' ? 4 : 8, status: 'failed', trigger: 'manual' }], total: 1 })
+    })
+    let rejectVerification!: (error: unknown) => void
+    post.mockImplementation(() => new Promise((_resolve, reject) => { rejectVerification = reject }))
+    const store = useResourceStore()
+    await store.loadSyncManagement(1)
+
+    const verification = store.verifyIdentity(1, 'aws', 4)
+    await Promise.resolve()
+    await store.loadSyncManagement(2)
+    rejectVerification({ response: { data: { message: '旧项目身份验证失败' } } })
+    await expect(verification).rejects.toBeTruthy()
+
+    expect(store.sources.map(source => source.projectId)).toEqual([2, 2])
+    expect(store.jobs.map(job => job.sourceId)).toEqual([8, 8])
+    expect(store.mutationError).toBe('')
+    expect(store.verifyingSourceId).toBeNull()
+  })
 })
