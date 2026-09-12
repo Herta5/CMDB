@@ -2,18 +2,123 @@
 package project
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
+	"time"
 
 	"cmdb/internal/audit"
 	"cmdb/internal/identity"
+	"cmdb/internal/resource"
 	"github.com/jackc/pgx/v5/pgconn"
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
 )
+
+// TestProjectDeletionDependencies 防止系统管理员删除父项目时绕过正常和失联资产、活动任务的保护。
+func TestProjectDeletionDependencies(t *testing.T) {
+	for _, dependency := range []string{"服务器正常", "服务器失联", "数据库正常", "数据库失联", "负载均衡正常", "负载均衡失联", "queued", "running", "success", "partial_success", "failed"} {
+		t.Run(dependency, func(t *testing.T) {
+			setup, db := newProjectServiceWithDatabase(t)
+			if err := db.AutoMigrate(&resource.Source{}, &resource.Server{}, &resource.Database{}, &resource.LoadBalancer{}, &resource.SyncJob{}, &audit.Log{}); err != nil {
+				t.Fatal("准备删除依赖表失败")
+			}
+			parent, err := setup.Create(context.Background(), CreateInput{Code: "删除保护", Name: "删除保护项目"})
+			if err != nil {
+				t.Fatal("准备项目失败")
+			}
+			now := time.Now().UTC()
+			source := resource.Source{ProjectID: parent.ID, Name: "保留来源", Provider: "aws", CloudAccountID: "虚构账号", IdentityStatus: resource.IdentityStatusVerified, IdentityVerifiedAt: &now, EncryptedCredential: "虚构密文"}
+			if err := db.Create(&source).Error; err != nil {
+				t.Fatal("准备接入源失败")
+			}
+			base := resource.AssetBase{ProjectID: parent.ID, SourceID: source.ID, Provider: "aws", ResourceType: "ec2", ExternalID: "保留资产", AssetStatus: resource.AssetStatusActive, FirstSeenAt: now, LastSeenAt: now}
+			if strings.HasSuffix(dependency, "失联") {
+				base.AssetStatus = resource.AssetStatusLost
+				missing := now.Add(-48 * time.Hour)
+				base.MissingSince = &missing
+			}
+			var asset any
+			switch {
+			case strings.HasPrefix(dependency, "服务器"):
+				asset = &resource.Server{AssetBase: base, PrivateIPs: json.RawMessage(`["10.0.0.8"]`)}
+			case strings.HasPrefix(dependency, "数据库"):
+				base.ResourceType = "rds"
+				asset = &resource.Database{AssetBase: base, Endpoints: json.RawMessage(`[{"address":"db.example.invalid","port":5432}]`)}
+			case strings.HasPrefix(dependency, "负载均衡"):
+				base.ResourceType = "elb"
+				asset = &resource.LoadBalancer{AssetBase: base, Endpoints: json.RawMessage(`[{"address":"lb.example.invalid","port":443}]`)}
+			}
+			if asset != nil {
+				if err := db.Create(asset).Error; err != nil {
+					t.Fatal("准备资产失败")
+				}
+			}
+			status := dependency
+			if asset != nil {
+				status = "success"
+			}
+			job := resource.SyncJob{ProjectID: parent.ID, SourceID: source.ID, Status: status, Trigger: "manual", StartedAt: now, Statistics: json.RawMessage(`{"保留历史":1}`)}
+			if err := db.Create(&job).Error; err != nil {
+				t.Fatal("准备任务失败")
+			}
+			if err := audit.NewRepository(db).Record(context.Background(), audit.Entry{ProjectID: &parent.ID, Action: audit.ActionProjectCreated, ResourceType: "project", ResourceID: "保留历史"}); err != nil {
+				t.Fatal("准备历史审计失败")
+			}
+			beforeAsset, _ := json.Marshal(asset)
+			service := NewService(NewRepository(db), audit.NewRepository(db))
+			err = service.Delete(context.Background(), parent.ID)
+			blocked := asset != nil || status == "queued" || status == "running"
+			if blocked {
+				if !errors.Is(err, resource.ErrDeleteDependencyConflict) {
+					t.Fatalf("存在依赖必须返回稳定删除冲突，实际为 %v", err)
+				}
+				if err := db.First(&Project{}, parent.ID).Error; err != nil {
+					t.Fatal("冲突必须保留项目")
+				}
+				if err := db.First(&resource.Source{}, source.ID).Error; err != nil {
+					t.Fatal("冲突必须保留接入源")
+				}
+				var currentJob resource.SyncJob
+				if err := db.First(&currentJob, job.ID).Error; err != nil || currentJob.Status != job.Status || string(currentJob.Statistics) != string(job.Statistics) {
+					t.Fatal("冲突必须保留任务历史")
+				}
+				if asset != nil {
+					if err := db.First(asset).Error; err != nil {
+						t.Fatal("冲突必须保留资产")
+					}
+					after, _ := json.Marshal(asset)
+					if !bytes.Equal(beforeAsset, after) {
+						t.Fatal("冲突不得改写资产状态、时间或端点")
+					}
+				}
+			} else {
+				if err != nil {
+					t.Fatalf("终态任务不得阻止项目删除：%v", err)
+				}
+				var count int64
+				if err := db.Model(&Project{}).Where("id = ?", parent.ID).Count(&count).Error; err != nil || count != 0 {
+					t.Fatal("无依赖时必须删除项目")
+				}
+			}
+			var history, deletions int64
+			if err := db.Model(&audit.Log{}).Where("resource_id = ?", "保留历史").Count(&history).Error; err != nil || history != 1 {
+				t.Fatal("历史审计必须长期保留")
+			}
+			if err := db.Model(&audit.Log{}).Where("action = ?", audit.ActionProjectDeleted).Count(&deletions).Error; err != nil {
+				t.Fatal("读取删除审计失败")
+			}
+			if (blocked && deletions != 0) || (!blocked && deletions != 1) {
+				t.Fatal("删除审计必须与实际结果一致")
+			}
+		})
+	}
+}
 
 // TestCreateProjectRollsBackWhenAuditWriteFails 防止项目先创建而审计记录缺失。
 func TestCreateProjectRollsBackWhenAuditWriteFails(t *testing.T) {
@@ -350,7 +455,7 @@ func newProjectServiceWithDatabase(t *testing.T) (*Service, *gorm.DB) {
 	if err != nil {
 		t.Fatalf("打开项目测试数据库失败：%v", err)
 	}
-	if err := db.AutoMigrate(&identity.User{}, &Project{}, &MemberRole{}); err != nil {
+	if err := db.AutoMigrate(&identity.User{}, &Project{}, &MemberRole{}, &resource.Source{}, &resource.Server{}, &resource.Database{}, &resource.LoadBalancer{}, &resource.SyncJob{}); err != nil {
 		t.Fatalf("创建项目测试表失败：%v", err)
 	}
 	return NewService(NewRepository(db)), db

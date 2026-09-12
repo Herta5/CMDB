@@ -18,7 +18,12 @@ import (
 // CreateSource 保存已加密的接入源，仓储永远不接收明文凭证。
 func (r *Repository) CreateSource(ctx context.Context, source *Source) error {
 	// 即便上层启用 SQL 日志，凭证专用写入也不能把绑定的完整密文带入日志。
-	return sourceIdentityWriteError(r.db.Session(&gorm.Session{Logger: logger.Default.LogMode(logger.Silent)}).WithContext(ctx).Create(source).Error)
+	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := NewDeletionGuard(tx).LockProjectForOperation(ctx, source.ProjectID); err != nil {
+			return err
+		}
+		return sourceIdentityWriteError(tx.Session(&gorm.Session{Logger: logger.Default.LogMode(logger.Silent)}).Create(source).Error)
+	})
 }
 
 // UpdateSource 保存经过服务层校验的非敏感配置和可选新密文。
@@ -43,10 +48,10 @@ func sourceIdentityWriteError(err error) error {
 	return err
 }
 
-// ProjectIsEnabled 只供新增身份验证动作检查项目状态；事务内共享锁防止检查后项目被并发停用。
+// ProjectIsEnabled 只供新增身份验证动作检查项目状态；统一使用项目排他锁，避免随后锁来源时发生共享锁升级死锁。
 func (r *Repository) ProjectIsEnabled(ctx context.Context, projectID uint64) (bool, error) {
 	var project struct{ Status string }
-	if err := r.db.WithContext(ctx).Table("projects").Clauses(clause.Locking{Strength: "SHARE"}).Where("id = ?", projectID).Take(&project).Error; err != nil {
+	if err := r.db.WithContext(ctx).Table("projects").Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ?", projectID).Take(&project).Error; err != nil {
 		return false, err
 	}
 	return project.Status == "enabled", nil
@@ -54,16 +59,19 @@ func (r *Repository) ProjectIsEnabled(ctx context.Context, projectID uint64) (bo
 
 // lockSourceForProject 在身份提交事务内重读并锁定来源，避免并发验证覆盖其他事务已经确认的账号。
 func (r *Repository) lockSourceForProject(ctx context.Context, projectID, sourceID uint64) (*Source, error) {
-	var source Source
-	if err := r.db.WithContext(ctx).Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ? AND project_id = ?", sourceID, projectID).Take(&source).Error; err != nil {
-		return nil, err
-	}
-	return &source, nil
+	return NewDeletionGuard(r.db).LockSourceForOperation(ctx, projectID, sourceID)
 }
 
-// DeleteSource 删除接入源及数据库外键约束下的资源和同步任务。
+// DeleteSource 只在事务内通过依赖守卫后删除来源，三类资产外键继续提供 RESTRICT 兜底。
 func (r *Repository) DeleteSource(ctx context.Context, source *Source) error {
-	return r.db.WithContext(ctx).Delete(source).Error
+	result := r.db.WithContext(ctx).Delete(source)
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected == 0 {
+		return gorm.ErrRecordNotFound
+	}
+	return nil
 }
 
 // ListJobs 在项目边界内按时间倒序分页返回同步历史。
@@ -180,9 +188,18 @@ func (r *Repository) FindSource(ctx context.Context, id uint64) (*Source, error)
 	return &source, nil
 }
 
-// CreateJob 记录同步开始状态。
+// CreateJob 在统一父锁下创建任务，防止父删除检查通过后出现会被级联删除的新活动任务。
 func (r *Repository) CreateJob(ctx context.Context, job *SyncJob) error {
-	return r.db.WithContext(ctx).Create(job).Error
+	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		source, err := NewDeletionGuard(tx).LockSourceForOperation(ctx, job.ProjectID, job.SourceID)
+		if err != nil {
+			return err
+		}
+		if source.IdentityStatus != IdentityStatusVerified || source.CloudAccountID == "" {
+			return ErrSourceIdentityPending
+		}
+		return tx.Create(job).Error
+	})
 }
 
 // SaveJob 保存任务的最终脱敏状态与统计。

@@ -311,13 +311,26 @@ func (s *Service) DeleteSource(ctx context.Context, projectID, sourceID uint64) 
 		return err
 	}
 	projectIDCopy := projectID
-	return s.withAuditTransaction(ctx, func(repository *Repository, recorder audit.Recorder) error {
-		// 删除审计先在事务中保存接入源快照；业务删除失败时该审计也随事务回滚。
+	err = s.withAuditTransaction(ctx, func(repository *Repository, recorder audit.Recorder) error {
+		guard := NewDeletionGuard(repository.db)
+		current, err := guard.LockSourceForOperation(ctx, projectID, sourceID)
+		if err != nil {
+			return err
+		}
+		if err := s.requireVerified(current); err != nil {
+			return err
+		}
+		if err := guard.CheckSourceDependencies(ctx, sourceID); err != nil {
+			return err
+		}
+		source = current
+		// 同一事务内确认无依赖后才写成功删除审计；外键拒绝时也必须一起回滚。
 		if err := recordAuditWith(ctx, recorder, audit.Entry{ProjectID: &projectIDCopy, Action: audit.ActionSourceDeleted, ResourceType: "resource_source", ResourceID: strconv.FormatUint(sourceID, 10), Detail: map[string]any{"provider": source.Provider, "name": source.Name}}); err != nil {
 			return err
 		}
 		return repository.DeleteSource(ctx, source)
 	})
+	return NormalizeDeleteError(err)
 }
 
 // ListSources 仅返回指定项目和平台的接入源，密文字段受 JSON 标签保护。
@@ -554,6 +567,14 @@ func (s *Service) executeSync(ctx context.Context, sourceID uint64, trigger stri
 	failed := 0
 	// 所有成功类型的资源变化、删除、任务统计和调度时间使用同一事务，后续类型失败时不会留下无统计归属的部分写入。
 	applyErr := s.repository.Transaction(ctx, func(tx *gorm.DB) error {
+		// 资产新增与父删除共用项目→来源锁顺序；既有任务不因父对象随后停用而取消。
+		current, err := NewDeletionGuard(tx).LockSourceForOperation(ctx, source.ProjectID, source.ID)
+		if err != nil {
+			return err
+		}
+		if err := s.requireVerified(current); err != nil {
+			return err
+		}
 		for _, result := range results {
 			if result.Err != nil {
 				failed++

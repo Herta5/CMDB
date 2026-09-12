@@ -7,6 +7,7 @@ import (
 
 	"cmdb/internal/audit"
 	"cmdb/internal/identity"
+	"cmdb/internal/resource"
 	"gorm.io/gorm"
 )
 
@@ -35,18 +36,23 @@ type auditTransactionRepository interface {
 
 // gormRepository 是 Repository 的 GORM 实现，所有查询都明确落在新版项目表。
 type gormRepository struct {
-	db *gorm.DB
+	db            *gorm.DB
+	deletionGuard *resource.DeletionGuard
 }
 
 // NewRepository 创建项目仓储，数据库连接必须由平台层统一装配。
-func NewRepository(db *gorm.DB) Repository {
-	return &gormRepository{db: db}
+func NewRepository(db *gorm.DB, guards ...*resource.DeletionGuard) Repository {
+	guard := resource.NewDeletionGuard(db)
+	if len(guards) > 0 && guards[0] != nil {
+		guard = guards[0]
+	}
+	return &gormRepository{db: db, deletionGuard: guard}
 }
 
 // WithAuditTransaction 将项目、成员关系和审计日志绑定到同一数据库事务。
 func (r *gormRepository) WithAuditTransaction(ctx context.Context, operation func(Repository, audit.Recorder) error) error {
 	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		return operation(&gormRepository{db: tx}, audit.NewRepository(tx))
+		return operation(NewRepository(tx, r.deletionGuard.WithTransaction(tx)), audit.NewRepository(tx))
 	})
 }
 
@@ -95,7 +101,25 @@ func (r *gormRepository) Update(ctx context.Context, project *Project) error {
 
 // Delete 物理删除项目，关联成员关系由数据库外键级联清理，审计记录由外键外的数值保留。
 func (r *gormRepository) Delete(ctx context.Context, id uint64) error {
-	return r.db.WithContext(ctx).Delete(&Project{}, id).Error
+	result := r.db.WithContext(ctx).Delete(&Project{}, id)
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected == 0 {
+		return gorm.ErrRecordNotFound
+	}
+	return nil
+}
+
+// LockForDeletion 使用资源核心的公共守卫，在事务内锁定项目及来源并验证删除依赖。
+func (r *gormRepository) LockForDeletion(ctx context.Context, id uint64) (*Project, error) {
+	if err := r.deletionGuard.LockProjectForOperation(ctx, id); err != nil {
+		return nil, err
+	}
+	if err := r.deletionGuard.CheckProjectDependencies(ctx, id); err != nil {
+		return nil, err
+	}
+	return r.FindByID(ctx, id)
 }
 
 // List 返回全部项目，仅供系统管理员的全局项目视图使用。

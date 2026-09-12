@@ -4,7 +4,11 @@
 package database
 
 import (
+	"cmdb/internal/audit"
+	"cmdb/internal/project"
+	"cmdb/internal/resource"
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -27,6 +31,205 @@ const (
 )
 
 var postgresTestDatabaseSequence atomic.Uint64
+
+// TestPostgreSQLDeletionDependencyRace 用两条真实事务验证先提交的依赖不能被父删除级联清理。
+func TestPostgreSQLDeletionDependencyRace(t *testing.T) {
+	for _, parent := range []string{"项目", "接入源"} {
+		for _, dependency := range []string{"排队任务", "服务器", "数据库", "负载均衡"} {
+			t.Run(parent+"/"+dependency, func(t *testing.T) {
+				fixture := newPostgresTestDatabase(t)
+				installCurrentSchema(t, fixture)
+				projectID := insertCurrentProject(t, fixture.db, "删除竞争")
+				sourceID := insertCurrentSource(t, fixture.db, projectID, "来源", "虚构账号")
+				ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+				defer cancel()
+				writer := fixture.db.WithContext(ctx).Begin()
+				if writer.Error != nil {
+					t.Fatal("启动依赖事务失败")
+				}
+				defer writer.Rollback()
+				var writerPID int
+				if err := writer.Raw("SELECT pg_backend_pid()").Scan(&writerPID).Error; err != nil {
+					t.Fatal("读取依赖事务失败")
+				}
+				// 写方按生产协议占用父锁；删除必须等待该事务后重新判断依赖。
+				if err := writer.Exec("SELECT id FROM projects WHERE id = ? FOR UPDATE", projectID).Error; err != nil {
+					t.Fatal("锁定项目失败")
+				}
+				if err := writer.Exec("SELECT id FROM resource_sources WHERE id = ? FOR UPDATE", sourceID).Error; err != nil {
+					t.Fatal("锁定来源失败")
+				}
+				results := make(chan error, 1)
+				go func() {
+					if parent == "项目" {
+						results <- project.NewService(project.NewRepository(fixture.db), audit.NewRepository(fixture.db)).Delete(ctx, uint64(projectID))
+						return
+					}
+					results <- resource.NewService(resource.NewRepository(fixture.db), nil, nil, audit.NewRepository(fixture.db)).DeleteSource(ctx, uint64(projectID), uint64(sourceID))
+				}()
+				waitPostgresBlockedBy(t, ctx, fixture.db, writerPID)
+				if dependency == "排队任务" {
+					if err := resource.NewRepository(writer).CreateJob(ctx, &resource.SyncJob{ProjectID: uint64(projectID), SourceID: uint64(sourceID), Status: "queued", Trigger: "manual", StartedAt: time.Now()}); err != nil {
+						t.Fatal("写入并发排队任务失败")
+					}
+				} else {
+					table := map[string]string{"服务器": "resources_servers", "数据库": "resources_databases", "负载均衡": "resources_load_balancers"}[dependency]
+					insertAsset(t, writer, table, projectID, sourceID, "竞争资产")
+				}
+				if err := writer.Commit().Error; err != nil {
+					t.Fatal("提交并发依赖失败")
+				}
+				select {
+				case err := <-results:
+					if !errors.Is(err, resource.ErrDeleteDependencyConflict) {
+						t.Fatalf("先提交依赖后删除必须返回稳定冲突，实际为 %v", err)
+					}
+				case <-ctx.Done():
+					t.Fatal("删除与依赖写入不得死锁")
+				}
+				for table, where := range map[string]string{"projects": "id", "resource_sources": "project_id"} {
+					var count int64
+					if err := fixture.db.Table(table).Where(where+" = ?", projectID).Count(&count).Error; err != nil || count != 1 {
+						t.Fatal("并发冲突必须保留父对象")
+					}
+				}
+				dependencyTable := map[string]string{"排队任务": "sync_jobs", "服务器": "resources_servers", "数据库": "resources_databases", "负载均衡": "resources_load_balancers"}[dependency]
+				var dependencies int64
+				if err := fixture.db.Table(dependencyTable).Where("source_id = ?", sourceID).Count(&dependencies).Error; err != nil || dependencies != 1 {
+					t.Fatal("已提交依赖不得在父删除竞争中丢失")
+				}
+				var deletions int64
+				if err := fixture.db.Model(&audit.Log{}).Where("action IN ?", []string{audit.ActionProjectDeleted, audit.ActionSourceDeleted}).Count(&deletions).Error; err != nil || deletions != 0 {
+					t.Fatal("并发冲突不得留下成功删除审计")
+				}
+			})
+		}
+	}
+}
+
+// TestPostgreSQLDeletionWinsDependencyRace 验证父删除先占用事务时，后续入队和三类资产插入均不能创建孤儿依赖。
+func TestPostgreSQLDeletionWinsDependencyRace(t *testing.T) {
+	for _, parent := range []string{"项目", "接入源"} {
+		for _, dependency := range []string{"排队任务", "服务器", "数据库", "负载均衡"} {
+			t.Run(parent+"/"+dependency, func(t *testing.T) {
+				fixture := newPostgresTestDatabase(t)
+				installCurrentSchema(t, fixture)
+				projectID := insertCurrentProject(t, fixture.db, "先删除")
+				sourceID := insertCurrentSource(t, fixture.db, projectID, "来源", "虚构账号")
+				ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+				defer cancel()
+				deletion := fixture.db.WithContext(ctx).Begin()
+				if deletion.Error != nil {
+					t.Fatal("启动删除事务失败")
+				}
+				defer deletion.Rollback()
+				var deletionPID int
+				if err := deletion.Raw("SELECT pg_backend_pid()").Scan(&deletionPID).Error; err != nil {
+					t.Fatal("读取删除事务失败")
+				}
+				var err error
+				if parent == "项目" {
+					err = project.NewService(project.NewRepository(deletion), audit.NewRepository(deletion)).Delete(ctx, uint64(projectID))
+				} else {
+					err = resource.NewService(resource.NewRepository(deletion), nil, nil, audit.NewRepository(deletion)).DeleteSource(ctx, uint64(projectID), uint64(sourceID))
+				}
+				if err != nil {
+					t.Fatalf("空父对象应允许删除：%v", err)
+				}
+				results := make(chan error, 1)
+				go func() {
+					if dependency == "排队任务" {
+						results <- resource.NewRepository(fixture.db).CreateJob(ctx, &resource.SyncJob{ProjectID: uint64(projectID), SourceID: uint64(sourceID), Status: "queued", Trigger: "manual", StartedAt: time.Now()})
+						return
+					}
+					table := map[string]string{"服务器": "resources_servers", "数据库": "resources_databases", "负载均衡": "resources_load_balancers"}[dependency]
+					results <- fixture.db.WithContext(ctx).Exec("INSERT INTO "+table+" (project_id, source_id, provider, resource_type, external_id, first_seen_at, last_seen_at) VALUES (?, ?, 'aliyun', 'integration', '竞争资产', NOW(), NOW())", projectID, sourceID).Error
+				}()
+				waitPostgresBlockedBy(t, ctx, fixture.db, deletionPID)
+				if err := deletion.Commit().Error; err != nil {
+					t.Fatal("提交父删除失败")
+				}
+				select {
+				case err := <-results:
+					if err == nil {
+						t.Fatal("已删除父对象不得接受新依赖")
+					}
+				case <-ctx.Done():
+					t.Fatal("依赖写入不得死锁")
+				}
+				for _, table := range []string{"resource_sources", "resources_servers", "resources_databases", "resources_load_balancers", "sync_jobs"} {
+					var count int64
+					if err := fixture.db.Table(table).Where("project_id = ?", projectID).Count(&count).Error; err != nil || count != 0 {
+						t.Fatal("父删除成功后不得遗留新依赖")
+					}
+				}
+				var count int64
+				if err := fixture.db.Model(&audit.Log{}).Where("action IN ?", []string{audit.ActionProjectDeleted, audit.ActionSourceDeleted}).Count(&count).Error; err != nil || count != 1 {
+					t.Fatal("成功删除应提交一条审计")
+				}
+			})
+		}
+	}
+}
+
+// TestPostgreSQLDeletionNormalizesForeignKeyConflict 验证数据库兜底拒绝无论是否启用 GORM 错误转换都返回同一业务错误，并回滚删除审计。
+func TestPostgreSQLDeletionNormalizesForeignKeyConflict(t *testing.T) {
+	for _, parent := range []string{"项目", "接入源"} {
+		for _, translated := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/错误转换=%t", parent, translated), func(t *testing.T) {
+				fixture := newPostgresTestDatabase(t)
+				installCurrentSchema(t, fixture)
+				projectID := insertCurrentProject(t, fixture.db, "外键兜底")
+				sourceID := insertCurrentSource(t, fixture.db, projectID, "来源", "虚构账号")
+				parentTable, parentID := "projects", projectID
+				if parent == "接入源" {
+					parentTable, parentID = "resource_sources", sourceID
+				}
+				// 隔离夹具增加真实外键，以模拟依赖预检查未覆盖的数据库最终拒绝。
+				requireExec(t, fixture.db, "CREATE TABLE deletion_test_references (parent_id BIGINT REFERENCES "+parentTable+"(id) ON DELETE RESTRICT)", "创建外键兜底夹具失败")
+				requireExec(t, fixture.db, "INSERT INTO deletion_test_references VALUES (?)", "写入外键引用失败", parentID)
+				fixture.db.Config.TranslateError = translated
+				var err error
+				if parent == "项目" {
+					err = project.NewService(project.NewRepository(fixture.db), audit.NewRepository(fixture.db)).Delete(context.Background(), uint64(projectID))
+				} else {
+					err = resource.NewService(resource.NewRepository(fixture.db), nil, nil, audit.NewRepository(fixture.db)).DeleteSource(context.Background(), uint64(projectID), uint64(sourceID))
+				}
+				if !errors.Is(err, resource.ErrDeleteDependencyConflict) {
+					t.Fatalf("真实外键拒绝必须转换为稳定删除冲突，实际为 %v", err)
+				}
+				var parents, audits int64
+				if err := fixture.db.Table(parentTable).Where("id = ?", parentID).Count(&parents).Error; err != nil || parents != 1 {
+					t.Fatal("外键冲突必须保留父对象")
+				}
+				if err := fixture.db.Model(&audit.Log{}).Where("action IN ?", []string{audit.ActionProjectDeleted, audit.ActionSourceDeleted}).Count(&audits).Error; err != nil || audits != 0 {
+					t.Fatal("外键冲突必须回滚成功删除审计")
+				}
+			})
+		}
+	}
+}
+
+// waitPostgresBlockedBy 通过 PostgreSQL 锁等待关系建立竞态屏障，避免依靠固定睡眠猜测事务已经开始。
+func waitPostgresBlockedBy(t *testing.T, ctx context.Context, db *gorm.DB, blocker int) {
+	t.Helper()
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		var waiting bool
+		if err := db.WithContext(ctx).Raw("SELECT EXISTS (SELECT 1 FROM pg_stat_activity WHERE ? = ANY(pg_blocking_pids(pid)))", blocker).Scan(&waiting).Error; err != nil {
+			t.Fatal("读取事务等待关系失败")
+		}
+		if waiting {
+			return
+		}
+		select {
+		case <-ctx.Done():
+			t.Fatal("删除与写入没有形成预期互斥")
+		case <-ticker.C:
+		}
+	}
+}
 
 type postgresTestDatabase struct {
 	name          string

@@ -26,6 +26,63 @@ import (
 	"gorm.io/gorm/logger"
 )
 
+// TestDeletionConflictHTTPContract 验证管理员不能绕过依赖保护，拒绝响应不泄露依赖或跨项目对象信息。
+func TestDeletionConflictHTTPContract(t *testing.T) {
+	server, password, db := integrationServerWithDatabase(t)
+	admin := loginUser(t, server, "operator", password)
+	member := loginUser(t, server, "member_a", password)
+	parent := project.Project{Code: "删除保护", Name: "删除保护", Status: "enabled"}
+	if err := db.Create(&parent).Error; err != nil {
+		t.Fatal("准备项目失败")
+	}
+	if err := db.Create(&project.MemberRole{ProjectID: parent.ID, UserID: 2, Role: "project_admin"}).Error; err != nil {
+		t.Fatal("准备项目管理员失败")
+	}
+	now := time.Now().UTC()
+	source := cloudresource.Source{ProjectID: parent.ID, Name: "保留来源", Provider: "aws", CloudAccountID: "虚构账号", IdentityStatus: "verified", IdentityVerifiedAt: &now}
+	if err := db.Create(&source).Error; err != nil {
+		t.Fatal("准备来源失败")
+	}
+	asset := cloudresource.Database{AssetBase: cloudresource.AssetBase{ProjectID: parent.ID, SourceID: source.ID, Provider: "aws", ResourceType: "rds", ExternalID: "保留资产", AssetStatus: "lost"}, Endpoints: json.RawMessage(`[{"address":"private.example.invalid"}]`)}
+	if err := db.Create(&asset).Error; err != nil {
+		t.Fatal("准备资产失败")
+	}
+	path := fmt.Sprintf("/api/v1/projects/%d", parent.ID)
+	sourcePath := fmt.Sprintf("%s/sources/%d", path, source.ID)
+	for _, test := range []struct{ name, token, path, code, message string }{
+		{"系统管理员删除项目", admin, path, "PROJECT_DELETE_CONFLICT", "项目仍有资产或运行中的同步任务，暂不能删除"},
+		{"系统管理员删除来源", admin, sourcePath, "SOURCE_DELETE_CONFLICT", "接入源仍有资产或运行中的同步任务，暂不能删除"},
+		{"项目管理员删除来源", member, sourcePath, "SOURCE_DELETE_CONFLICT", "接入源仍有资产或运行中的同步任务，暂不能删除"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			response := integrationRequest(t, server, test.token, http.MethodDelete, test.path, nil, http.StatusConflict)
+			var payload map[string]any
+			decodeIntegration(t, response, &payload)
+			if len(payload) != 2 || payload["code"] != test.code || payload["message"] != test.message {
+				t.Fatal("依赖冲突必须只返回固定中文提示和错误码")
+			}
+		})
+	}
+	other := project.Project{Code: "其他删除项目", Name: "其他项目", Status: "enabled"}
+	if err := db.Create(&other).Error; err != nil {
+		t.Fatal("准备其他项目失败")
+	}
+	denied := integrationRequest(t, server, member, http.MethodDelete, path, nil, 404)
+	missing := integrationRequest(t, server, member, http.MethodDelete, "/api/v1/projects/999999", nil, 404)
+	if denied.Body.String() != missing.Body.String() {
+		t.Fatal("项目删除必须先授权，不得枚举依赖")
+	}
+	denied = integrationRequest(t, server, admin, http.MethodDelete, fmt.Sprintf("/api/v1/projects/%d/sources/%d", other.ID, source.ID), nil, 404)
+	missing = integrationRequest(t, server, admin, http.MethodDelete, fmt.Sprintf("/api/v1/projects/%d/sources/999999", other.ID), nil, 404)
+	if denied.Body.String() != missing.Body.String() {
+		t.Fatal("来源跨项目和不存在必须返回一致响应")
+	}
+	var count int64
+	if err := db.Model(&audit.Log{}).Where("action IN ?", []string{audit.ActionProjectDeleted, audit.ActionSourceDeleted}).Count(&count).Error; err != nil || count != 0 {
+		t.Fatal("冲突和越权不得产生成功删除审计")
+	}
+}
+
 // TestPublicUsernameContractEndToEnd 验证公开身份链路始终以用户名传递，内部用户主键不会穿透 HTTP 边界。
 func TestPublicUsernameContractEndToEnd(t *testing.T) {
 	server, password := integrationServer(t)
@@ -530,11 +587,27 @@ func TestProjectSourceAPINeverReturnsCredentials(t *testing.T) {
 	if !strings.Contains(resources.Body.String(), "i-integration") || !strings.Contains(resources.Body.String(), "10.0.0.8") {
 		t.Fatal("同步资源查询必须包含模拟采集器输出及端点")
 	}
-	integrationRequest(t, server, admin, http.MethodDelete, path+"/sources/"+strconv.FormatUint(source.ID, 10), nil, http.StatusNoContent)
+	integrationRequest(t, server, admin, http.MethodDelete, path+"/sources/"+strconv.FormatUint(source.ID, 10), nil, http.StatusConflict)
+	var unsuccessfulDeleteAudit int64
+	if err := db.Model(&audit.Log{}).Where("action = ? AND resource_id = ?", audit.ActionSourceDeleted, strconv.FormatUint(source.ID, 10)).Count(&unsuccessfulDeleteAudit).Error; err != nil || unsuccessfulDeleteAudit != 0 {
+		t.Fatal("资产阻止来源删除时不得产生成功审计")
+	}
+	// 空来源用于独立验收删除能力，不能把已同步资产的来源当作级联清理入口。
+	emptySource := source
+	emptySource.ID, emptySource.CloudAccountID = 0, "虚构空账号"
+	emptySource.Name = "无依赖来源"
+	if err := db.Create(&emptySource).Error; err != nil {
+		t.Fatal("准备无依赖来源失败")
+	}
+	integrationRequest(t, server, admin, http.MethodDelete, path+"/sources/"+strconv.FormatUint(emptySource.ID, 10), nil, http.StatusNoContent)
 	integrationRequest(t, server, member, http.MethodGet, path+"/sources", nil, http.StatusOK)
 	for _, action := range []string{audit.ActionSourceCreated, audit.ActionSourceConnectionTested, audit.ActionSourceSynced, audit.ActionSourceUpdated, audit.ActionSourceDeleted} {
 		var value audit.Log
-		if err := db.Where("action = ? AND resource_id = ?", action, strconv.FormatUint(source.ID, 10)).Order("id DESC").First(&value).Error; err != nil {
+		auditSourceID := source.ID
+		if action == audit.ActionSourceDeleted {
+			auditSourceID = emptySource.ID
+		}
+		if err := db.Where("action = ? AND resource_id = ?", action, strconv.FormatUint(auditSourceID, 10)).Order("id DESC").First(&value).Error; err != nil {
 			t.Fatalf("接入源动作必须写入统一审计：action=%s err=%v", action, err)
 		}
 		if value.ActorID == nil || *value.ActorID != 1 || value.RequestIP != "192.0.2.1" {

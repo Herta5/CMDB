@@ -40,7 +40,8 @@ func New(dependencies Dependencies) *gin.Engine {
 		repository = identity.NewUserRepository(dependencies.Database)
 	}
 	if dependencies.Database != nil {
-		projectRepository = project.NewRepository(dependencies.Database)
+		// 项目父删除显式接入资源核心守卫，系统管理员入口也不能绕过资产生命周期。
+		projectRepository = project.NewRepository(dependencies.Database, cloudresource.NewDeletionGuard(dependencies.Database))
 	}
 	// 全部领域共享同一个审计仓储，平台模块不得复制审计表写入逻辑。
 	auditRepository := audit.NewRepository(dependencies.Database)

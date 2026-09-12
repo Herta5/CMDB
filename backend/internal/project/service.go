@@ -9,6 +9,7 @@ import (
 
 	"cmdb/internal/audit"
 	"cmdb/internal/identity"
+	"cmdb/internal/resource"
 	"github.com/jackc/pgx/v5/pgconn"
 	"gorm.io/gorm"
 )
@@ -383,9 +384,20 @@ func (s *Service) Delete(ctx context.Context, id uint64) error {
 	if project == nil {
 		return ErrProjectNotFound
 	}
-	projectID := project.ID
-	return s.withAuditTransaction(ctx, func(repository Repository, recorder audit.Recorder) error {
-		// 删除审计先在事务内读取项目名称快照；后续删除失败时整个事务仍会回滚。
+	err = s.withAuditTransaction(ctx, func(repository Repository, recorder audit.Recorder) error {
+		guarded, ok := repository.(interface {
+			LockForDeletion(context.Context, uint64) (*Project, error)
+		})
+		if !ok {
+			return ErrProjectRepositoryUnavailable
+		}
+		current, err := guarded.LockForDeletion(ctx, id)
+		if err != nil {
+			return err
+		}
+		project = current
+		projectID := project.ID
+		// 只有父锁下确认无依赖后才保存删除快照，删除失败会一并回滚审计。
 		if err := recordAuditWith(ctx, recorder, audit.Entry{ProjectID: &projectID, Action: audit.ActionProjectDeleted, ResourceType: "project", ResourceID: strconv.FormatUint(project.ID, 10), Detail: map[string]any{
 			"project_code": project.Code, "project_name": project.Name,
 		}}); err != nil {
@@ -393,18 +405,26 @@ func (s *Service) Delete(ctx context.Context, id uint64) error {
 		}
 		return repository.Delete(ctx, id)
 	})
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return ErrProjectNotFound
+	}
+	return resource.NormalizeDeleteError(err)
 }
 
-// withAuditTransaction 在审计启用时强制使用项目仓储提供的共享事务能力。
+// withAuditTransaction 对真实仓储始终使用共享事务，避免未配置审计的内部调用把删除检查拆成多次提交。
 func (s *Service) withAuditTransaction(ctx context.Context, operation func(Repository, audit.Recorder) error) error {
+	if repository, ok := s.repository.(auditTransactionRepository); ok {
+		return repository.WithAuditTransaction(ctx, func(transaction Repository, recorder audit.Recorder) error {
+			if s.auditRecorder == nil {
+				recorder = nil
+			}
+			return operation(transaction, recorder)
+		})
+	}
 	if s.auditRecorder == nil {
 		return operation(s.repository, nil)
 	}
-	repository, ok := s.repository.(auditTransactionRepository)
-	if !ok {
-		return ErrProjectRepositoryUnavailable
-	}
-	return repository.WithAuditTransaction(ctx, operation)
+	return ErrProjectRepositoryUnavailable
 }
 
 // recordAuditWith 将 nil 记录器视为轻量测试未启用审计，生产路径始终收到事务记录器。

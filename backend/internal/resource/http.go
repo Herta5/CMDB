@@ -130,6 +130,9 @@ func (h *HTTPHandler) DeleteSource(c *gin.Context) {
 	if err := h.service.DeleteSource(c.Request.Context(), projectID, sourceID); errors.Is(err, gorm.ErrRecordNotFound) {
 		c.JSON(http.StatusNotFound, gin.H{"code": "SOURCE_NOT_FOUND", "message": "接入源不存在"})
 		return
+	} else if errors.Is(err, ErrDeleteDependencyConflict) {
+		c.JSON(http.StatusConflict, gin.H{"code": "SOURCE_DELETE_CONFLICT", "message": "接入源仍有资产或运行中的同步任务，暂不能删除"})
+		return
 	} else if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"code": "SOURCE_DELETE_FAILED", "message": "删除接入源失败"})
 		return

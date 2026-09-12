@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"cmdb/internal/identity"
+	"cmdb/internal/resource"
 	"github.com/gin-gonic/gin"
 )
 
@@ -161,6 +162,9 @@ func (h *HTTPHandler) Delete(c *gin.Context, claims identity.UserClaims) {
 	}
 	if err := h.service.Delete(c.Request.Context(), projectID); errors.Is(err, ErrProjectNotFound) {
 		writeProjectError(c, http.StatusNotFound, "PROJECT_NOT_FOUND", "项目不存在")
+		return
+	} else if errors.Is(err, resource.ErrDeleteDependencyConflict) {
+		writeProjectError(c, http.StatusConflict, "PROJECT_DELETE_CONFLICT", "项目仍有资产或运行中的同步任务，暂不能删除")
 		return
 	} else if err != nil {
 		writeProjectError(c, http.StatusInternalServerError, "PROJECT_SERVICE_UNAVAILABLE", "项目服务暂不可用")

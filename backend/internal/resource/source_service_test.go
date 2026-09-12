@@ -18,6 +18,94 @@ import (
 	"gorm.io/gorm/logger"
 )
 
+// TestSourceDeletionDependencies 防止父删除绕过三类资产生命周期，并确保活动任务和历史审计原样保留。
+func TestSourceDeletionDependencies(t *testing.T) {
+	for _, dependency := range []string{"服务器正常", "服务器失联", "数据库正常", "数据库失联", "负载均衡正常", "负载均衡失联", "queued", "running", "success", "partial_success", "failed"} {
+		t.Run(dependency, func(t *testing.T) {
+			service, db, source, now := newResourceServiceTest(t)
+			base := AssetBase{ProjectID: source.ProjectID, SourceID: source.ID, Provider: "aws", ResourceType: "ec2", ExternalID: "保留资产", AssetStatus: AssetStatusActive, FirstSeenAt: *now, LastSeenAt: *now}
+			if strings.HasSuffix(dependency, "失联") {
+				base.AssetStatus = AssetStatusLost
+				missing := now.Add(-48 * time.Hour)
+				base.MissingSince = &missing
+			}
+			var asset any
+			switch {
+			case strings.HasPrefix(dependency, "服务器"):
+				asset = &Server{AssetBase: base, PrivateIPs: json.RawMessage(`["10.0.0.8"]`)}
+			case strings.HasPrefix(dependency, "数据库"):
+				base.ResourceType = "rds"
+				asset = &Database{AssetBase: base, Endpoints: json.RawMessage(`[{"address":"db.example.invalid","port":5432}]`)}
+			case strings.HasPrefix(dependency, "负载均衡"):
+				base.ResourceType = "elb"
+				asset = &LoadBalancer{AssetBase: base, Endpoints: json.RawMessage(`[{"address":"lb.example.invalid","port":443}]`)}
+			}
+			if asset != nil {
+				if err := db.Create(asset).Error; err != nil {
+					t.Fatal("准备依赖资产失败")
+				}
+			}
+			status := dependency
+			if asset != nil {
+				status = "success"
+			}
+			job := SyncJob{ProjectID: source.ProjectID, SourceID: source.ID, Status: status, Trigger: "manual", StartedAt: *now, Statistics: json.RawMessage(`{"保留历史":1}`)}
+			if err := db.Create(&job).Error; err != nil {
+				t.Fatal("准备任务历史失败")
+			}
+			if err := audit.NewRepository(db).Record(context.Background(), audit.Entry{ProjectID: &source.ProjectID, Action: audit.ActionSourceSynced, ResourceType: "resource_source", ResourceID: "保留历史"}); err != nil {
+				t.Fatal("准备审计历史失败")
+			}
+			var beforeAsset []byte
+			if asset != nil {
+				beforeAsset, _ = json.Marshal(asset)
+			}
+			err := service.DeleteSource(context.Background(), source.ProjectID, source.ID)
+			blocked := asset != nil || status == "queued" || status == "running"
+			if blocked {
+				if !errors.Is(err, ErrDeleteDependencyConflict) {
+					t.Fatalf("存在依赖必须返回稳定删除冲突，实际为 %v", err)
+				}
+				var current Source
+				if err := db.First(&current, source.ID).Error; err != nil || current.EncryptedCredential != source.EncryptedCredential {
+					t.Fatal("冲突必须保留完整接入源")
+				}
+				var currentJob SyncJob
+				if err := db.First(&currentJob, job.ID).Error; err != nil || currentJob.Status != job.Status || string(currentJob.Statistics) != string(job.Statistics) {
+					t.Fatal("冲突必须保留任务历史")
+				}
+				if asset != nil {
+					if err := db.First(asset).Error; err != nil {
+						t.Fatal("冲突必须保留资产")
+					}
+					after, _ := json.Marshal(asset)
+					if !bytes.Equal(beforeAsset, after) {
+						t.Fatal("冲突不得改写资产状态、时间或访问端点")
+					}
+				}
+			} else {
+				if err != nil {
+					t.Fatalf("终态任务不得阻止删除：%v", err)
+				}
+				var count int64
+				if err := db.Model(&Source{}).Where("id = ?", source.ID).Count(&count).Error; err != nil || count != 0 {
+					t.Fatal("无依赖时必须删除来源")
+				}
+			}
+			var history, deletions int64
+			if err := db.Model(&audit.Log{}).Where("resource_id = ?", "保留历史").Count(&history).Error; err != nil || history != 1 {
+				t.Fatal("删除结果不得丢失历史审计")
+			}
+			if err := db.Model(&audit.Log{}).Where("action = ?", audit.ActionSourceDeleted).Count(&deletions).Error; err != nil {
+				t.Fatal("读取删除审计失败")
+			}
+			if (blocked && deletions != 0) || (!blocked && deletions != 1) {
+				t.Fatal("成功删除审计必须与实际结果一致")
+			}
+		})
+	}
+}
+
 // identityAdapterStub 模拟平台边界的稳定身份响应；校验继续经过共享严格 JSON 解析。
 type identityAdapterStub struct {
 	collectorStub
@@ -521,6 +609,7 @@ func sourceAuditFailureDatabase(t *testing.T) *gorm.DB {
 func TestCreateSourceEncryptsCredentialAndDefaultsInterval(t *testing.T) {
 	db, _ := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{Logger: logger.Default.LogMode(logger.Silent)})
 	_ = db.AutoMigrate(&Source{})
+	prepareSourceParentProjects(t, db)
 	cipher := NewCredentialCipher("source-test-deployment-key")
 	service := NewService(NewRepository(db), cipher, identityTestAdapters())
 	credential := json.RawMessage(`{"access_key_id":"example-id","access_key_secret":"example-secret"}`)
@@ -552,11 +641,12 @@ func TestCreateSourceRejectsRemovedKubernetesProvider(t *testing.T) {
 	}
 }
 
-// TestUpdateSourceKeepsCredentialAndDeleteCascades 验证未提交新凭证时保留密文，并可删除项目内接入源。
-func TestUpdateSourceKeepsCredentialAndDeleteCascades(t *testing.T) {
+// TestUpdateSourceKeepsCredentialAndDeletesWithoutDependencies 验证未提交新凭证时保留密文，无依赖时可删除项目内来源。
+func TestUpdateSourceKeepsCredentialAndDeletesWithoutDependencies(t *testing.T) {
 	db, _ := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{Logger: logger.Default.LogMode(logger.Silent)})
 	_ = db.Exec("PRAGMA foreign_keys = ON").Error
 	_ = db.AutoMigrate(&Source{}, &Server{}, &Database{}, &LoadBalancer{}, &SyncJob{}, &audit.Log{})
+	prepareSourceParentProjects(t, db)
 	service := NewService(NewRepository(db), NewCredentialCipher("source-update-key"), identityTestAdapters())
 	created, err := service.CreateSource(context.Background(), CreateSourceInput{ProjectID: 3, Provider: ProviderAWS, Name: "旧名称", Credential: json.RawMessage(`{"access_key_id":"虚构标识","secret_access_key":"虚构密钥"}`)})
 	if err != nil {
@@ -596,6 +686,7 @@ func TestListJobsUsesProjectBoundary(t *testing.T) {
 func TestListSourcesFiltersProjectAndProvider(t *testing.T) {
 	db, _ := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{Logger: logger.Default.LogMode(logger.Silent)})
 	_ = db.AutoMigrate(&Source{})
+	prepareSourceParentProjects(t, db)
 	service := NewService(NewRepository(db), NewCredentialCipher("source-test-key"), identityTestAdapters())
 	service.adapters = map[string]ProviderAdapter{ProviderAWS: identityAdapterStub{resolve: func(_ context.Context, source Source, _ []byte) (string, error) { return source.Name, nil }}, ProviderAliyun: identityAdapterStub{aliyun: true}}
 	for _, input := range []CreateSourceInput{{ProjectID: 1, Provider: ProviderAWS, Name: "AWS"}, {ProjectID: 1, Provider: ProviderAliyun, Name: "阿里云"}, {ProjectID: 2, Provider: ProviderAWS, Name: "其他项目"}} {
@@ -610,5 +701,16 @@ func TestListSourcesFiltersProjectAndProvider(t *testing.T) {
 	values, err := service.ListSources(context.Background(), 1, ProviderAWS)
 	if err != nil || len(values) != 1 || values[0].Name != "AWS" {
 		t.Fatal("接入源列表未正确执行项目和平台过滤")
+	}
+}
+
+// prepareSourceParentProjects 让轻量来源夹具保留真实父对象，避免用孤儿来源绕过事务内项目锁。
+func prepareSourceParentProjects(t *testing.T, db *gorm.DB) {
+	t.Helper()
+	if err := db.Exec("CREATE TABLE projects (id integer primary key, name text, status text)").Error; err != nil {
+		t.Fatal("创建来源父项目表失败")
+	}
+	if err := db.Exec("INSERT INTO projects (id, name, status) VALUES (1, '项目一', 'enabled'), (2, '项目二', 'enabled'), (3, '项目三', 'enabled'), (7, '项目七', 'enabled')").Error; err != nil {
+		t.Fatal("准备来源父项目失败")
 	}
 }
