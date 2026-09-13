@@ -3,6 +3,7 @@ package resource
 
 import (
 	"bytes"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"math/big"
@@ -14,16 +15,18 @@ import (
 // assetRow 覆盖三张表的字段超集，仅在资源核心内部用于统一读写。
 type assetRow struct {
 	AssetBase
-	InstanceType  string
-	VCPU          int `gorm:"column:vcpu"`
-	Memory        int64
-	PrivateIPs    json.RawMessage `gorm:"type:json"`
-	PublicIPs     json.RawMessage `gorm:"type:json"`
-	Disks         json.RawMessage `gorm:"type:json"`
-	Endpoints     json.RawMessage `gorm:"type:json"`
-	Engine        string
-	EngineVersion string
-	NetworkType   string
+	InstanceType   string
+	VCPU           sql.NullInt64 `gorm:"column:vcpu"`
+	Memory         sql.NullInt64
+	PrivateIPs     json.RawMessage `gorm:"type:json"`
+	PublicIPs      json.RawMessage `gorm:"type:json"`
+	Disks          json.RawMessage `gorm:"type:json"`
+	Endpoints      json.RawMessage `gorm:"type:json"`
+	Engine         string
+	EngineVersion  string
+	StorageType    string
+	StorageSizeGiB sql.NullInt64 `gorm:"column:storage_size_gib"`
+	NetworkType    string
 }
 
 // assetTableForType 将受支持的云产品路由到固定表名，表名不会来自外部输入。
@@ -158,11 +161,32 @@ func snapshotBusinessColumns(table string, snapshot Snapshot) map[string]any {
 	if table == "resources_databases" {
 		columns["engine"] = snapshot.Engine
 		columns["engine_version"] = snapshot.EngineVersion
+		columns["instance_type"] = snapshot.InstanceType
+		columns["vcpu"] = nullablePositiveInt(snapshot.VCPU)
+		columns["memory"] = nullablePositiveInt64(snapshot.Memory)
+		columns["storage_type"] = snapshot.StorageType
+		columns["storage_size_gib"] = nullablePositiveInt64(snapshot.StorageSizeGiB)
 	}
 	if table == "resources_load_balancers" {
 		columns["network_type"] = snapshot.NetworkType
 	}
 	return columns
+}
+
+// nullablePositiveInt 将采集契约中的零值转换为数据库 NULL，避免把未知规格解释为真实的零容量。
+func nullablePositiveInt(value int) any {
+	if value <= 0 {
+		return nil
+	}
+	return value
+}
+
+// nullablePositiveInt64 为内存和存储容量提供相同的未知值语义。
+func nullablePositiveInt64(value int64) any {
+	if value <= 0 {
+		return nil
+	}
+	return value
 }
 
 // changedBusinessColumns 只返回与持久化资源不同的云端业务字段，避免重复快照重写宽表。
@@ -183,13 +207,17 @@ func changedBusinessColumns(existing assetRow, table string, snapshot Snapshot) 
 		case "instance_type":
 			changed = existing.InstanceType != value
 		case "vcpu":
-			changed = existing.VCPU != value
+			changed = !nullInt64Equals(existing.VCPU, value)
 		case "memory":
-			changed = existing.Memory != value
+			changed = !nullInt64Equals(existing.Memory, value)
 		case "engine":
 			changed = existing.Engine != value
 		case "engine_version":
 			changed = existing.EngineVersion != value
+		case "storage_type":
+			changed = existing.StorageType != value
+		case "storage_size_gib":
+			changed = !nullInt64Equals(existing.StorageSizeGiB, value)
 		case "network_type":
 			changed = existing.NetworkType != value
 		case "raw_attributes":
@@ -208,6 +236,23 @@ func changedBusinessColumns(existing assetRow, table string, snapshot Snapshot) 
 		}
 	}
 	return changes
+}
+
+// nullInt64Equals 同时比较服务器的必填整数和数据库资产的可空容量字段。
+func nullInt64Equals(existing sql.NullInt64, desired any) bool {
+	if desired == nil {
+		return !existing.Valid
+	}
+	var value int64
+	switch typed := desired.(type) {
+	case int:
+		value = int64(typed)
+	case int64:
+		value = typed
+	default:
+		return false
+	}
+	return existing.Valid && existing.Int64 == value
 }
 
 // jsonValuesEqualForChanges 忽略采集器声明的顶层观测键，只用剩余原始属性判断是否发生业务配置变化。
@@ -379,5 +424,16 @@ func resourceFromRow(row assetRow, table string) Resource {
 	} else if len(row.Endpoints) > 0 {
 		_ = json.Unmarshal(row.Endpoints, &endpoints)
 	}
-	return Resource{AssetBase: row.AssetBase, InstanceType: row.InstanceType, VCPU: row.VCPU, Memory: row.Memory, Endpoints: endpoints, Disks: disks}
+	value := Resource{AssetBase: row.AssetBase, InstanceType: row.InstanceType, StorageType: row.StorageType, Endpoints: endpoints, Disks: disks}
+	if row.VCPU.Valid {
+		value.VCPU = int(row.VCPU.Int64)
+	}
+	if row.Memory.Valid {
+		value.Memory = row.Memory.Int64
+	}
+	if row.StorageSizeGiB.Valid {
+		storageSize := row.StorageSizeGiB.Int64
+		value.StorageSizeGiB = &storageSize
+	}
+	return value
 }

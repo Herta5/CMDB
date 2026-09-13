@@ -32,16 +32,18 @@ type ec2ProbeStub struct {
 	input             *ec2.DescribeInstancesInput
 	instanceTypeInput *ec2.DescribeInstanceTypesInput
 	volumeInput       *ec2.DescribeVolumesInput
+	instanceErr       error
+	instanceTypeErr   error
 }
 
 func (s *ec2ProbeStub) DescribeInstances(_ context.Context, input *ec2.DescribeInstancesInput, _ ...func(*ec2.Options)) (*ec2.DescribeInstancesOutput, error) {
 	s.input = input
-	return &ec2.DescribeInstancesOutput{}, nil
+	return &ec2.DescribeInstancesOutput{}, s.instanceErr
 }
 
 func (s *ec2ProbeStub) DescribeInstanceTypes(_ context.Context, input *ec2.DescribeInstanceTypesInput, _ ...func(*ec2.Options)) (*ec2.DescribeInstanceTypesOutput, error) {
 	s.instanceTypeInput = input
-	return &ec2.DescribeInstanceTypesOutput{}, nil
+	return &ec2.DescribeInstanceTypesOutput{}, s.instanceTypeErr
 }
 
 func (s *ec2ProbeStub) DescribeVolumes(_ context.Context, input *ec2.DescribeVolumesInput, _ ...func(*ec2.Options)) (*ec2.DescribeVolumesOutput, error) {
@@ -98,6 +100,37 @@ type rdsProbeStub struct{ input *rds.DescribeDBInstancesInput }
 func (s *rdsProbeStub) DescribeDBInstances(_ context.Context, input *rds.DescribeDBInstancesInput, _ ...func(*rds.Options)) (*rds.DescribeDBInstancesOutput, error) {
 	s.input = input
 	return &rds.DescribeDBInstancesOutput{}, nil
+}
+
+type rdsCollectStub struct {
+	input *rds.DescribeDBInstancesInput
+}
+
+func (s *rdsCollectStub) DescribeDBInstances(_ context.Context, input *rds.DescribeDBInstancesInput, _ ...func(*rds.Options)) (*rds.DescribeDBInstancesOutput, error) {
+	s.input = input
+	return &rds.DescribeDBInstancesOutput{DBInstances: []rdstypes.DBInstance{{DBInstanceIdentifier: awssdk.String("db-detail"), DBInstanceClass: awssdk.String("db.r6g.large")}}}, nil
+}
+
+type rdsInstanceTypeStub struct {
+	input      *ec2.DescribeInstanceTypesInput
+	omitVCPU   bool
+	omitMemory bool
+}
+
+func (s *rdsInstanceTypeStub) DescribeInstanceTypes(_ context.Context, input *ec2.DescribeInstanceTypesInput, _ ...func(*ec2.Options)) (*ec2.DescribeInstanceTypesOutput, error) {
+	s.input = input
+	info := types.InstanceTypeInfo{
+		InstanceType: types.InstanceType("r6g.large"),
+		VCpuInfo:     &types.VCpuInfo{DefaultVCpus: awssdk.Int32(2)},
+		MemoryInfo:   &types.MemoryInfo{SizeInMiB: awssdk.Int64(16384)},
+	}
+	if s.omitVCPU {
+		info.VCpuInfo = nil
+	}
+	if s.omitMemory {
+		info.MemoryInfo = nil
+	}
+	return &ec2.DescribeInstanceTypesOutput{InstanceTypes: []types.InstanceTypeInfo{info}}, nil
 }
 
 type elbProbeStub struct {
@@ -269,6 +302,73 @@ func TestRDSAndELBSnapshotsKeepHostnamesAndPorts(t *testing.T) {
 	}
 }
 
+// TestRDSSnapshotsKeepSpecification 验证 AWS RDS 原生存储字段和实例类型详情进入统一快照。
+func TestRDSSnapshotsKeepSpecification(t *testing.T) {
+	instanceType := types.InstanceType("r6g.large")
+	output := &rds.DescribeDBInstancesOutput{DBInstances: []rdstypes.DBInstance{{
+		DBInstanceIdentifier: awssdk.String("db-specification"),
+		DBInstanceClass:      awssdk.String("db.r6g.large"),
+		AllocatedStorage:     awssdk.Int32(200),
+		StorageType:          awssdk.String("gp3"),
+	}}}
+	instanceTypes := map[types.InstanceType]types.InstanceTypeInfo{
+		instanceType: {InstanceType: instanceType, VCpuInfo: &types.VCpuInfo{DefaultVCpus: awssdk.Int32(2)}, MemoryInfo: &types.MemoryInfo{SizeInMiB: awssdk.Int64(16384)}},
+	}
+	values := rdsSnapshots(output, "cn-north-1", instanceTypes)
+	if len(values) != 1 || values[0].InstanceType != "db.r6g.large" || values[0].VCPU != 2 || values[0].Memory != 16384 || values[0].StorageType != "gp3" || values[0].StorageSizeGiB != 200 {
+		t.Fatalf("AWS RDS 规格转换错误：%+v", values)
+	}
+}
+
+// TestRDSSnapshotsPreferConfiguredVCPU 防止可调整处理器配置的 RDS 被错误展示为实例类型默认 vCPU。
+func TestRDSSnapshotsPreferConfiguredVCPU(t *testing.T) {
+	instanceType := types.InstanceType("r6i.large")
+	output := &rds.DescribeDBInstancesOutput{DBInstances: []rdstypes.DBInstance{{
+		DBInstanceIdentifier: awssdk.String("db-custom-cpu"),
+		DBInstanceClass:      awssdk.String("db.r6i.large"),
+		ProcessorFeatures: []rdstypes.ProcessorFeature{
+			{Name: awssdk.String("coreCount"), Value: awssdk.String("1")},
+			{Name: awssdk.String("threadsPerCore"), Value: awssdk.String("2")},
+		},
+	}}}
+	instanceTypes := map[types.InstanceType]types.InstanceTypeInfo{
+		instanceType: {InstanceType: instanceType, VCpuInfo: &types.VCpuInfo{DefaultVCpus: awssdk.Int32(4)}, MemoryInfo: &types.MemoryInfo{SizeInMiB: awssdk.Int64(16384)}},
+	}
+	values := rdsSnapshots(output, "cn-north-1", instanceTypes)
+	if len(values) != 1 || values[0].VCPU != 2 {
+		t.Fatalf("AWS RDS 必须优先保存实际处理器配置：%+v", values)
+	}
+}
+
+// TestCollectRDSLoadsFixedInstanceTypeDetails 防止完整同步只保存 db.* 名称而无法展示固定规格 CPU 和内存。
+func TestCollectRDSLoadsFixedInstanceTypeDetails(t *testing.T) {
+	rdsClient, typeClient := &rdsCollectStub{}, &rdsInstanceTypeStub{}
+	output, instanceTypes, err := collectRDS(context.Background(), rdsClient, typeClient)
+	if err != nil || len(output.DBInstances) != 1 || len(instanceTypes) != 1 {
+		t.Fatalf("AWS RDS 完整采集必须返回固定实例类型详情：instances=%v types=%v err=%v", output.DBInstances, instanceTypes, err)
+	}
+	if typeClient.input == nil || !reflect.DeepEqual(typeClient.input.InstanceTypes, []types.InstanceType{types.InstanceType("r6g.large")}) {
+		t.Fatalf("AWS RDS 必须移除 db. 前缀后查询实例类型详情：%+v", typeClient.input)
+	}
+}
+
+// TestCollectRDSRejectsIncompleteFixedInstanceType 防止不完整的固定规格详情清空最近一次有效 CPU 或内存。
+func TestCollectRDSRejectsIncompleteFixedInstanceType(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		client *rdsInstanceTypeStub
+	}{
+		{name: "缺少 vCPU", client: &rdsInstanceTypeStub{omitVCPU: true}},
+		{name: "缺少内存", client: &rdsInstanceTypeStub{omitMemory: true}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if _, _, err := collectRDS(context.Background(), &rdsCollectStub{}, test.client); err == nil {
+				t.Fatal("AWS RDS 固定实例类型详情不完整时必须使该资源类型采集失败")
+			}
+		})
+	}
+}
+
 // TestRDSSnapshotMarksLatestRestorableTimeVolatile 验证持续推进的恢复时间不会被当成 RDS 配置变化，原始值仍完整保留。
 func TestRDSSnapshotMarksLatestRestorableTimeVolatile(t *testing.T) {
 	latest := time.Date(2026, 9, 9, 12, 0, 0, 0, time.UTC)
@@ -308,6 +408,22 @@ func TestAWSConnectionProbeChecksHardwareDetailPermissions(t *testing.T) {
 	}
 	if ec2Client.instanceTypeInput == nil || awssdk.ToInt32(ec2Client.instanceTypeInput.MaxResults) != 5 || ec2Client.volumeInput == nil || awssdk.ToInt32(ec2Client.volumeInput.MaxResults) != 5 {
 		t.Fatalf("连接测试必须以最小请求验证规格和 EBS 读取权限：type=%+v volume=%+v", ec2Client.instanceTypeInput, ec2Client.volumeInput)
+	}
+}
+
+// TestAWSConnectionProbeSharesInstanceTypeFailureWithRDS 防止公共规格接口故障时仍误报 RDS 可达。
+func TestAWSConnectionProbeSharesInstanceTypeFailureWithRDS(t *testing.T) {
+	instanceTypeErr := errors.New("实例类型目录暂不可用")
+	ec2Client := &ec2ProbeStub{instanceErr: errors.New("实例列表暂不可用"), instanceTypeErr: instanceTypeErr}
+	results, err := probeAWSAccess(context.Background(), ec2Client, &rdsProbeStub{}, &elbProbeStub{})
+	if err != nil {
+		t.Fatalf("普通云端故障应保留为类型级结果：%v", err)
+	}
+	if ec2Client.instanceTypeInput == nil {
+		t.Fatal("实例列表失败后仍须独立探测 EC2 与 RDS 共用的实例类型目录")
+	}
+	if len(results) != 3 || !errors.Is(results[1].Err, instanceTypeErr) {
+		t.Fatalf("公共实例类型目录故障必须同时使 RDS 探测失败：%+v", results)
 	}
 }
 

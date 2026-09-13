@@ -140,6 +140,11 @@ CREATE TABLE resources_databases (
     asset_status VARCHAR(32) NOT NULL DEFAULT 'active' CHECK (asset_status IN ('active', 'lost')),
     engine VARCHAR(64) NOT NULL DEFAULT '',
     engine_version VARCHAR(64) NOT NULL DEFAULT '',
+    instance_type VARCHAR(128) NOT NULL DEFAULT '',
+    vcpu INTEGER CHECK (vcpu > 0),
+    memory BIGINT CHECK (memory > 0),
+    storage_type VARCHAR(64) NOT NULL DEFAULT '',
+    storage_size_gib BIGINT CHECK (storage_size_gib > 0),
     endpoints JSONB,
     raw_attributes JSONB,
     first_seen_at TIMESTAMPTZ(3) NOT NULL,
@@ -302,6 +307,11 @@ COMMENT ON COLUMN public.resources_databases.cloud_status IS '云平台返回的
 COMMENT ON COLUMN public.resources_databases.asset_status IS 'CMDB 资产状态，正常或已失联';
 COMMENT ON COLUMN public.resources_databases.engine IS '数据库引擎';
 COMMENT ON COLUMN public.resources_databases.engine_version IS '数据库引擎版本';
+COMMENT ON COLUMN public.resources_databases.instance_type IS '云数据库实例规格';
+COMMENT ON COLUMN public.resources_databases.vcpu IS '固定规格的虚拟 CPU 数量，无法可靠确定时为空';
+COMMENT ON COLUMN public.resources_databases.memory IS '固定规格的内存容量，单位 MiB，无法可靠确定时为空';
+COMMENT ON COLUMN public.resources_databases.storage_type IS '云数据库存储类型';
+COMMENT ON COLUMN public.resources_databases.storage_size_gib IS '云数据库已分配存储容量，单位 GiB，云平台未提供时为空';
 COMMENT ON COLUMN public.resources_databases.endpoints IS '原始访问域名、端口和最近解析 IP';
 COMMENT ON COLUMN public.resources_databases.raw_attributes IS '云平台返回的原始非凭证属性';
 COMMENT ON COLUMN public.resources_databases.first_seen_at IS '首次发现时间';

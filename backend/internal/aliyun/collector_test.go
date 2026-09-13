@@ -72,12 +72,49 @@ func (s *ecsCollectStub) DescribeDisks(request *ecs.DescribeDisksRequest) (*ecs.
 }
 
 type rdsProbeStub struct {
-	request *rds.DescribeDBInstancesRequest
+	request          *rds.DescribeDBInstancesRequest
+	attributeRequest *rds.DescribeDBInstanceAttributeRequest
 }
 
 func (s *rdsProbeStub) DescribeDBInstances(request *rds.DescribeDBInstancesRequest) (*rds.DescribeDBInstancesResponse, error) {
 	s.request = request
-	return rds.CreateDescribeDBInstancesResponse(), nil
+	response := rds.CreateDescribeDBInstancesResponse()
+	response.Items.DBInstance = []rds.DBInstance{{DBInstanceId: "rm-probe"}}
+	return response, nil
+}
+
+func (s *rdsProbeStub) DescribeDBInstanceAttribute(request *rds.DescribeDBInstanceAttributeRequest) (*rds.DescribeDBInstanceAttributeResponse, error) {
+	s.attributeRequest = request
+	return rds.CreateDescribeDBInstanceAttributeResponse(), nil
+}
+
+type rdsCollectStub struct {
+	instanceRequest  *rds.DescribeDBInstancesRequest
+	networkRequest   *rds.DescribeDBInstanceNetInfoRequest
+	attributeRequest *rds.DescribeDBInstanceAttributeRequest
+	omitAttribute    bool
+}
+
+func (s *rdsCollectStub) DescribeDBInstances(request *rds.DescribeDBInstancesRequest) (*rds.DescribeDBInstancesResponse, error) {
+	s.instanceRequest = request
+	response := rds.CreateDescribeDBInstancesResponse()
+	response.PageRecordCount, response.TotalRecordCount = 1, 1
+	response.Items.DBInstance = []rds.DBInstance{{DBInstanceId: "rm-detail"}}
+	return response, nil
+}
+
+func (s *rdsCollectStub) DescribeDBInstanceNetInfo(request *rds.DescribeDBInstanceNetInfoRequest) (*rds.DescribeDBInstanceNetInfoResponse, error) {
+	s.networkRequest = request
+	return rds.CreateDescribeDBInstanceNetInfoResponse(), nil
+}
+
+func (s *rdsCollectStub) DescribeDBInstanceAttribute(request *rds.DescribeDBInstanceAttributeRequest) (*rds.DescribeDBInstanceAttributeResponse, error) {
+	s.attributeRequest = request
+	response := rds.CreateDescribeDBInstanceAttributeResponse()
+	if !s.omitAttribute {
+		response.Items.DBInstanceAttribute = []rds.DBInstanceAttribute{{DBInstanceId: "rm-detail", DBInstanceClass: "rds.mysql.s2.large", DBInstanceStorage: 200}}
+	}
+	return response, nil
 }
 
 type slbProbeStub struct {
@@ -220,6 +257,17 @@ func TestAliyunConnectionProbeRequestsOnlyOneItemPerType(t *testing.T) {
 	}
 }
 
+// TestAliyunConnectionProbeChecksRDSAttributePermission 防止连接测试放过缺少 RDS 规格详情读取权限的接入源。
+func TestAliyunConnectionProbeChecksRDSAttributePermission(t *testing.T) {
+	ecsClient, rdsClient, slbClient := &ecsProbeStub{}, &rdsProbeStub{}, &slbProbeStub{}
+	if _, err := probeAliyunAccess(context.Background(), ecsClient, rdsClient, slbClient, "cn-hangzhou"); err != nil {
+		t.Fatalf("阿里云连接探测失败：%v", err)
+	}
+	if rdsClient.attributeRequest == nil || rdsClient.attributeRequest.DBInstanceId != "rm-probe" {
+		t.Fatalf("连接测试必须以首个 RDS 实例验证详情权限：%+v", rdsClient.attributeRequest)
+	}
+}
+
 // TestAliyunConnectionProbeChecksCloudDiskPermission 防止连接测试放过缺少 DescribeDisks 权限的接入源。
 func TestAliyunConnectionProbeChecksCloudDiskPermission(t *testing.T) {
 	ecsClient, rdsClient, slbClient := &ecsProbeStub{}, &rdsProbeStub{}, &slbProbeStub{}
@@ -241,6 +289,43 @@ func TestRDSAndSLBSnapshotsKeepEndpoints(t *testing.T) {
 	}
 	if slbSnapshots([]slb.LoadBalancer{loadBalancer})[0].Endpoints[0].Kind != "public" {
 		t.Fatal("公网负载均衡必须标记公网端点")
+	}
+}
+
+// TestRDSSnapshotsKeepSpecification 验证阿里云 RDS 详情中的计算和存储规格进入统一快照。
+func TestRDSSnapshotsKeepSpecification(t *testing.T) {
+	instance := rds.DBInstance{DBInstanceId: "rm-specification"}
+	attributes := map[string]rds.DBInstanceAttribute{
+		"rm-specification": {
+			DBInstanceClass:       "rds.mysql.s2.large",
+			DBInstanceCPU:         "4",
+			DBInstanceMemory:      8192,
+			DBInstanceStorageType: "cloud_essd",
+			DBInstanceStorage:     200,
+		},
+	}
+	values := rdsSnapshots([]rds.DBInstance{instance}, nil, attributes)
+	if len(values) != 1 || values[0].InstanceType != "rds.mysql.s2.large" || values[0].VCPU != 4 || values[0].Memory != 8192 || values[0].StorageType != "cloud_essd" || values[0].StorageSizeGiB != 200 {
+		t.Fatalf("阿里云 RDS 规格转换错误：%+v", values)
+	}
+}
+
+// TestCollectRDSLoadsInstanceAttributes 防止完整同步只读列表和网络信息而漏掉存储容量等详情字段。
+func TestCollectRDSLoadsInstanceAttributes(t *testing.T) {
+	client := &rdsCollectStub{}
+	instances, _, attributes, err := collectRDS(client)
+	if err != nil || len(instances) != 1 || attributes["rm-detail"].DBInstanceStorage != 200 {
+		t.Fatalf("阿里云 RDS 完整采集必须返回实例详情：instances=%v attributes=%v err=%v", instances, attributes, err)
+	}
+	if client.attributeRequest == nil || client.attributeRequest.DBInstanceId != "rm-detail" {
+		t.Fatalf("RDS 详情请求必须使用当前实例标识：%+v", client.attributeRequest)
+	}
+}
+
+// TestCollectRDSRejectsMissingInstanceAttributes 防止详情缺失时用空规格覆盖最近一次有效 RDS 快照。
+func TestCollectRDSRejectsMissingInstanceAttributes(t *testing.T) {
+	if _, _, _, err := collectRDS(&rdsCollectStub{omitAttribute: true}); err == nil {
+		t.Fatal("阿里云 RDS 详情缺失时必须使该资源类型采集失败")
 	}
 }
 

@@ -123,7 +123,7 @@ func TestPostgreSQLSchemaDefinesBusinessStructure(t *testing.T) {
 			"id", "project_id", "source_id", "provider", "resource_type", "external_id", "name", "region", "zone", "cloud_status", "asset_status", "instance_type", "vcpu", "memory", "private_ips", "public_ips", "disks", "raw_attributes", "first_seen_at", "last_seen_at", "missing_since", "created_at", "updated_at",
 		},
 		"resources_databases": {
-			"id", "project_id", "source_id", "provider", "resource_type", "external_id", "name", "region", "zone", "cloud_status", "asset_status", "engine", "engine_version", "endpoints", "raw_attributes", "first_seen_at", "last_seen_at", "missing_since", "created_at", "updated_at",
+			"id", "project_id", "source_id", "provider", "resource_type", "external_id", "name", "region", "zone", "cloud_status", "asset_status", "engine", "engine_version", "instance_type", "vcpu", "memory", "storage_type", "storage_size_gib", "endpoints", "raw_attributes", "first_seen_at", "last_seen_at", "missing_since", "created_at", "updated_at",
 		},
 		"resources_load_balancers": {
 			"id", "project_id", "source_id", "provider", "resource_type", "external_id", "name", "region", "zone", "cloud_status", "asset_status", "network_type", "endpoints", "raw_attributes", "first_seen_at", "last_seen_at", "missing_since", "created_at", "updated_at",

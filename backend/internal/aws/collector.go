@@ -7,6 +7,7 @@ import (
 	"errors"
 	"net"
 	"sort"
+	"strconv"
 	"strings"
 
 	"cmdb/internal/resource"
@@ -54,6 +55,11 @@ type rdsProbeAPI interface {
 	DescribeDBInstances(context.Context, *rds.DescribeDBInstancesInput, ...func(*rds.Options)) (*rds.DescribeDBInstancesOutput, error)
 }
 
+// instanceTypeAPI 为 RDS 固定规格复用 EC2 的只读实例类型目录，不参与 EC2 资产采集。
+type instanceTypeAPI interface {
+	ec2.DescribeInstanceTypesAPIClient
+}
+
 // elbProbeAPI 约束连接测试只调用 ELB 列表首页。
 type elbProbeAPI interface {
 	DescribeLoadBalancers(context.Context, *elasticloadbalancingv2.DescribeLoadBalancersInput, ...func(*elasticloadbalancingv2.Options)) (*elasticloadbalancingv2.DescribeLoadBalancersOutput, error)
@@ -69,23 +75,26 @@ func (c *Collector) Collect(ctx context.Context, source resource.Source, plain [
 	if err != nil {
 		return nil, resource.ErrAuthenticationFailed
 	}
+	ec2Client := ec2.NewFromConfig(configuration)
+	rdsClient := rds.NewFromConfig(configuration)
+	elbClient := elasticloadbalancingv2.NewFromConfig(configuration)
 	results, err := resource.CollectByType(ctx, []resource.TypeCollection{
 		{ResourceType: "ec2", Collect: func(ctx context.Context) ([]resource.Snapshot, error) {
-			output, instanceTypes, volumes, collectErr := collectEC2(ctx, ec2.NewFromConfig(configuration))
+			output, instanceTypes, volumes, collectErr := collectEC2(ctx, ec2Client)
 			if collectErr != nil {
 				return nil, collectErr
 			}
 			return ec2Snapshots(output, source.Region, instanceTypes, volumes), nil
 		}},
 		{ResourceType: "rds", Collect: func(ctx context.Context) ([]resource.Snapshot, error) {
-			output, collectErr := collectRDS(ctx, rds.NewFromConfig(configuration))
+			output, instanceTypes, collectErr := collectRDS(ctx, rdsClient, ec2Client)
 			if collectErr != nil {
 				return nil, collectErr
 			}
-			return rdsSnapshots(output, source.Region), nil
+			return rdsSnapshots(output, source.Region, instanceTypes), nil
 		}},
 		{ResourceType: "elb", Collect: func(ctx context.Context) ([]resource.Snapshot, error) {
-			output, listeners, collectErr := collectELB(ctx, elasticloadbalancingv2.NewFromConfig(configuration))
+			output, listeners, collectErr := collectELB(ctx, elbClient)
 			if collectErr != nil {
 				return nil, collectErr
 			}
@@ -119,13 +128,18 @@ func (c *Collector) Probe(ctx context.Context, source resource.Source, plain []b
 // probeAWSAccess 使用各 API 允许的最小分页，仅返回资源类型可达性。
 func probeAWSAccess(ctx context.Context, ec2Client ec2ProbeAPI, rdsClient rdsProbeAPI, elbClient elbProbeAPI) ([]resource.CollectionResult, error) {
 	_, ec2Err := ec2Client.DescribeInstances(ctx, &ec2.DescribeInstancesInput{MaxResults: awssdk.Int32(5)})
+	// 实例类型目录同时服务 EC2 和固定规格 RDS，即使实例列表失败也要独立验证该共同依赖。
+	_, instanceTypeErr := ec2Client.DescribeInstanceTypes(ctx, &ec2.DescribeInstanceTypesInput{MaxResults: awssdk.Int32(5)})
 	if ec2Err == nil {
-		_, ec2Err = ec2Client.DescribeInstanceTypes(ctx, &ec2.DescribeInstanceTypesInput{MaxResults: awssdk.Int32(5)})
+		ec2Err = instanceTypeErr
 	}
 	if ec2Err == nil {
 		_, ec2Err = ec2Client.DescribeVolumes(ctx, &ec2.DescribeVolumesInput{MaxResults: awssdk.Int32(5)})
 	}
 	_, rdsErr := rdsClient.DescribeDBInstances(ctx, &rds.DescribeDBInstancesInput{MaxRecords: awssdk.Int32(20)})
+	if rdsErr == nil {
+		rdsErr = instanceTypeErr
+	}
 	_, elbErr := elbClient.DescribeLoadBalancers(ctx, &elasticloadbalancingv2.DescribeLoadBalancersInput{PageSize: awssdk.Int32(1)})
 	results := []resource.CollectionResult{{ResourceType: "ec2", Err: ec2Err}, {ResourceType: "rds", Err: rdsErr}, {ResourceType: "elb", Err: elbErr}}
 	for _, result := range results {
@@ -220,17 +234,49 @@ func collectEC2(ctx context.Context, client ec2CollectAPI) (*ec2.DescribeInstanc
 	}
 	return output, instanceTypes, volumesByInstance, nil
 }
-func collectRDS(ctx context.Context, client *rds.Client) (*rds.DescribeDBInstancesOutput, error) {
+func collectRDS(ctx context.Context, client rdsProbeAPI, typeClient instanceTypeAPI) (*rds.DescribeDBInstancesOutput, map[ec2types.InstanceType]ec2types.InstanceTypeInfo, error) {
 	output := &rds.DescribeDBInstancesOutput{}
+	instanceTypes := make(map[ec2types.InstanceType]ec2types.InstanceTypeInfo)
 	paginator := rds.NewDescribeDBInstancesPaginator(client, &rds.DescribeDBInstancesInput{})
 	for paginator.HasMorePages() {
 		page, err := paginator.NextPage(ctx)
 		if err != nil {
-			return output, err
+			return output, instanceTypes, err
 		}
 		output.DBInstances = append(output.DBInstances, page.DBInstances...)
 	}
-	return output, nil
+	uniqueTypes := make(map[ec2types.InstanceType]struct{})
+	for _, instance := range output.DBInstances {
+		class := strings.TrimPrefix(awssdk.ToString(instance.DBInstanceClass), "db.")
+		if class != "" && class != "serverless" {
+			uniqueTypes[ec2types.InstanceType(class)] = struct{}{}
+		}
+	}
+	typeNames := make([]ec2types.InstanceType, 0, len(uniqueTypes))
+	for instanceType := range uniqueTypes {
+		typeNames = append(typeNames, instanceType)
+	}
+	sort.Slice(typeNames, func(left, right int) bool { return typeNames[left] < typeNames[right] })
+	for start := 0; start < len(typeNames); start += 100 {
+		end := start + 100
+		if end > len(typeNames) {
+			end = len(typeNames)
+		}
+		paginator := ec2.NewDescribeInstanceTypesPaginator(typeClient, &ec2.DescribeInstanceTypesInput{InstanceTypes: typeNames[start:end]})
+		for paginator.HasMorePages() {
+			page, err := paginator.NextPage(ctx)
+			if err != nil {
+				return output, instanceTypes, err
+			}
+			for _, info := range page.InstanceTypes {
+				if info.VCpuInfo == nil || awssdk.ToInt32(info.VCpuInfo.DefaultVCpus) <= 0 || info.MemoryInfo == nil || awssdk.ToInt64(info.MemoryInfo.SizeInMiB) <= 0 {
+					return output, instanceTypes, errors.New("AWS RDS 固定实例类型规格信息不完整")
+				}
+				instanceTypes[info.InstanceType] = info
+			}
+		}
+	}
+	return output, instanceTypes, nil
 }
 func collectELB(ctx context.Context, client *elasticloadbalancingv2.Client) (*elasticloadbalancingv2.DescribeLoadBalancersOutput, map[string][]elbtypes.Listener, error) {
 	output := &elasticloadbalancingv2.DescribeLoadBalancersOutput{}
@@ -337,25 +383,48 @@ func ec2Snapshots(output *ec2.DescribeInstancesOutput, region string, instanceTy
 	}
 	return values
 }
-func rdsSnapshots(output *rds.DescribeDBInstancesOutput, region string) []resource.Snapshot {
+func rdsSnapshots(output *rds.DescribeDBInstancesOutput, region string, instanceTypeSets ...map[ec2types.InstanceType]ec2types.InstanceTypeInfo) []resource.Snapshot {
 	values := []resource.Snapshot{}
+	instanceTypes := map[ec2types.InstanceType]ec2types.InstanceTypeInfo{}
+	if len(instanceTypeSets) > 0 && instanceTypeSets[0] != nil {
+		instanceTypes = instanceTypeSets[0]
+	}
 	if output == nil {
 		return values
 	}
 	for _, instance := range output.DBInstances {
 		raw, _ := json.Marshal(instance)
+		instanceClass := awssdk.ToString(instance.DBInstanceClass)
 		value := resource.Snapshot{
-			ResourceType:  "rds",
-			ExternalID:    awssdk.ToString(instance.DBInstanceIdentifier),
-			Name:          awssdk.ToString(instance.DBInstanceIdentifier),
-			Region:        region,
-			Zone:          awssdk.ToString(instance.AvailabilityZone),
-			CloudStatus:   awssdk.ToString(instance.DBInstanceStatus),
-			Engine:        awssdk.ToString(instance.Engine),
-			EngineVersion: awssdk.ToString(instance.EngineVersion),
-			RawAttributes: raw,
+			ResourceType:   "rds",
+			ExternalID:     awssdk.ToString(instance.DBInstanceIdentifier),
+			Name:           awssdk.ToString(instance.DBInstanceIdentifier),
+			Region:         region,
+			Zone:           awssdk.ToString(instance.AvailabilityZone),
+			CloudStatus:    awssdk.ToString(instance.DBInstanceStatus),
+			Engine:         awssdk.ToString(instance.Engine),
+			EngineVersion:  awssdk.ToString(instance.EngineVersion),
+			InstanceType:   instanceClass,
+			StorageType:    awssdk.ToString(instance.StorageType),
+			StorageSizeGiB: int64(awssdk.ToInt32(instance.AllocatedStorage)),
+			RawAttributes:  raw,
 			// AWS 会持续推进可时间点恢复的最新时间，它属于观测信息而非实例配置变化。
 			VolatileRawAttributeKeys: []string{"LatestRestorableTime"},
+		}
+		if info, exists := instanceTypes[ec2types.InstanceType(strings.TrimPrefix(instanceClass, "db."))]; exists {
+			if info.VCpuInfo != nil {
+				value.VCPU = int(awssdk.ToInt32(info.VCpuInfo.DefaultVCpus))
+			}
+			if info.MemoryInfo != nil {
+				value.Memory = awssdk.ToInt64(info.MemoryInfo.SizeInMiB)
+			}
+		}
+		processor := map[string]int{}
+		for _, feature := range instance.ProcessorFeatures {
+			processor[awssdk.ToString(feature.Name)], _ = strconv.Atoi(awssdk.ToString(feature.Value))
+		}
+		if processor["coreCount"] > 0 && processor["threadsPerCore"] > 0 {
+			value.VCPU = processor["coreCount"] * processor["threadsPerCore"]
 		}
 		if instance.Endpoint != nil {
 			kind := "private"

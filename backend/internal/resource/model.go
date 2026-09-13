@@ -89,9 +89,14 @@ func (Server) TableName() string { return "resources_servers" }
 // Database 保存两家云平台的 RDS 及其原始访问端点。
 type Database struct {
 	AssetBase
-	Engine        string          `gorm:"size:64;not null" json:"engine"`
-	EngineVersion string          `gorm:"size:64;not null" json:"engine_version"`
-	Endpoints     json.RawMessage `gorm:"type:json" json:"endpoints"`
+	Engine         string          `gorm:"size:64;not null" json:"engine"`
+	EngineVersion  string          `gorm:"size:64;not null" json:"engine_version"`
+	InstanceType   string          `gorm:"size:128;not null" json:"instance_type"`
+	VCPU           *int            `gorm:"column:vcpu" json:"vcpu"`
+	Memory         *int64          `json:"memory"`
+	StorageType    string          `gorm:"size:64;not null" json:"storage_type"`
+	StorageSizeGiB *int64          `gorm:"column:storage_size_gib" json:"storage_size_gib"`
+	Endpoints      json.RawMessage `gorm:"type:json" json:"endpoints"`
 }
 
 // TableName 将数据库映射到独立资产表。
@@ -110,11 +115,13 @@ func (LoadBalancer) TableName() string { return "resources_load_balancers" }
 // Resource 是跨三张资产表返回给 API 的统一只读视图，不对应数据库表。
 type Resource struct {
 	AssetBase
-	InstanceType string             `gorm:"-" json:"instance_type,omitempty"`
-	VCPU         int                `gorm:"-" json:"vcpu,omitempty"`
-	Memory       int64              `gorm:"-" json:"memory,omitempty"`
-	Endpoints    []EndpointSnapshot `gorm:"-" json:"endpoints"`
-	Disks        []ServerDisk       `gorm:"-" json:"disks"`
+	InstanceType   string             `gorm:"-" json:"instance_type,omitempty"`
+	VCPU           int                `gorm:"-" json:"vcpu,omitempty"`
+	Memory         int64              `gorm:"-" json:"memory,omitempty"`
+	StorageType    string             `gorm:"-" json:"storage_type,omitempty"`
+	StorageSizeGiB *int64             `gorm:"-" json:"storage_size_gib,omitempty"`
+	Endpoints      []EndpointSnapshot `gorm:"-" json:"endpoints"`
+	Disks          []ServerDisk       `gorm:"-" json:"disks"`
 }
 
 // SyncJob 记录一次同步的状态和脱敏统计，不保存凭证或完整请求响应。

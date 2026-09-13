@@ -53,13 +53,17 @@ watch(() => [projects.currentProjectId, props.category], () => { void loadAssets
 /** 空值使用统一占位，避免误解为加载失败。 */
 const display = (value?: string | number) => value === undefined || value === null || value === '' ? '—' : String(value)
 /** 内存统一以 MiB 入库，列表按 GiB 展示且保留非整数容量。 */
-const memoryGiB = (memory?: number) => {
-  if (memory === undefined || memory === null) return '—'
+const memoryGiB = (memory?: number | null) => {
+  if (memory === undefined || memory === null) return '未知'
   const value = memory / 1024
   return Number.isInteger(value) ? String(value) : value.toFixed(1)
 }
+/** 数据库未知规格不使用 0 冒充真实容量。 */
+const specificationValue = (value?: string | number | null) => value === undefined || value === null || value === '' ? '未知' : String(value)
 /** 服务器列表只展示云盘汇总，完整明细仍保留在资源接口中。 */
 const diskSummary = (item: CloudResource) => `${item.disks.length} 块 / ${item.disks.reduce((total, disk) => total + disk.sizeGiB, 0)} GiB`
+/** 托管数据库只展示云平台提供的存储规格，不构造逐盘明细。 */
+const storageSummary = (item: CloudResource) => `${specificationValue(item.storageType)} · ${item.storageSizeGiB === undefined || item.storageSizeGiB === null ? '容量未知' : `${item.storageSizeGiB} GiB`}`
 </script>
 
 <template>
@@ -71,7 +75,7 @@ const diskSummary = (item: CloudResource) => `${item.disks.length} 块 / ${item.
       <div v-if="loading" class="page-state compact"><span class="loading-spinner"/><p>正在加载资产…</p></div>
       <div v-else-if="failed" class="page-state compact"><h3>资产加载失败</h3><button class="console-button" @click="loadAssets">重试</button></div>
       <div v-else-if="!resources.length" class="page-state compact"><h3>暂无{{ category.title }}</h3><p>完成云同步后，资产会显示在这里。</p></div>
-      <div v-else class="table-scroll"><table class="console-table cloud-table"><thead><tr><th>资产</th><th v-if="viewingAllProjects">项目</th><th>云平台</th><th>类型</th><th v-if="props.category === 'server'">实例规格</th><th v-if="props.category === 'server'">磁盘</th><th>区域 / 可用区</th><th>云端状态</th><th>资产状态</th><th>访问地址</th></tr></thead><tbody><tr v-for="item in resources" :key="`${item.resourceType}-${item.id}`"><td><strong>{{ item.name || item.externalId }}</strong><small>{{ item.externalId }}</small></td><td v-if="viewingAllProjects">{{ item.projectName }}</td><td>{{ item.provider === 'aliyun' ? '阿里云' : 'AWS' }}</td><td>{{ item.resourceType.toUpperCase() }}</td><td v-if="props.category === 'server'">{{ display(item.instanceType) }} · {{ display(item.vcpu) }} vCPU · {{ memoryGiB(item.memory) }} GiB</td><td v-if="props.category === 'server'">{{ diskSummary(item) }}</td><td>{{ display(item.region) }} / {{ display(item.zone) }}</td><td>{{ display(item.cloudStatus) }}</td><td><span class="status-badge" :class="{ 'is-lost': item.assetStatus === 'lost' }">{{ item.assetStatus === 'lost' ? '已失联' : '正常' }}</span></td><td><div v-for="endpoint in item.endpoints" :key="`${endpoint.kind}-${endpoint.address}-${endpoint.port}`" class="endpoint"><span>{{ endpoint.kind }}</span>{{ endpoint.address }}<b v-if="endpoint.port">:{{ endpoint.port }}</b><small v-if="endpoint.resolvedIps.length">解析：{{ endpoint.resolvedIps.join(', ') }}</small></div><span v-if="!item.endpoints.length">—</span></td></tr></tbody></table></div>
+      <div v-else class="table-scroll"><table class="console-table cloud-table"><thead><tr><th>资产</th><th v-if="viewingAllProjects">项目</th><th>云平台</th><th>类型</th><th v-if="props.category === 'server' || props.category === 'database'">实例规格</th><th v-if="props.category === 'server'">磁盘</th><th v-if="props.category === 'database'">存储</th><th>区域 / 可用区</th><th>云端状态</th><th>资产状态</th><th>访问地址</th></tr></thead><tbody><tr v-for="item in resources" :key="`${item.resourceType}-${item.id}`"><td><strong>{{ item.name || item.externalId }}</strong><small>{{ item.externalId }}</small></td><td v-if="viewingAllProjects">{{ item.projectName }}</td><td>{{ item.provider === 'aliyun' ? '阿里云' : 'AWS' }}</td><td>{{ item.resourceType.toUpperCase() }}</td><td v-if="props.category === 'server' || props.category === 'database'">{{ specificationValue(item.instanceType) }} · {{ specificationValue(item.vcpu) }} vCPU · {{ memoryGiB(item.memory) }} GiB</td><td v-if="props.category === 'server'">{{ diskSummary(item) }}</td><td v-if="props.category === 'database'">{{ storageSummary(item) }}</td><td>{{ display(item.region) }} / {{ display(item.zone) }}</td><td>{{ display(item.cloudStatus) }}</td><td><span class="status-badge" :class="{ 'is-lost': item.assetStatus === 'lost' }">{{ item.assetStatus === 'lost' ? '已失联' : '正常' }}</span></td><td><div v-for="endpoint in item.endpoints" :key="`${endpoint.kind}-${endpoint.address}-${endpoint.port}`" class="endpoint"><span>{{ endpoint.kind }}</span>{{ endpoint.address }}<b v-if="endpoint.port">:{{ endpoint.port }}</b><small v-if="endpoint.resolvedIps.length">解析：{{ endpoint.resolvedIps.join(', ') }}</small></div><span v-if="!item.endpoints.length">—</span></td></tr></tbody></table></div>
     </section>
   </section>
 </template>

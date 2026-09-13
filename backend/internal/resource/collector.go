@@ -38,8 +38,11 @@ type Snapshot struct {
 	Memory        int64
 	Engine        string
 	EngineVersion string
-	NetworkType   string
-	RawAttributes []byte
+	// StorageType 与 StorageSizeGiB 表示托管数据库的存储规格，不伪装为服务器挂载盘。
+	StorageType    string
+	StorageSizeGiB int64
+	NetworkType    string
+	RawAttributes  []byte
 	// VolatileRawAttributeKeys 声明原始 JSON 中只用于观测、不得触发配置更新统计的顶层键；原始值仍会持久化。
 	VolatileRawAttributeKeys []string
 	Endpoints                []EndpointSnapshot

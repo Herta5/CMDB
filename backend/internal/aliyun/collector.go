@@ -42,9 +42,16 @@ type ecsCollectAPI interface {
 	DescribeDisks(*ecs.DescribeDisksRequest) (*ecs.DescribeDisksResponse, error)
 }
 
-// rdsProbeAPI 约束连接测试只调用 RDS 列表首页。
+// rdsProbeAPI 约束连接测试调用 RDS 列表首页，并在存在实例时验证规格详情权限。
 type rdsProbeAPI interface {
 	DescribeDBInstances(*rds.DescribeDBInstancesRequest) (*rds.DescribeDBInstancesResponse, error)
+	DescribeDBInstanceAttribute(*rds.DescribeDBInstanceAttributeRequest) (*rds.DescribeDBInstanceAttributeResponse, error)
+}
+
+// rdsCollectAPI 约束 RDS 完整采集同时读取实例、网络和规格详情，便于使用模拟响应验收。
+type rdsCollectAPI interface {
+	rdsProbeAPI
+	DescribeDBInstanceNetInfo(*rds.DescribeDBInstanceNetInfoRequest) (*rds.DescribeDBInstanceNetInfoResponse, error)
 }
 
 // slbProbeAPI 约束连接测试只调用负载均衡列表首页。
@@ -79,11 +86,11 @@ func (c *Collector) Collect(ctx context.Context, source resource.Source, plain [
 			return ecsSnapshots(items, disks), nil
 		}},
 		{ResourceType: "rds", Collect: func(context.Context) ([]resource.Snapshot, error) {
-			items, networks, collectErr := collectRDS(rdsClient)
+			items, networks, attributes, collectErr := collectRDS(rdsClient)
 			if collectErr != nil {
 				return nil, collectErr
 			}
-			return rdsSnapshots(items, networks), nil
+			return rdsSnapshots(items, networks, attributes), nil
 		}},
 		{ResourceType: "slb", Collect: func(context.Context) ([]resource.Snapshot, error) {
 			items, ports, collectErr := collectSLB(slbClient, source.Region)
@@ -154,7 +161,12 @@ func probeAliyunAccess(ctx context.Context, ecsClient ecsProbeAPI, rdsClient rds
 	rdsRequest := rds.CreateDescribeDBInstancesRequest()
 	rdsRequest.PageNumber = "1"
 	rdsRequest.PageSize = "1"
-	_, rdsErr := rdsClient.DescribeDBInstances(rdsRequest)
+	rdsResponse, rdsErr := rdsClient.DescribeDBInstances(rdsRequest)
+	if rdsErr == nil && len(rdsResponse.Items.DBInstance) > 0 {
+		attributeRequest := rds.CreateDescribeDBInstanceAttributeRequest()
+		attributeRequest.DBInstanceId = rdsResponse.Items.DBInstance[0].DBInstanceId
+		_, rdsErr = rdsClient.DescribeDBInstanceAttribute(attributeRequest)
+	}
 
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -275,16 +287,17 @@ func isAliyunLocalDiskCategory(category string) bool {
 	return category == "ephemeral" || strings.HasPrefix(category, "ephemeral_") || strings.HasPrefix(category, "local_")
 }
 
-func collectRDS(client *rds.Client) ([]rds.DBInstance, map[string][]rds.DBInstanceNetInfo, error) {
+func collectRDS(client rdsCollectAPI) ([]rds.DBInstance, map[string][]rds.DBInstanceNetInfo, map[string]rds.DBInstanceAttribute, error) {
 	values := []rds.DBInstance{}
 	networks := map[string][]rds.DBInstanceNetInfo{}
+	attributes := map[string]rds.DBInstanceAttribute{}
 	for page := 1; ; page++ {
 		request := rds.CreateDescribeDBInstancesRequest()
 		request.PageNumber = requests.Integer(strconv.Itoa(page))
 		request.PageSize = "100"
 		response, err := client.DescribeDBInstances(request)
 		if err != nil {
-			return values, networks, err
+			return values, networks, attributes, err
 		}
 		values = append(values, response.Items.DBInstance...)
 		if page*response.PageRecordCount >= response.TotalRecordCount || len(response.Items.DBInstance) == 0 {
@@ -296,11 +309,22 @@ func collectRDS(client *rds.Client) ([]rds.DBInstance, map[string][]rds.DBInstan
 		request.DBInstanceId = instance.DBInstanceId
 		response, err := client.DescribeDBInstanceNetInfo(request)
 		if err != nil {
-			return values, networks, err
+			return values, networks, attributes, err
 		}
 		networks[instance.DBInstanceId] = response.DBInstanceNetInfos.DBInstanceNetInfo
+
+		attributeRequest := rds.CreateDescribeDBInstanceAttributeRequest()
+		attributeRequest.DBInstanceId = instance.DBInstanceId
+		attributeResponse, err := client.DescribeDBInstanceAttribute(attributeRequest)
+		if err != nil {
+			return values, networks, attributes, err
+		}
+		if len(attributeResponse.Items.DBInstanceAttribute) != 1 || attributeResponse.Items.DBInstanceAttribute[0].DBInstanceId != instance.DBInstanceId {
+			return values, networks, attributes, errors.New("阿里云 RDS 实例详情不完整")
+		}
+		attributes[instance.DBInstanceId] = attributeResponse.Items.DBInstanceAttribute[0]
 	}
-	return values, networks, nil
+	return values, networks, attributes, nil
 }
 func collectSLB(client *slb.Client, region string) ([]slb.LoadBalancer, map[string][]slb.ListenerPortAndProtocol, error) {
 	values := []slb.LoadBalancer{}
@@ -371,11 +395,22 @@ func ecsSnapshots(instances []ecs.Instance, disksByInstance map[string][]ecs.Dis
 	}
 	return values
 }
-func rdsSnapshots(instances []rds.DBInstance, networks map[string][]rds.DBInstanceNetInfo) []resource.Snapshot {
+func rdsSnapshots(instances []rds.DBInstance, networks map[string][]rds.DBInstanceNetInfo, attributeSets ...map[string]rds.DBInstanceAttribute) []resource.Snapshot {
 	values := []resource.Snapshot{}
+	attributes := map[string]rds.DBInstanceAttribute{}
+	if len(attributeSets) > 0 && attributeSets[0] != nil {
+		attributes = attributeSets[0]
+	}
 	for _, instance := range instances {
 		raw, _ := json.Marshal(instance)
 		value := resource.Snapshot{ResourceType: "rds", ExternalID: instance.DBInstanceId, Name: instance.DBInstanceDescription, Region: instance.RegionId, Zone: instance.ZoneId, CloudStatus: instance.DBInstanceStatus, Engine: instance.Engine, EngineVersion: instance.EngineVersion, RawAttributes: raw}
+		if attribute, exists := attributes[instance.DBInstanceId]; exists {
+			value.InstanceType = attribute.DBInstanceClass
+			value.VCPU, _ = strconv.Atoi(attribute.DBInstanceCPU)
+			value.Memory = attribute.DBInstanceMemory
+			value.StorageType = attribute.DBInstanceStorageType
+			value.StorageSizeGiB = int64(attribute.DBInstanceStorage)
+		}
 		for _, network := range networks[instance.DBInstanceId] {
 			port, _ := strconv.Atoi(network.Port)
 			kind := "private"

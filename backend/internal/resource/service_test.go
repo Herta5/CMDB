@@ -247,6 +247,57 @@ func TestSyncAuditContainsChangesButNeverCredential(t *testing.T) {
 	}
 }
 
+// TestSyncPersistsDatabaseSpecification 验证统一同步链路把 RDS 规格写入数据库资产表并保持容量单位。
+func TestSyncPersistsDatabaseSpecification(t *testing.T) {
+	service, db, source, _ := newResourceServiceTest(t)
+	snapshot := Snapshot{
+		ResourceType:   "rds",
+		ExternalID:     "db-specification",
+		InstanceType:   "db.r6g.large",
+		VCPU:           2,
+		Memory:         16384,
+		StorageType:    "gp3",
+		StorageSizeGiB: 200,
+	}
+	if _, err := service.Sync(context.Background(), source.ID, "manual", collectorStub{results: []CollectionResult{{ResourceType: "rds", Snapshots: []Snapshot{snapshot}}}}); err != nil {
+		t.Fatalf("同步 RDS 规格失败：%v", err)
+	}
+	var persisted Database
+	if err := db.Where("external_id = ?", snapshot.ExternalID).First(&persisted).Error; err != nil {
+		t.Fatalf("读取 RDS 规格失败：%v", err)
+	}
+	if persisted.InstanceType != "db.r6g.large" || persisted.VCPU == nil || *persisted.VCPU != 2 || persisted.Memory == nil || *persisted.Memory != 16384 || persisted.StorageType != "gp3" || persisted.StorageSizeGiB == nil || *persisted.StorageSizeGiB != 200 {
+		t.Fatalf("RDS 规格没有完整持久化：%+v", persisted)
+	}
+}
+
+// TestSyncUpdatesDatabaseStorageSpecification 防止 RDS 扩容后存储规格停留在首次采集值。
+func TestSyncUpdatesDatabaseStorageSpecification(t *testing.T) {
+	service, db, source, now := newResourceServiceTest(t)
+	first := Snapshot{ResourceType: "rds", ExternalID: "db-resized", InstanceType: "db.r6g.large", VCPU: 2, Memory: 16384, StorageType: "gp2", StorageSizeGiB: 100}
+	if _, err := service.Sync(context.Background(), source.ID, "manual", collectorStub{results: []CollectionResult{{ResourceType: "rds", Snapshots: []Snapshot{first}}}}); err != nil {
+		t.Fatalf("准备 RDS 原规格失败：%v", err)
+	}
+	*now = now.Add(time.Hour)
+	resized := first
+	resized.StorageType = "gp3"
+	resized.StorageSizeGiB = 200
+	job, err := service.Sync(context.Background(), source.ID, "manual", collectorStub{results: []CollectionResult{{ResourceType: "rds", Snapshots: []Snapshot{resized}}}})
+	if err != nil {
+		t.Fatalf("同步 RDS 扩容规格失败：%v", err)
+	}
+	if !strings.Contains(string(job.Statistics), `"rds":{"added":0,"deleted":0,"failed":0,"lost":0,"restored":0,"updated":1}`) {
+		t.Fatalf("RDS 存储规格变化必须计为真实更新：%s", job.Statistics)
+	}
+	var persisted Database
+	if err := db.Where("external_id = ?", first.ExternalID).First(&persisted).Error; err != nil {
+		t.Fatalf("读取扩容后 RDS 失败：%v", err)
+	}
+	if persisted.StorageType != "gp3" || persisted.StorageSizeGiB == nil || *persisted.StorageSizeGiB != 200 {
+		t.Fatalf("RDS 扩容规格没有更新：%+v", persisted)
+	}
+}
+
 // TestSyncIsIdempotentMarksMissingAndRestores 验证同步不重复建档、缺失后失联及重新出现恢复原记录。
 func TestSyncIsIdempotentMarksMissingAndRestores(t *testing.T) {
 	service, db, source, now := newResourceServiceTest(t)

@@ -344,6 +344,34 @@ describe('项目控制台页面', () => {
     expect(text(root)).toContain('3 块 / 500 GiB')
     app.unmount()
   })
+  it('数据库资产页展示实例规格和存储容量', async () => {
+    const projectStore = useProjectStore()
+    projectStore.projects = [{ id: 2, code: 'platform', name: '平台项目', description: '', status: 'enabled', ownerUsername: null, createdAt: '', updatedAt: '' }]
+    projectStore.selectProject(2)
+    get.mockResolvedValue({
+      items: [
+        {
+          id: 21, provider: 'aws', resource_type: 'rds', external_id: 'db-specification', name: '订单数据库', asset_status: 'active',
+          instance_type: 'db.r6g.large', vcpu: 2, memory: 16384, storage_type: 'gp3', storage_size_gib: 200, endpoints: [],
+        },
+        {
+          id: 22, provider: 'aws', resource_type: 'rds', external_id: 'db-serverless', name: '弹性数据库', asset_status: 'active',
+          instance_type: 'db.serverless', vcpu: null, memory: null, storage_type: 'aurora', storage_size_gib: null, endpoints: [],
+        },
+      ],
+      total: 2,
+    })
+
+    const component = { render: () => h(AssetListPage, { category: 'database' }) }
+    const { root, app } = await mount(component, '/assets/databases')
+    expect(text(root)).toContain('实例规格')
+    expect(text(root)).toContain('db.r6g.large · 2 vCPU · 16 GiB')
+    expect(text(root)).toContain('存储')
+    expect(text(root)).toContain('gp3 · 200 GiB')
+    expect(text(root)).toContain('db.serverless · 未知 vCPU · 未知 GiB')
+    expect(text(root)).toContain('aurora · 容量未知')
+    app.unmount()
+  })
   it('系统管理员选择所有项目后汇总资产并显示项目归属', async () => {
     useAuthStore().acceptSession('管理员会话', { username: 'admin', globalRole: 'system_admin' })
     const projectStore = useProjectStore()
