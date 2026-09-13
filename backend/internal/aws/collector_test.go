@@ -13,6 +13,8 @@ import (
 	awssdk "github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
 	"github.com/aws/aws-sdk-go-v2/service/ec2/types"
+	"github.com/aws/aws-sdk-go-v2/service/elasticloadbalancing"
+	classictypes "github.com/aws/aws-sdk-go-v2/service/elasticloadbalancing/types"
 	"github.com/aws/aws-sdk-go-v2/service/elasticloadbalancingv2"
 	elbtypes "github.com/aws/aws-sdk-go-v2/service/elasticloadbalancingv2/types"
 	"github.com/aws/aws-sdk-go-v2/service/rds"
@@ -95,11 +97,18 @@ func (s *ec2CollectStub) DescribeVolumes(_ context.Context, input *ec2.DescribeV
 	return &ec2.DescribeVolumesOutput{Volumes: volumes}, nil
 }
 
-type rdsProbeStub struct{ input *rds.DescribeDBInstancesInput }
+type rdsProbeStub struct {
+	input  *rds.DescribeDBInstancesInput
+	output *rds.DescribeDBInstancesOutput
+	err    error
+}
 
 func (s *rdsProbeStub) DescribeDBInstances(_ context.Context, input *rds.DescribeDBInstancesInput, _ ...func(*rds.Options)) (*rds.DescribeDBInstancesOutput, error) {
 	s.input = input
-	return &rds.DescribeDBInstancesOutput{}, nil
+	if s.output != nil {
+		return s.output, s.err
+	}
+	return &rds.DescribeDBInstancesOutput{}, s.err
 }
 
 type rdsCollectStub struct {
@@ -290,15 +299,11 @@ func TestCollectEC2RejectsIncompleteAttachedEBS(t *testing.T) {
 	}
 }
 
-// TestRDSAndELBSnapshotsKeepHostnamesAndPorts 验证动态地址保留域名端口而不伪装成固定 IP。
-func TestRDSAndELBSnapshotsKeepHostnamesAndPorts(t *testing.T) {
+// TestRDSSnapshotsKeepHostnamesAndPorts 验证动态地址保留域名端口而不伪装成固定 IP；负载均衡字段由独立采集器测试覆盖。
+func TestRDSSnapshotsKeepHostnamesAndPorts(t *testing.T) {
 	rdsValues := rdsSnapshots(&rds.DescribeDBInstancesOutput{DBInstances: []rdstypes.DBInstance{{DBInstanceIdentifier: awssdk.String("db-1"), Endpoint: &rdstypes.Endpoint{Address: awssdk.String("db.example.invalid"), Port: awssdk.Int32(3306)}}}}, "cn-north-1")
-	elbValues := elbSnapshots(&elasticloadbalancingv2.DescribeLoadBalancersOutput{LoadBalancers: []elbtypes.LoadBalancer{{LoadBalancerArn: awssdk.String("arn:lb:1"), LoadBalancerName: awssdk.String("web"), DNSName: awssdk.String("lb.example.invalid"), Scheme: elbtypes.LoadBalancerSchemeEnumInternetFacing}}}, map[string][]elbtypes.Listener{"arn:lb:1": {{Port: awssdk.Int32(443), Protocol: elbtypes.ProtocolEnumHttps}}}, "cn-north-1")
 	if rdsValues[0].Endpoints[0].Address != "db.example.invalid" || rdsValues[0].Endpoints[0].Port != 3306 {
 		t.Fatal("RDS 必须保存原始域名和端口")
-	}
-	if elbValues[0].Endpoints[0].Kind != "public" || elbValues[0].Endpoints[0].Address != "lb.example.invalid" || elbValues[0].Endpoints[0].Port != 443 || elbValues[0].Endpoints[0].Protocol != "https" {
-		t.Fatal("公网 ELB 必须保存公网域名及监听端口")
 	}
 }
 
@@ -388,14 +393,21 @@ func TestRDSSnapshotMarksLatestRestorableTimeVolatile(t *testing.T) {
 	}
 }
 
-// TestAWSConnectionProbeRequestsOnePagePerType 验证连接测试只请求三类 API 的最小页面，不遍历实例和监听器。
+// TestAWSConnectionProbeRequestsOnePagePerType 验证六类型连接测试共享 ELBv2 最小页面，不遍历实例和监听器。
 func TestAWSConnectionProbeRequestsOnePagePerType(t *testing.T) {
-	ec2Client, rdsClient, elbClient := &ec2ProbeStub{}, &rdsProbeStub{}, &elbProbeStub{}
-	results, err := probeAWSAccess(context.Background(), ec2Client, rdsClient, elbClient)
-	if err != nil || len(results) != 3 || results[0].ResourceType != "ec2" || results[1].ResourceType != "rds" || results[2].ResourceType != "elb" {
-		t.Fatalf("AWS 连接探测必须返回三类资源结果：%v，错误：%v", results, err)
+	ec2Client, rdsClient := &ec2ProbeStub{}, &rdsProbeStub{}
+	classicClient, elbClient := awsLoadBalancerCollectionFixture()
+	results, err := probeAWSAccess(context.Background(), ec2Client, rdsClient, classicClient, elbClient)
+	if err != nil {
+		t.Fatalf("AWS 连接探测失败：%v", err)
 	}
-	if ec2Client.input == nil || awssdk.ToInt32(ec2Client.input.MaxResults) != 5 || rdsClient.input == nil || awssdk.ToInt32(rdsClient.input.MaxRecords) != 20 || elbClient.input == nil || awssdk.ToInt32(elbClient.input.PageSize) != 1 {
+	assertAWSResourceOrder(t, results)
+	for _, result := range results {
+		if result.Err != nil || len(result.Snapshots) != 0 {
+			t.Fatalf("连接探测只返回类型可达性，不得返回资产：%+v", result)
+		}
+	}
+	if ec2Client.input == nil || awssdk.ToInt32(ec2Client.input.MaxResults) != 5 || rdsClient.input == nil || awssdk.ToInt32(rdsClient.input.MaxRecords) != 20 || len(classicClient.inputs) != 1 || awssdk.ToInt32(classicClient.inputs[0].PageSize) != 1 || len(elbClient.loadBalancerInputs) != 1 || awssdk.ToInt32(elbClient.loadBalancerInputs[0].PageSize) != 1 || len(elbClient.listenerInputs) != 0 {
 		t.Fatal("AWS 连接探测必须使用各 API 允许的最小分页，且不得执行完整采集")
 	}
 }
@@ -403,7 +415,8 @@ func TestAWSConnectionProbeRequestsOnePagePerType(t *testing.T) {
 // TestAWSConnectionProbeChecksHardwareDetailPermissions 防止连接测试放过缺少规格或 EBS 读取权限的接入源。
 func TestAWSConnectionProbeChecksHardwareDetailPermissions(t *testing.T) {
 	ec2Client, rdsClient, elbClient := &ec2ProbeStub{}, &rdsProbeStub{}, &elbProbeStub{}
-	if _, err := probeAWSAccess(context.Background(), ec2Client, rdsClient, elbClient); err != nil {
+	classicClient, _ := awsLoadBalancerCollectionFixture()
+	if _, err := probeAWSAccess(context.Background(), ec2Client, rdsClient, classicClient, elbClient); err != nil {
 		t.Fatalf("AWS 连接探测失败：%v", err)
 	}
 	if ec2Client.instanceTypeInput == nil || awssdk.ToInt32(ec2Client.instanceTypeInput.MaxResults) != 5 || ec2Client.volumeInput == nil || awssdk.ToInt32(ec2Client.volumeInput.MaxResults) != 5 {
@@ -415,15 +428,197 @@ func TestAWSConnectionProbeChecksHardwareDetailPermissions(t *testing.T) {
 func TestAWSConnectionProbeSharesInstanceTypeFailureWithRDS(t *testing.T) {
 	instanceTypeErr := errors.New("实例类型目录暂不可用")
 	ec2Client := &ec2ProbeStub{instanceErr: errors.New("实例列表暂不可用"), instanceTypeErr: instanceTypeErr}
-	results, err := probeAWSAccess(context.Background(), ec2Client, &rdsProbeStub{}, &elbProbeStub{})
+	classicClient, _ := awsLoadBalancerCollectionFixture()
+	results, err := probeAWSAccess(context.Background(), ec2Client, &rdsProbeStub{}, classicClient, &elbProbeStub{})
 	if err != nil {
 		t.Fatalf("普通云端故障应保留为类型级结果：%v", err)
 	}
 	if ec2Client.instanceTypeInput == nil {
 		t.Fatal("实例列表失败后仍须独立探测 EC2 与 RDS 共用的实例类型目录")
 	}
-	if len(results) != 3 || !errors.Is(results[1].Err, instanceTypeErr) {
+	if len(results) != 6 || !errors.Is(results[1].Err, instanceTypeErr) {
 		t.Fatalf("公共实例类型目录故障必须同时使 RDS 探测失败：%+v", results)
+	}
+}
+
+// awsLoadBalancerCollectionFixture 使用无域名的三类跨页响应，测试不依赖真实账号或 DNS。
+func awsLoadBalancerCollectionFixture() (*classicELBStub, *elbV2Stub) {
+	classicClient := &classicELBStub{pages: []*elasticloadbalancing.DescribeLoadBalancersOutput{
+		{LoadBalancerDescriptions: []classictypes.LoadBalancerDescription{{LoadBalancerName: awssdk.String("classic-1")}}, NextMarker: awssdk.String("classic-page-2")},
+		{},
+	}}
+	v2Client := &elbV2Stub{
+		loadBalancerPages: []*elasticloadbalancingv2.DescribeLoadBalancersOutput{
+			{LoadBalancers: []elbtypes.LoadBalancer{
+				{LoadBalancerArn: awssdk.String("arn:nlb:1"), Type: elbtypes.LoadBalancerTypeEnumNetwork},
+				{LoadBalancerArn: awssdk.String("arn:alb:1"), Type: elbtypes.LoadBalancerTypeEnumApplication},
+			}, NextMarker: awssdk.String("v2-page-2")},
+			{LoadBalancers: []elbtypes.LoadBalancer{{LoadBalancerArn: awssdk.String("arn:gwlb:1"), Type: elbtypes.LoadBalancerTypeEnumGateway}}},
+		},
+		listenerPages: map[string][]*elasticloadbalancingv2.DescribeListenersOutput{
+			"arn:alb:1": {{}}, "arn:nlb:1": {{}}, "arn:gwlb:1": {{}},
+		},
+	}
+	return classicClient, v2Client
+}
+
+// assertAWSResourceOrder 验证对同步核心可见的类型顺序，防止类型遗漏或旧 elb 身份重新出现。
+func assertAWSResourceOrder(t *testing.T, results []resource.CollectionResult) {
+	t.Helper()
+	var got []string
+	for _, result := range results {
+		got = append(got, result.ResourceType)
+	}
+	if !reflect.DeepEqual(got, []string{"ec2", "rds", "clb", "alb", "nlb", "gwlb"}) {
+		t.Fatalf("AWS 必须按固定顺序返回六类型：%v", got)
+	}
+}
+
+// TestCollectAWSResourcesReturnsSixTypesFromOneV2Listing 防止按类型重复列举或未接入任一正式负载均衡类型。
+func TestCollectAWSResourcesReturnsSixTypesFromOneV2Listing(t *testing.T) {
+	classicClient, v2Client := awsLoadBalancerCollectionFixture()
+	rdsClient := &rdsProbeStub{output: &rds.DescribeDBInstancesOutput{DBInstances: []rdstypes.DBInstance{{DBInstanceIdentifier: awssdk.String("db-1"), DBInstanceClass: awssdk.String("db.serverless")}}}}
+	results, err := collectAWSResources(context.Background(), &ec2CollectStub{}, rdsClient, classicClient, v2Client, "cn-north-1")
+	if err != nil {
+		t.Fatalf("完整采集失败：%v", err)
+	}
+	assertAWSResourceOrder(t, results)
+	wantIDs := []string{"i-1", "db-1", "classic-1", "arn:alb:1", "arn:nlb:1", "arn:gwlb:1"}
+	for index, result := range results {
+		if result.Err != nil || len(result.Snapshots) != 1 || result.Snapshots[0].ResourceType != result.ResourceType || result.Snapshots[0].ExternalID != wantIDs[index] || result.Snapshots[0].Region != "cn-north-1" {
+			t.Fatalf("每类成功结果必须保留对应资源身份：%+v", result)
+		}
+	}
+	if len(v2Client.loadBalancerInputs) != 2 || awssdk.ToString(v2Client.loadBalancerInputs[1].Marker) != "v2-page-2" || len(classicClient.inputs) != 2 || awssdk.ToInt32(classicClient.inputs[0].PageSize) != 400 {
+		t.Fatal("完整采集必须仅执行一次 ELBv2 全分页列举，并使用 Classic 完整分页")
+	}
+}
+
+// TestCollectAWSResourcesIsolatesFailures 验证部分失败只影响对应具体类型，列表不完整时三种 v2 类型共同失败。
+func TestCollectAWSResourcesIsolatesFailures(t *testing.T) {
+	ordinaryErr := errors.New("云端临时故障")
+	permissionErr := &smithy.GenericAPIError{Code: "AccessDeniedException", Message: "虚构云端错误"}
+	for _, test := range []struct {
+		name    string
+		mutate  func(*classicELBStub, *elbV2Stub)
+		failed  []int
+		wantErr error
+	}{
+		{name: "ELBv2 列表普通失败", mutate: func(_ *classicELBStub, v2 *elbV2Stub) { v2.loadBalancerErrors = []error{nil, ordinaryErr} }, failed: []int{3, 4, 5}, wantErr: ordinaryErr},
+		{name: "ELBv2 列表权限失败", mutate: func(_ *classicELBStub, v2 *elbV2Stub) { v2.loadBalancerErrors = []error{permissionErr} }, failed: []int{3, 4, 5}, wantErr: resource.ErrPermissionDenied},
+		{name: "ALB 监听器权限失败", mutate: func(_ *classicELBStub, v2 *elbV2Stub) {
+			v2.listenerErrors = map[string][]error{"arn:alb:1": {permissionErr}}
+		}, failed: []int{3}, wantErr: resource.ErrPermissionDenied},
+		{name: "NLB 监听器普通失败", mutate: func(_ *classicELBStub, v2 *elbV2Stub) {
+			v2.listenerErrors = map[string][]error{"arn:nlb:1": {ordinaryErr}}
+		}, failed: []int{4}, wantErr: ordinaryErr},
+		{name: "Classic 权限失败", mutate: func(classic *classicELBStub, _ *elbV2Stub) { classic.errors = []error{permissionErr} }, failed: []int{2}, wantErr: resource.ErrPermissionDenied},
+		{name: "未知 ELBv2 类型", mutate: func(_ *classicELBStub, v2 *elbV2Stub) { v2.loadBalancerPages[1].LoadBalancers[0].Type = "future" }, failed: []int{3, 4, 5}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			classicClient, v2Client := awsLoadBalancerCollectionFixture()
+			test.mutate(classicClient, v2Client)
+			results, err := collectAWSResources(context.Background(), &ec2CollectStub{}, &rdsProbeStub{}, classicClient, v2Client, "cn-north-1")
+			if err != nil {
+				t.Fatalf("非认证故障不得整体终止：%v", err)
+			}
+			assertAWSResourceOrder(t, results)
+			for index, result := range results {
+				failed := false
+				for _, failedIndex := range test.failed {
+					if index == failedIndex {
+						failed = true
+					}
+				}
+				if failed {
+					if result.Err == nil || len(result.Snapshots) != 0 || (test.wantErr != nil && !errors.Is(result.Err, test.wantErr)) {
+						t.Fatalf("失败类型必须安全分类且无局部快照：%+v", result)
+					}
+				} else if result.Err != nil || (index != 1 && len(result.Snapshots) != 1) {
+					t.Fatalf("未受影响类型必须保留完整采集结果：%+v", result)
+				}
+			}
+		})
+	}
+}
+
+// TestCollectAWSResourcesAuthenticationAbortsAll 防止认证失效时把局部结果交给资源生命周期判断。
+func TestCollectAWSResourcesAuthenticationAbortsAll(t *testing.T) {
+	authErr := &smithy.GenericAPIError{Code: "ExpiredToken", Message: "虚构云端错误"}
+	for _, stage := range []string{"ec2", "rds", "clb", "v2列表", "alb", "nlb", "gwlb"} {
+		t.Run(stage, func(t *testing.T) {
+			ec2Client, rdsClient := &ec2ProbeStub{}, &rdsProbeStub{}
+			classicClient, v2Client := awsLoadBalancerCollectionFixture()
+			switch stage {
+			case "ec2":
+				ec2Client.instanceErr = authErr
+			case "rds":
+				rdsClient.err = authErr
+			case "clb":
+				classicClient.errors = []error{authErr}
+			case "v2列表":
+				v2Client.loadBalancerErrors = []error{authErr}
+			default:
+				v2Client.listenerErrors = map[string][]error{"arn:" + stage + ":1": {authErr}}
+			}
+			results, err := collectAWSResources(context.Background(), ec2Client, rdsClient, classicClient, v2Client, "cn-north-1")
+			if !errors.Is(err, resource.ErrAuthenticationFailed) || results != nil {
+				t.Fatalf("任一认证失败必须整体终止且不返回局部结果：results=%+v err=%v", results, err)
+			}
+			if (stage == "ec2" || stage == "rds" || stage == "clb") && len(v2Client.loadBalancerInputs) != 0 {
+				t.Fatal("前置类型认证失败后不得继续读取 ELBv2")
+			}
+		})
+	}
+}
+
+// TestAWSConnectionProbeSeparatesLoadBalancerFailures 验证两种列表的普通故障分别映射到 Classic 或三种 ELBv2 类型。
+func TestAWSConnectionProbeSeparatesLoadBalancerFailures(t *testing.T) {
+	ordinaryErr := errors.New("列表暂不可用")
+	for _, stage := range []string{"clb", "v2"} {
+		t.Run(stage, func(t *testing.T) {
+			classicClient, v2Client := awsLoadBalancerCollectionFixture()
+			if stage == "clb" {
+				classicClient.errors = []error{ordinaryErr}
+			} else {
+				v2Client.loadBalancerErrors = []error{ordinaryErr}
+			}
+			results, err := probeAWSAccess(context.Background(), &ec2ProbeStub{}, &rdsProbeStub{}, classicClient, v2Client)
+			if err != nil {
+				t.Fatalf("普通探测故障应保留在类型结果：%v", err)
+			}
+			assertAWSResourceOrder(t, results)
+			for index, result := range results {
+				failed := stage == "clb" && index == 2 || stage == "v2" && index >= 3
+				if failed && !errors.Is(result.Err, ordinaryErr) || !failed && result.Err != nil || len(result.Snapshots) != 0 {
+					t.Fatalf("列表故障不得影响其他类型或生成快照：%+v", result)
+				}
+			}
+		})
+	}
+}
+
+// TestAWSConnectionProbeClassifiesLoadBalancerAccessErrors 验证新增负载均衡接口保持连接测试认证与权限的整体失败契约。
+func TestAWSConnectionProbeClassifiesLoadBalancerAccessErrors(t *testing.T) {
+	for _, stage := range []string{"clb", "v2"} {
+		for _, test := range []struct {
+			code string
+			want error
+		}{{"ExpiredToken", resource.ErrAuthenticationFailed}, {"AccessDeniedException", resource.ErrPermissionDenied}} {
+			t.Run(stage+"/"+test.want.Error(), func(t *testing.T) {
+				classicClient, v2Client := awsLoadBalancerCollectionFixture()
+				cloudErr := &smithy.GenericAPIError{Code: test.code, Message: "虚构云端错误"}
+				if stage == "clb" {
+					classicClient.errors = []error{cloudErr}
+				} else {
+					v2Client.loadBalancerErrors = []error{cloudErr}
+				}
+				results, err := probeAWSAccess(context.Background(), &ec2ProbeStub{}, &rdsProbeStub{}, classicClient, v2Client)
+				if !errors.Is(err, test.want) || results != nil {
+					t.Fatalf("连接测试访问错误必须安全分类且整体失败：results=%+v err=%v", results, err)
+				}
+			})
+		}
 	}
 }
 

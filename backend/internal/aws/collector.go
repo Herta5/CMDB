@@ -1,4 +1,4 @@
-// 本文件使用 AWS 官方 SDK 采集 EC2、RDS 和 ELB，并转换为共享资源快照。
+// 本文件使用 AWS 官方 SDK 编排六类型资源采集与轻量探测，并转换 EC2、RDS 共享资源快照。
 package aws
 
 import (
@@ -16,8 +16,8 @@ import (
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
 	ec2types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
+	"github.com/aws/aws-sdk-go-v2/service/elasticloadbalancing"
 	"github.com/aws/aws-sdk-go-v2/service/elasticloadbalancingv2"
-	elbtypes "github.com/aws/aws-sdk-go-v2/service/elasticloadbalancingv2/types"
 	"github.com/aws/aws-sdk-go-v2/service/rds"
 	"github.com/aws/smithy-go"
 )
@@ -55,17 +55,22 @@ type rdsProbeAPI interface {
 	DescribeDBInstances(context.Context, *rds.DescribeDBInstancesInput, ...func(*rds.Options)) (*rds.DescribeDBInstancesOutput, error)
 }
 
+// rdsCollectAPI 的完整列表与探测共用官方 RDS API，分页策略由采集入口决定。
+type rdsCollectAPI interface {
+	rdsProbeAPI
+}
+
 // instanceTypeAPI 为 RDS 固定规格复用 EC2 的只读实例类型目录，不参与 EC2 资产采集。
 type instanceTypeAPI interface {
 	ec2.DescribeInstanceTypesAPIClient
 }
 
-// elbProbeAPI 约束连接测试只调用 ELB 列表首页。
+// elbProbeAPI 约束连接测试只调用 ELBv2 列表首页。
 type elbProbeAPI interface {
 	DescribeLoadBalancers(context.Context, *elasticloadbalancingv2.DescribeLoadBalancersInput, ...func(*elasticloadbalancingv2.Options)) (*elasticloadbalancingv2.DescribeLoadBalancersOutput, error)
 }
 
-// Collect 使用接入源区域和静态凭证采集三类 AWS 资源。
+// Collect 使用接入源区域和静态凭证创建官方 SDK v2 客户端，统一交给六类型编排。
 func (c *Collector) Collect(ctx context.Context, source resource.Source, plain []byte) ([]resource.CollectionResult, error) {
 	var auth credential
 	if json.Unmarshal(plain, &auth) != nil || auth.AccessKeyID == "" || auth.SecretAccessKey == "" || source.Region == "" {
@@ -77,34 +82,67 @@ func (c *Collector) Collect(ctx context.Context, source resource.Source, plain [
 	}
 	ec2Client := ec2.NewFromConfig(configuration)
 	rdsClient := rds.NewFromConfig(configuration)
-	elbClient := elasticloadbalancingv2.NewFromConfig(configuration)
+	classicClient := elasticloadbalancing.NewFromConfig(configuration)
+	v2Client := elasticloadbalancingv2.NewFromConfig(configuration)
+	return collectAWSResources(ctx, ec2Client, rdsClient, classicClient, v2Client, source.Region)
+}
+
+// collectAWSResources 保留类型级失败边界，ELBv2 共享一次完整列表后按三种正式类型独立采集。
+func collectAWSResources(ctx context.Context, ec2Client ec2CollectAPI, rdsClient rdsCollectAPI, classicClient classicELBAPI, v2Client elbV2API, region string) ([]resource.CollectionResult, error) {
 	results, err := resource.CollectByType(ctx, []resource.TypeCollection{
 		{ResourceType: "ec2", Collect: func(ctx context.Context) ([]resource.Snapshot, error) {
 			output, instanceTypes, volumes, collectErr := collectEC2(ctx, ec2Client)
 			if collectErr != nil {
 				return nil, collectErr
 			}
-			return ec2Snapshots(output, source.Region, instanceTypes, volumes), nil
+			return ec2Snapshots(output, region, instanceTypes, volumes), nil
 		}},
 		{ResourceType: "rds", Collect: func(ctx context.Context) ([]resource.Snapshot, error) {
 			output, instanceTypes, collectErr := collectRDS(ctx, rdsClient, ec2Client)
 			if collectErr != nil {
 				return nil, collectErr
 			}
-			return rdsSnapshots(output, source.Region, instanceTypes), nil
+			return rdsSnapshots(output, region, instanceTypes), nil
 		}},
-		{ResourceType: "elb", Collect: func(ctx context.Context) ([]resource.Snapshot, error) {
-			output, listeners, collectErr := collectELB(ctx, elbClient)
-			if collectErr != nil {
-				return nil, collectErr
-			}
-			return elbSnapshots(output, listeners, source.Region), nil
+		{ResourceType: "clb", Collect: func(ctx context.Context) ([]resource.Snapshot, error) {
+			return collectCLB(ctx, classicClient, region)
 		}},
 	}, classifyAWSAccessError)
 	if err != nil {
 		return nil, err
 	}
+	values, listErr := listELBV2LoadBalancers(ctx, v2Client)
+	var v2Results []resource.CollectionResult
+	if listErr != nil {
+		// 不完整列表无法判断任何 v2 类型是否缺失，三类必须共同失败，保留此前完整类型。
+		for _, resourceType := range []string{"alb", "nlb", "gwlb"} {
+			v2Results = append(v2Results, resource.CollectionResult{ResourceType: resourceType, Err: listErr})
+		}
+	} else {
+		v2Results, err = collectELBV2ByType(ctx, v2Client, values, region)
+		if err != nil {
+			return nil, err
+		}
+	}
+	for index := range v2Results {
+		result := &v2Results[index]
+		if result.Err == nil {
+			continue
+		}
+		// 每类监听器错误独立收敛；未分类错误继续交给共享核心生成安全摘要。
+		if accessErr := classifyAWSAccessError(result.Err); accessErr != nil {
+			result.Err = accessErr
+		}
+		if errors.Is(result.Err, resource.ErrAuthenticationFailed) {
+			return nil, result.Err
+		}
+		result.Snapshots = nil
+	}
+	results = append(results, v2Results...)
 	for resultIndex := range results {
+		if results[resultIndex].Err != nil {
+			continue
+		}
 		for snapshotIndex := range results[resultIndex].Snapshots {
 			resolveEndpoints(ctx, &results[resultIndex].Snapshots[snapshotIndex])
 		}
@@ -112,7 +150,7 @@ func (c *Collector) Collect(ctx context.Context, source resource.Source, plain [
 	return results, nil
 }
 
-// Probe 通过三类资源的最小分页请求验证认证、权限和网络，不读取监听器或解析动态地址。
+// Probe 通过六类型资源依赖的最小分页请求验证认证、权限和网络，不读取监听器或解析动态地址。
 func (c *Collector) Probe(ctx context.Context, source resource.Source, plain []byte) ([]resource.CollectionResult, error) {
 	var auth credential
 	if json.Unmarshal(plain, &auth) != nil || auth.AccessKeyID == "" || auth.SecretAccessKey == "" || source.Region == "" {
@@ -122,11 +160,11 @@ func (c *Collector) Probe(ctx context.Context, source resource.Source, plain []b
 	if err != nil {
 		return nil, resource.ErrAuthenticationFailed
 	}
-	return probeAWSAccess(ctx, ec2.NewFromConfig(configuration), rds.NewFromConfig(configuration), elasticloadbalancingv2.NewFromConfig(configuration))
+	return probeAWSAccess(ctx, ec2.NewFromConfig(configuration), rds.NewFromConfig(configuration), elasticloadbalancing.NewFromConfig(configuration), elasticloadbalancingv2.NewFromConfig(configuration))
 }
 
 // probeAWSAccess 使用各 API 允许的最小分页，仅返回资源类型可达性。
-func probeAWSAccess(ctx context.Context, ec2Client ec2ProbeAPI, rdsClient rdsProbeAPI, elbClient elbProbeAPI) ([]resource.CollectionResult, error) {
+func probeAWSAccess(ctx context.Context, ec2Client ec2ProbeAPI, rdsClient rdsProbeAPI, classicClient classicELBAPI, elbClient elbProbeAPI) ([]resource.CollectionResult, error) {
 	_, ec2Err := ec2Client.DescribeInstances(ctx, &ec2.DescribeInstancesInput{MaxResults: awssdk.Int32(5)})
 	// 实例类型目录同时服务 EC2 和固定规格 RDS，即使实例列表失败也要独立验证该共同依赖。
 	_, instanceTypeErr := ec2Client.DescribeInstanceTypes(ctx, &ec2.DescribeInstanceTypesInput{MaxResults: awssdk.Int32(5)})
@@ -140,8 +178,13 @@ func probeAWSAccess(ctx context.Context, ec2Client ec2ProbeAPI, rdsClient rdsPro
 	if rdsErr == nil {
 		rdsErr = instanceTypeErr
 	}
+	_, classicErr := classicClient.DescribeLoadBalancers(ctx, &elasticloadbalancing.DescribeLoadBalancersInput{PageSize: awssdk.Int32(1)})
 	_, elbErr := elbClient.DescribeLoadBalancers(ctx, &elasticloadbalancingv2.DescribeLoadBalancersInput{PageSize: awssdk.Int32(1)})
-	results := []resource.CollectionResult{{ResourceType: "ec2", Err: ec2Err}, {ResourceType: "rds", Err: rdsErr}, {ResourceType: "elb", Err: elbErr}}
+	// 三种 ELBv2 类型共享同一列表权限，只请求一次即可确定三类可达性。
+	results := []resource.CollectionResult{
+		{ResourceType: "ec2", Err: ec2Err}, {ResourceType: "rds", Err: rdsErr}, {ResourceType: "clb", Err: classicErr},
+		{ResourceType: "alb", Err: elbErr}, {ResourceType: "nlb", Err: elbErr}, {ResourceType: "gwlb", Err: elbErr},
+	}
 	for _, result := range results {
 		if accessErr := classifyAWSAccessError(result.Err); accessErr != nil {
 			return nil, accessErr
@@ -278,32 +321,6 @@ func collectRDS(ctx context.Context, client rdsProbeAPI, typeClient instanceType
 	}
 	return output, instanceTypes, nil
 }
-func collectELB(ctx context.Context, client *elasticloadbalancingv2.Client) (*elasticloadbalancingv2.DescribeLoadBalancersOutput, map[string][]elbtypes.Listener, error) {
-	output := &elasticloadbalancingv2.DescribeLoadBalancersOutput{}
-	listeners := map[string][]elbtypes.Listener{}
-	paginator := elasticloadbalancingv2.NewDescribeLoadBalancersPaginator(client, &elasticloadbalancingv2.DescribeLoadBalancersInput{})
-	for paginator.HasMorePages() {
-		page, err := paginator.NextPage(ctx)
-		if err != nil {
-			return output, listeners, err
-		}
-		output.LoadBalancers = append(output.LoadBalancers, page.LoadBalancers...)
-	}
-	// 监听端口需要独立 API 获取，任何失败都使 ELB 类型失败，避免写入不完整端点。
-	for _, loadBalancer := range output.LoadBalancers {
-		arn := awssdk.ToString(loadBalancer.LoadBalancerArn)
-		listenerPaginator := elasticloadbalancingv2.NewDescribeListenersPaginator(client, &elasticloadbalancingv2.DescribeListenersInput{LoadBalancerArn: loadBalancer.LoadBalancerArn})
-		for listenerPaginator.HasMorePages() {
-			page, err := listenerPaginator.NextPage(ctx)
-			if err != nil {
-				return output, listeners, err
-			}
-			listeners[arn] = append(listeners[arn], page.Listeners...)
-		}
-	}
-	return output, listeners, nil
-}
-
 func ec2Snapshots(output *ec2.DescribeInstancesOutput, region string, instanceTypes map[ec2types.InstanceType]ec2types.InstanceTypeInfo, volumesByInstance map[string][]ec2types.Volume) []resource.Snapshot {
 	values := []resource.Snapshot{}
 	if output == nil {
@@ -437,33 +454,6 @@ func rdsSnapshots(output *rds.DescribeDBInstancesOutput, region string, instance
 	}
 	return values
 }
-func elbSnapshots(output *elasticloadbalancingv2.DescribeLoadBalancersOutput, listeners map[string][]elbtypes.Listener, region string) []resource.Snapshot {
-	values := []resource.Snapshot{}
-	if output == nil {
-		return values
-	}
-	for _, loadBalancer := range output.LoadBalancers {
-		raw, _ := json.Marshal(loadBalancer)
-		kind := "private"
-		if loadBalancer.Scheme == elbtypes.LoadBalancerSchemeEnumInternetFacing {
-			kind = "public"
-		}
-		status := ""
-		if loadBalancer.State != nil {
-			status = string(loadBalancer.State.Code)
-		}
-		endpoints := []resource.EndpointSnapshot{}
-		for _, listener := range listeners[awssdk.ToString(loadBalancer.LoadBalancerArn)] {
-			endpoints = append(endpoints, resource.EndpointSnapshot{Kind: kind, Address: awssdk.ToString(loadBalancer.DNSName), Port: int(awssdk.ToInt32(listener.Port)), Protocol: strings.ToLower(string(listener.Protocol))})
-		}
-		if len(endpoints) == 0 {
-			endpoints = append(endpoints, resource.EndpointSnapshot{Kind: kind, Address: awssdk.ToString(loadBalancer.DNSName), Protocol: "tcp"})
-		}
-		values = append(values, resource.Snapshot{ResourceType: "elb", ExternalID: awssdk.ToString(loadBalancer.LoadBalancerArn), Name: awssdk.ToString(loadBalancer.LoadBalancerName), Region: region, Zone: firstELBZone(loadBalancer.AvailabilityZones), CloudStatus: status, NetworkType: string(loadBalancer.Scheme), RawAttributes: raw, Endpoints: endpoints})
-	}
-	return values
-}
-
 func tagName(tags []ec2types.Tag) string {
 	for _, tag := range tags {
 		if awssdk.ToString(tag.Key) == "Name" {
@@ -471,12 +461,6 @@ func tagName(tags []ec2types.Tag) string {
 		}
 	}
 	return ""
-}
-func firstELBZone(zones []elbtypes.AvailabilityZone) string {
-	if len(zones) == 0 {
-		return ""
-	}
-	return awssdk.ToString(zones[0].ZoneName)
 }
 func hasEndpoint(values []resource.EndpointSnapshot, kind, address string) bool {
 	for _, value := range values {
