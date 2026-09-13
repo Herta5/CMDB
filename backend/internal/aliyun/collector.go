@@ -4,7 +4,9 @@ package aliyun
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -28,9 +30,16 @@ type credential struct {
 	AccessKeySecret string `json:"access_key_secret"`
 }
 
-// ecsProbeAPI 约束连接测试只调用 ECS 列表首页，便于使用模拟响应验证轻量行为。
+// ecsProbeAPI 约束连接测试只调用实例与云盘列表的最小页面，便于使用模拟响应验证轻量行为。
 type ecsProbeAPI interface {
 	DescribeInstances(*ecs.DescribeInstancesRequest) (*ecs.DescribeInstancesResponse, error)
+	DescribeDisks(*ecs.DescribeDisksRequest) (*ecs.DescribeDisksResponse, error)
+}
+
+// ecsCollectAPI 约束 ECS 完整采集同时读取实例和已挂载云盘，便于使用模拟响应验收。
+type ecsCollectAPI interface {
+	DescribeInstances(*ecs.DescribeInstancesRequest) (*ecs.DescribeInstancesResponse, error)
+	DescribeDisks(*ecs.DescribeDisksRequest) (*ecs.DescribeDisksResponse, error)
 }
 
 // rdsProbeAPI 约束连接测试只调用 RDS 列表首页。
@@ -61,19 +70,32 @@ func (c *Collector) Collect(ctx context.Context, source resource.Source, plain [
 	if err != nil {
 		return nil, resource.ErrAuthenticationFailed
 	}
-	ecsItems, ecsErr := collectECS(ecsClient, source.Region)
-	if accessErr := classifyAliyunAccessError(ecsErr); accessErr != nil {
-		return nil, accessErr
+	results, err := resource.CollectByType(ctx, []resource.TypeCollection{
+		{ResourceType: "ecs", Collect: func(context.Context) ([]resource.Snapshot, error) {
+			items, disks, collectErr := collectECS(ecsClient, source.Region)
+			if collectErr != nil {
+				return nil, collectErr
+			}
+			return ecsSnapshots(items, disks), nil
+		}},
+		{ResourceType: "rds", Collect: func(context.Context) ([]resource.Snapshot, error) {
+			items, networks, collectErr := collectRDS(rdsClient)
+			if collectErr != nil {
+				return nil, collectErr
+			}
+			return rdsSnapshots(items, networks), nil
+		}},
+		{ResourceType: "slb", Collect: func(context.Context) ([]resource.Snapshot, error) {
+			items, ports, collectErr := collectSLB(slbClient, source.Region)
+			if collectErr != nil {
+				return nil, collectErr
+			}
+			return slbSnapshots(items, ports), nil
+		}},
+	}, classifyAliyunAccessError)
+	if err != nil {
+		return nil, err
 	}
-	rdsItems, networks, rdsErr := collectRDS(rdsClient)
-	if accessErr := classifyAliyunAccessError(rdsErr); accessErr != nil {
-		return nil, accessErr
-	}
-	slbItems, ports, slbErr := collectSLB(slbClient, source.Region)
-	if accessErr := classifyAliyunAccessError(slbErr); accessErr != nil {
-		return nil, accessErr
-	}
-	results := []resource.CollectionResult{{ResourceType: "ecs", Snapshots: ecsSnapshots(ecsItems), Err: ecsErr}, {ResourceType: "rds", Snapshots: rdsSnapshots(rdsItems, networks), Err: rdsErr}, {ResourceType: "slb", Snapshots: slbSnapshots(slbItems, ports), Err: slbErr}}
 	for resultIndex := range results {
 		for snapshotIndex := range results[resultIndex].Snapshots {
 			resolveEndpoints(ctx, &results[resultIndex].Snapshots[snapshotIndex])
@@ -113,6 +135,18 @@ func probeAliyunAccess(ctx context.Context, ecsClient ecsProbeAPI, rdsClient rds
 	ecsRequest.PageNumber = "1"
 	ecsRequest.PageSize = "1"
 	_, ecsErr := ecsClient.DescribeInstances(ecsRequest)
+	if ecsErr == nil {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		diskRequest := ecs.CreateDescribeDisksRequest()
+		diskRequest.RegionId = region
+		diskRequest.DiskType = "all"
+		diskRequest.Status = "In_use"
+		diskRequest.PageNumber = "1"
+		diskRequest.PageSize = "1"
+		_, ecsErr = ecsClient.DescribeDisks(diskRequest)
+	}
 
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -140,8 +174,9 @@ func probeAliyunAccess(ctx context.Context, ecsClient ecsProbeAPI, rdsClient rds
 	return results, nil
 }
 
-func collectECS(client *ecs.Client, region string) ([]ecs.Instance, error) {
+func collectECS(client ecsCollectAPI, region string) ([]ecs.Instance, map[string][]ecs.Disk, error) {
 	values := []ecs.Instance{}
+	disksByInstance := make(map[string][]ecs.Disk)
 	for page := 1; ; page++ {
 		request := ecs.CreateDescribeInstancesRequest()
 		request.RegionId = region
@@ -149,14 +184,97 @@ func collectECS(client *ecs.Client, region string) ([]ecs.Instance, error) {
 		request.PageSize = "100"
 		response, err := client.DescribeInstances(request)
 		if err != nil {
-			return values, err
+			return values, disksByInstance, err
 		}
 		values = append(values, response.Instances.Instance...)
 		if page*response.PageSize >= response.TotalCount || len(response.Instances.Instance) == 0 {
-			return values, nil
+			break
+		}
+	}
+	instanceIDs := make(map[string]struct{}, len(values))
+	for _, instance := range values {
+		vcpu := instance.Cpu
+		if vcpu == 0 {
+			vcpu = instance.CPU
+		}
+		if instance.InstanceType == "" || vcpu <= 0 || instance.Memory <= 0 {
+			return values, disksByInstance, errors.New("ECS 实例规格信息不完整")
+		}
+		instanceIDs[instance.InstanceId] = struct{}{}
+	}
+	// 云盘需要独立 API 获取；任何失败都使 ECS 类型失败，避免以空磁盘覆盖完整快照。
+	for page := 1; ; page++ {
+		request := ecs.CreateDescribeDisksRequest()
+		request.RegionId = region
+		request.DiskType = "all"
+		request.Status = "In_use"
+		request.PageNumber = requests.Integer(strconv.Itoa(page))
+		request.PageSize = "100"
+		response, err := client.DescribeDisks(request)
+		if err != nil {
+			return values, disksByInstance, err
+		}
+		if err := validateAliyunDiskEncryptionPresence(response); err != nil {
+			return values, disksByInstance, err
+		}
+		for _, disk := range response.Disks.Disk {
+			// DescribeDisks 的筛选结果仍在本地收敛，避免云端忽略筛选参数时混入未挂载盘或本地盘。
+			if disk.Status != "In_use" || isAliyunLocalDiskCategory(disk.Category) {
+				continue
+			}
+			if !isAliyunCloudDiskCategory(disk.Category) || disk.DiskId == "" || disk.InstanceId == "" || (disk.Type != "system" && disk.Type != "data") || disk.Size <= 0 || disk.Device == "" {
+				return values, disksByInstance, errors.New("ECS 云盘信息不完整")
+			}
+			if _, collected := instanceIDs[disk.InstanceId]; collected {
+				disksByInstance[disk.InstanceId] = append(disksByInstance[disk.InstanceId], disk)
+			}
+		}
+		if page*response.PageSize >= response.TotalCount || len(response.Disks.Disk) == 0 {
+			return values, disksByInstance, nil
 		}
 	}
 }
+
+// validateAliyunDiskEncryptionPresence 从 SDK 保留的原始响应区分“未加密”和“字段缺失”；手工构造的测试响应没有原始正文时由结构化字段测试覆盖。
+func validateAliyunDiskEncryptionPresence(response *ecs.DescribeDisksResponse) error {
+	if response == nil {
+		return errors.New("ECS 云盘响应为空")
+	}
+	raw := response.GetHttpContentBytes()
+	if len(raw) == 0 {
+		return nil
+	}
+	var envelope struct {
+		Disks struct {
+			Disk []struct {
+				Encrypted *bool `json:"Encrypted"`
+			} `json:"Disk"`
+		} `json:"Disks"`
+	}
+	if json.Unmarshal(raw, &envelope) != nil || len(envelope.Disks.Disk) != len(response.Disks.Disk) {
+		return errors.New("ECS 云盘响应不完整")
+	}
+	for index, disk := range envelope.Disks.Disk {
+		structured := response.Disks.Disk[index]
+		if structured.Status != "In_use" || isAliyunLocalDiskCategory(structured.Category) {
+			continue
+		}
+		if disk.Encrypted == nil {
+			return errors.New("ECS 云盘加密状态缺失")
+		}
+	}
+	return nil
+}
+
+// isAliyunCloudDiskCategory 仅接受具有稳定云盘 ID 的云盘类别，排除实例规格附带的本地盘。
+func isAliyunCloudDiskCategory(category string) bool {
+	return category == "cloud" || (strings.HasPrefix(category, "cloud_") && len(category) > len("cloud_")) || (strings.HasPrefix(category, "elastic_ephemeral_disk_") && len(category) > len("elastic_ephemeral_disk_"))
+}
+
+func isAliyunLocalDiskCategory(category string) bool {
+	return category == "ephemeral" || strings.HasPrefix(category, "ephemeral_") || strings.HasPrefix(category, "local_")
+}
+
 func collectRDS(client *rds.Client) ([]rds.DBInstance, map[string][]rds.DBInstanceNetInfo, error) {
 	values := []rds.DBInstance{}
 	networks := map[string][]rds.DBInstanceNetInfo{}
@@ -213,11 +331,15 @@ func collectSLB(client *slb.Client, region string) ([]slb.LoadBalancer, map[stri
 	return values, ports, nil
 }
 
-func ecsSnapshots(instances []ecs.Instance) []resource.Snapshot {
+func ecsSnapshots(instances []ecs.Instance, disksByInstance map[string][]ecs.Disk) []resource.Snapshot {
 	values := []resource.Snapshot{}
 	for _, instance := range instances {
 		raw, _ := json.Marshal(instance)
-		value := resource.Snapshot{ResourceType: "ecs", ExternalID: instance.InstanceId, Name: instance.InstanceName, Region: instance.RegionId, Zone: instance.ZoneId, CloudStatus: instance.Status, RawAttributes: raw}
+		vcpu := instance.Cpu
+		if vcpu == 0 {
+			vcpu = instance.CPU
+		}
+		value := resource.Snapshot{ResourceType: "ecs", ExternalID: instance.InstanceId, Name: instance.InstanceName, Region: instance.RegionId, Zone: instance.ZoneId, CloudStatus: instance.Status, InstanceType: instance.InstanceType, VCPU: vcpu, Memory: int64(instance.Memory), RawAttributes: raw}
 		add := func(kind, address string) {
 			if address != "" && !contains(value.Endpoints, kind, address, 0) {
 				value.Endpoints = append(value.Endpoints, resource.EndpointSnapshot{Kind: kind, Address: address})
@@ -233,6 +355,18 @@ func ecsSnapshots(instances []ecs.Instance) []resource.Snapshot {
 			add("public", address)
 		}
 		add("public", instance.EipAddress.IpAddress)
+		seenDisks := make(map[string]struct{})
+		for _, disk := range disksByInstance[instance.InstanceId] {
+			if disk.DiskId == "" {
+				continue
+			}
+			if _, exists := seenDisks[disk.DiskId]; exists {
+				continue
+			}
+			seenDisks[disk.DiskId] = struct{}{}
+			value.Disks = append(value.Disks, resource.ServerDisk{ID: disk.DiskId, Kind: disk.Type, Type: disk.Category, SizeGiB: int64(disk.Size), Device: disk.Device, Encrypted: disk.Encrypted})
+		}
+		sort.Slice(value.Disks, func(left, right int) bool { return value.Disks[left].ID < value.Disks[right].ID })
 		values = append(values, value)
 	}
 	return values

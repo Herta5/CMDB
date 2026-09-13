@@ -623,6 +623,42 @@ func TestSyncRoutesAssetsIntoThreeTables(t *testing.T) {
 	}
 }
 
+// TestSyncPersistsAndReturnsServerHardwareDetails 防止服务器规格或磁盘明细在统一持久化与查询链路中丢失。
+func TestSyncPersistsAndReturnsServerHardwareDetails(t *testing.T) {
+	service, db, source, _ := newResourceServiceTest(t)
+	snapshotDisks := []ServerDisk{
+		{ID: "vol-root", Kind: "system", Type: "gp3", SizeGiB: 100, Device: "/dev/sda1", Encrypted: true},
+		{ID: "vol-data", Kind: "data", Type: "gp3", SizeGiB: 400, Device: "/dev/sdf", Encrypted: true},
+	}
+	wantDisks := []ServerDisk{snapshotDisks[1], snapshotDisks[0]}
+	results := []CollectionResult{
+		{ResourceType: "ec2", Snapshots: []Snapshot{{ExternalID: "i-hardware", InstanceType: "c6a.xlarge", VCPU: 4, Memory: 8192, Disks: snapshotDisks}}},
+		{ResourceType: "rds"},
+		{ResourceType: "elb"},
+	}
+	if _, err := service.Sync(context.Background(), source.ID, "manual", collectorStub{results: results}); err != nil {
+		t.Fatalf("同步服务器规格失败：%v", err)
+	}
+
+	var persisted Server
+	if err := db.Where("external_id = ?", "i-hardware").First(&persisted).Error; err != nil {
+		t.Fatalf("读取服务器规格失败：%v", err)
+	}
+	var persistedDisks []ServerDisk
+	if json.Unmarshal(persisted.Disks, &persistedDisks) != nil || persisted.InstanceType != "c6a.xlarge" || persisted.VCPU != 4 || persisted.Memory != 8192 || !reflect.DeepEqual(persistedDisks, wantDisks) {
+		t.Fatalf("服务器规格未完整持久化：%+v disks=%s", persisted, persisted.Disks)
+	}
+
+	resources, total, err := service.ListResources(context.Background(), source.ProjectID, ProviderAWS, "ec2", "", 1, 20)
+	if err != nil || total != 1 || len(resources) != 1 {
+		t.Fatalf("查询服务器规格失败：total=%d values=%+v err=%v", total, resources, err)
+	}
+	got := resources[0]
+	if got.InstanceType != "c6a.xlarge" || got.VCPU != 4 || got.Memory != 8192 || !reflect.DeepEqual(got.Disks, wantDisks) {
+		t.Fatalf("统一资源接口丢失服务器规格：%+v", got)
+	}
+}
+
 // TestSyncFailureDoesNotMarkResourcesMissing 验证单类失败和认证失败都不能错误更新失联状态。
 func TestSyncFailureDoesNotMarkResourcesMissing(t *testing.T) {
 	service, db, source, now := newResourceServiceTest(t)
@@ -646,6 +682,40 @@ func TestSyncFailureDoesNotMarkResourcesMissing(t *testing.T) {
 	_ = db.Model(&audit.Log{}).Where("action = ? AND resource_id = ?", audit.ActionResourceDeleted, expiredLost.ExternalID).Count(&deletedAudits).Error
 	if remaining != 1 || deletedAudits != 0 {
 		t.Fatalf("类型失败和认证失败都不得清理过期失联资源：remaining=%d audits=%d", remaining, deletedAudits)
+	}
+}
+
+// TestSyncServerPermissionFailureStillCommitsOtherTypes 验证服务器补充权限失败时保留旧快照并提交其他成功类型。
+func TestSyncServerPermissionFailureStillCommitsOtherTypes(t *testing.T) {
+	service, db, source, now := newResourceServiceTest(t)
+	firstSeen := *now
+	first := []CollectionResult{
+		{ResourceType: "ec2", Snapshots: []Snapshot{{ExternalID: "i-partial", InstanceType: "c6a.xlarge", VCPU: 4, Memory: 8192, Disks: []ServerDisk{{ID: "vol-1", Kind: "system", Type: "gp3", SizeGiB: 100, Device: "/dev/sda1", Encrypted: true}}}}},
+		{ResourceType: "rds", Snapshots: []Snapshot{{ExternalID: "db-partial", Name: "变更前", Engine: "postgres", EngineVersion: "16"}}},
+	}
+	if _, err := service.Sync(context.Background(), source.ID, "manual", collectorStub{results: first}); err != nil {
+		t.Fatalf("准备部分成功测试数据失败：%v", err)
+	}
+	*now = now.Add(time.Hour)
+	second := []CollectionResult{
+		{ResourceType: "ec2", Err: ErrCloudPermission},
+		{ResourceType: "rds", Snapshots: []Snapshot{{ExternalID: "db-partial", Name: "变更后", Engine: "postgres", EngineVersion: "17"}}},
+	}
+	job, err := service.Sync(context.Background(), source.ID, "scheduled", collectorStub{results: second})
+	if err != nil || job.Status != "partial_success" {
+		t.Fatalf("服务器权限失败且其他类型成功时必须部分成功：job=%+v err=%v", job, err)
+	}
+
+	var server Server
+	if err := db.Where("external_id = ?", "i-partial").First(&server).Error; err != nil {
+		t.Fatalf("读取服务器旧快照失败：%v", err)
+	}
+	if server.AssetStatus != AssetStatusActive || !server.LastSeenAt.Equal(firstSeen) || server.InstanceType != "c6a.xlarge" || server.VCPU != 4 || server.Memory != 8192 {
+		t.Fatalf("失败的服务器类型不得改变旧快照：%+v", server)
+	}
+	var database Database
+	if err := db.Where("external_id = ?", "db-partial").First(&database).Error; err != nil || database.Name != "变更后" || database.EngineVersion != "17" || !database.LastSeenAt.Equal(*now) {
+		t.Fatalf("成功的数据库类型必须在部分成功事务中提交：database=%+v err=%v", database, err)
 	}
 }
 

@@ -62,11 +62,25 @@ type AssetBase struct {
 	UpdatedAt     time.Time       `json:"updated_at"`
 }
 
-// Server 保存 ECS 和 EC2，网卡内外网 IP 直接归属于服务器资产。
+// ServerDisk 是服务器已挂载云盘的跨平台事实；临时本地盘不进入该模型。
+type ServerDisk struct {
+	ID        string `json:"id"`
+	Kind      string `json:"kind"`
+	Type      string `json:"type"`
+	SizeGiB   int64  `json:"size_gib"`
+	Device    string `json:"device"`
+	Encrypted bool   `json:"encrypted"`
+}
+
+// Server 保存 ECS 和 EC2 的计算规格、网卡地址和已挂载云盘。
 type Server struct {
 	AssetBase
-	PrivateIPs json.RawMessage `gorm:"type:json" json:"private_ips"`
-	PublicIPs  json.RawMessage `gorm:"type:json" json:"public_ips"`
+	InstanceType string          `gorm:"size:128;not null" json:"instance_type"`
+	VCPU         int             `gorm:"column:vcpu;not null" json:"vcpu"`
+	Memory       int64           `gorm:"not null" json:"memory"`
+	PrivateIPs   json.RawMessage `gorm:"type:json" json:"private_ips"`
+	PublicIPs    json.RawMessage `gorm:"type:json" json:"public_ips"`
+	Disks        json.RawMessage `gorm:"type:json" json:"disks"`
 }
 
 // TableName 将服务器映射到独立资产表。
@@ -96,7 +110,11 @@ func (LoadBalancer) TableName() string { return "resources_load_balancers" }
 // Resource 是跨三张资产表返回给 API 的统一只读视图，不对应数据库表。
 type Resource struct {
 	AssetBase
-	Endpoints []EndpointSnapshot `gorm:"-" json:"endpoints"`
+	InstanceType string             `gorm:"-" json:"instance_type,omitempty"`
+	VCPU         int                `gorm:"-" json:"vcpu,omitempty"`
+	Memory       int64              `gorm:"-" json:"memory,omitempty"`
+	Endpoints    []EndpointSnapshot `gorm:"-" json:"endpoints"`
+	Disks        []ServerDisk       `gorm:"-" json:"disks"`
 }
 
 // SyncJob 记录一次同步的状态和脱敏统计，不保存凭证或完整请求响应。

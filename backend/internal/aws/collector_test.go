@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"reflect"
 	"testing"
 	"time"
 
@@ -27,11 +28,69 @@ func TestNewCollectorImplementsProviderAdapter(t *testing.T) {
 	}
 }
 
-type ec2ProbeStub struct{ input *ec2.DescribeInstancesInput }
+type ec2ProbeStub struct {
+	input             *ec2.DescribeInstancesInput
+	instanceTypeInput *ec2.DescribeInstanceTypesInput
+	volumeInput       *ec2.DescribeVolumesInput
+}
 
 func (s *ec2ProbeStub) DescribeInstances(_ context.Context, input *ec2.DescribeInstancesInput, _ ...func(*ec2.Options)) (*ec2.DescribeInstancesOutput, error) {
 	s.input = input
 	return &ec2.DescribeInstancesOutput{}, nil
+}
+
+func (s *ec2ProbeStub) DescribeInstanceTypes(_ context.Context, input *ec2.DescribeInstanceTypesInput, _ ...func(*ec2.Options)) (*ec2.DescribeInstanceTypesOutput, error) {
+	s.instanceTypeInput = input
+	return &ec2.DescribeInstanceTypesOutput{}, nil
+}
+
+func (s *ec2ProbeStub) DescribeVolumes(_ context.Context, input *ec2.DescribeVolumesInput, _ ...func(*ec2.Options)) (*ec2.DescribeVolumesOutput, error) {
+	s.volumeInput = input
+	return &ec2.DescribeVolumesOutput{}, nil
+}
+
+type ec2CollectStub struct {
+	instanceInput     *ec2.DescribeInstancesInput
+	instanceTypeInput *ec2.DescribeInstanceTypesInput
+	volumeInput       *ec2.DescribeVolumesInput
+	omitInstanceType  bool
+	emptyInstanceType bool
+	emptyRootDevice   bool
+	volumes           []types.Volume
+}
+
+func (s *ec2CollectStub) DescribeInstances(_ context.Context, input *ec2.DescribeInstancesInput, _ ...func(*ec2.Options)) (*ec2.DescribeInstancesOutput, error) {
+	s.instanceInput = input
+	instanceType := types.InstanceType("c6a.xlarge")
+	if s.emptyInstanceType {
+		instanceType = ""
+	}
+	rootDeviceName := awssdk.String("/dev/sda1")
+	if s.emptyRootDevice {
+		rootDeviceName = nil
+	}
+	return &ec2.DescribeInstancesOutput{Reservations: []types.Reservation{{Instances: []types.Instance{{InstanceId: awssdk.String("i-1"), InstanceType: instanceType, RootDeviceName: rootDeviceName}}}}}, nil
+}
+
+func (s *ec2CollectStub) DescribeInstanceTypes(_ context.Context, input *ec2.DescribeInstanceTypesInput, _ ...func(*ec2.Options)) (*ec2.DescribeInstanceTypesOutput, error) {
+	s.instanceTypeInput = input
+	if s.omitInstanceType {
+		return &ec2.DescribeInstanceTypesOutput{}, nil
+	}
+	return &ec2.DescribeInstanceTypesOutput{InstanceTypes: []types.InstanceTypeInfo{{
+		InstanceType: types.InstanceType("c6a.xlarge"),
+		VCpuInfo:     &types.VCpuInfo{DefaultVCpus: awssdk.Int32(4)},
+		MemoryInfo:   &types.MemoryInfo{SizeInMiB: awssdk.Int64(8192)},
+	}}}, nil
+}
+
+func (s *ec2CollectStub) DescribeVolumes(_ context.Context, input *ec2.DescribeVolumesInput, _ ...func(*ec2.Options)) (*ec2.DescribeVolumesOutput, error) {
+	s.volumeInput = input
+	volumes := s.volumes
+	if volumes == nil {
+		volumes = []types.Volume{{VolumeId: awssdk.String("vol-1"), VolumeType: types.VolumeTypeGp3, Size: awssdk.Int32(40), Encrypted: awssdk.Bool(false), Attachments: []types.VolumeAttachment{{InstanceId: awssdk.String("i-1"), Device: awssdk.String("/dev/sda1"), State: types.VolumeAttachmentStateAttached}}}}
+	}
+	return &ec2.DescribeVolumesOutput{Volumes: volumes}, nil
 }
 
 type rdsProbeStub struct{ input *rds.DescribeDBInstancesInput }
@@ -56,9 +115,145 @@ func TestEC2SnapshotsKeepNetworkInterfaceAddresses(t *testing.T) {
 		InstanceId: awssdk.String("i-1"), PrivateIpAddress: awssdk.String("10.0.0.5"), PublicIpAddress: awssdk.String("203.0.113.5"),
 		NetworkInterfaces: []types.InstanceNetworkInterface{{PrivateIpAddresses: []types.InstancePrivateIpAddress{{PrivateIpAddress: awssdk.String("10.0.0.6"), Association: &types.InstanceNetworkInterfaceAssociation{PublicIp: awssdk.String("203.0.113.6")}}}}},
 	}}}}}
-	values := ec2Snapshots(output, "cn-north-1")
+	values := ec2Snapshots(output, "cn-north-1", nil, nil)
 	if len(values) != 1 || countEndpointKind(values[0].Endpoints, "private") != 2 || countEndpointKind(values[0].Endpoints, "public") != 2 {
 		t.Fatal("EC2 必须保留实例和网卡的全部内外网 IP")
+	}
+}
+
+// TestEC2SnapshotsKeepHardwareAndSortedEBSVolumes 防止 EC2 规格丢失、根卷误判或 EBS 顺序制造虚假更新。
+func TestEC2SnapshotsKeepHardwareAndSortedEBSVolumes(t *testing.T) {
+	instanceType := types.InstanceType("c6a.xlarge")
+	output := &ec2.DescribeInstancesOutput{Reservations: []types.Reservation{{Instances: []types.Instance{{
+		InstanceId: awssdk.String("i-hardware"), InstanceType: instanceType, RootDeviceName: awssdk.String("/dev/sda1"),
+	}}}}}
+	instanceTypes := map[types.InstanceType]types.InstanceTypeInfo{
+		instanceType: {InstanceType: instanceType, VCpuInfo: &types.VCpuInfo{DefaultVCpus: awssdk.Int32(4)}, MemoryInfo: &types.MemoryInfo{SizeInMiB: awssdk.Int64(8192)}},
+	}
+	volumes := map[string][]types.Volume{"i-hardware": {
+		{VolumeId: awssdk.String("vol-root"), VolumeType: types.VolumeTypeGp3, Size: awssdk.Int32(100), Encrypted: awssdk.Bool(true), Attachments: []types.VolumeAttachment{{InstanceId: awssdk.String("i-hardware"), Device: awssdk.String("/dev/sda1"), State: types.VolumeAttachmentStateAttached}}},
+		{VolumeId: awssdk.String("vol-data"), VolumeType: types.VolumeTypeGp3, Size: awssdk.Int32(400), Encrypted: awssdk.Bool(false), Attachments: []types.VolumeAttachment{{InstanceId: awssdk.String("i-hardware"), Device: awssdk.String("/dev/sdf"), State: types.VolumeAttachmentStateAttached}}},
+		{VolumeId: awssdk.String("vol-data"), VolumeType: types.VolumeTypeGp3, Size: awssdk.Int32(400), Encrypted: awssdk.Bool(false), Attachments: []types.VolumeAttachment{{InstanceId: awssdk.String("i-hardware"), Device: awssdk.String("/dev/sdf"), State: types.VolumeAttachmentStateAttached}}},
+	}}
+
+	values := ec2Snapshots(output, "cn-north-1", instanceTypes, volumes)
+	wantDisks := []resource.ServerDisk{
+		{ID: "vol-data", Kind: "data", Type: "gp3", SizeGiB: 400, Device: "/dev/sdf"},
+		{ID: "vol-root", Kind: "system", Type: "gp3", SizeGiB: 100, Device: "/dev/sda1", Encrypted: true},
+	}
+	if len(values) != 1 || values[0].InstanceType != "c6a.xlarge" || values[0].VCPU != 4 || values[0].Memory != 8192 || !reflect.DeepEqual(values[0].Disks, wantDisks) {
+		t.Fatalf("EC2 规格和 EBS 明细必须完整且顺序稳定：%+v", values)
+	}
+}
+
+// TestEC2SnapshotsUsesOnlyAttachedDevice 防止同一卷的过渡态 attachment 被误用为设备名或系统盘判定依据。
+func TestEC2SnapshotsUsesOnlyAttachedDevice(t *testing.T) {
+	instanceType := types.InstanceType("c6a.xlarge")
+	output := &ec2.DescribeInstancesOutput{Reservations: []types.Reservation{{Instances: []types.Instance{{InstanceId: awssdk.String("i-1"), InstanceType: instanceType, RootDeviceName: awssdk.String("/dev/sda1")}}}}}
+	instanceTypes := map[types.InstanceType]types.InstanceTypeInfo{instanceType: {InstanceType: instanceType, VCpuInfo: &types.VCpuInfo{DefaultVCpus: awssdk.Int32(4)}, MemoryInfo: &types.MemoryInfo{SizeInMiB: awssdk.Int64(8192)}}}
+	volumes := map[string][]types.Volume{"i-1": {{
+		VolumeId: awssdk.String("vol-root"), VolumeType: types.VolumeTypeGp3, Size: awssdk.Int32(100), Encrypted: awssdk.Bool(false),
+		Attachments: []types.VolumeAttachment{
+			{InstanceId: awssdk.String("i-1"), Device: awssdk.String("/dev/wrong"), State: types.VolumeAttachmentStateDetaching},
+			{InstanceId: awssdk.String("i-1"), Device: awssdk.String("/dev/sda1"), State: types.VolumeAttachmentStateAttached},
+		},
+	}}}
+	values := ec2Snapshots(output, "cn-north-1", instanceTypes, volumes)
+	if len(values) != 1 || len(values[0].Disks) != 1 || values[0].Disks[0].Device != "/dev/sda1" || values[0].Disks[0].Kind != "system" {
+		t.Fatalf("EC2 磁盘映射只能使用 attached 设备：%+v", values)
+	}
+}
+
+// TestEC2SnapshotsPreferConfiguredVCPU 防止自定义 CPU Options 的实例被错误展示为机型默认 vCPU。
+func TestEC2SnapshotsPreferConfiguredVCPU(t *testing.T) {
+	instanceType := types.InstanceType("c6a.xlarge")
+	output := &ec2.DescribeInstancesOutput{Reservations: []types.Reservation{{Instances: []types.Instance{{
+		InstanceId: awssdk.String("i-custom-cpu"), InstanceType: instanceType,
+		CpuOptions: &types.CpuOptions{CoreCount: awssdk.Int32(1), ThreadsPerCore: awssdk.Int32(2)},
+	}}}}}
+	instanceTypes := map[types.InstanceType]types.InstanceTypeInfo{
+		instanceType: {InstanceType: instanceType, VCpuInfo: &types.VCpuInfo{DefaultVCpus: awssdk.Int32(4)}, MemoryInfo: &types.MemoryInfo{SizeInMiB: awssdk.Int64(8192)}},
+	}
+
+	values := ec2Snapshots(output, "cn-north-1", instanceTypes, nil)
+	if len(values) != 1 || values[0].VCPU != 2 {
+		t.Fatalf("EC2 必须优先保存实例实际配置的 vCPU：%+v", values)
+	}
+}
+
+// TestCollectEC2LoadsInstanceTypesAndAttachedVolumes 防止完整同步漏掉规格详情或 EBS 云盘。
+func TestCollectEC2LoadsInstanceTypesAndAttachedVolumes(t *testing.T) {
+	client := &ec2CollectStub{}
+	instances, instanceTypes, volumes, err := collectEC2(context.Background(), client)
+	if err != nil || len(instances.Reservations) != 1 || len(instanceTypes) != 1 || len(volumes["i-1"]) != 1 {
+		t.Fatalf("EC2 完整采集必须返回实例、规格详情和已挂载 EBS：types=%v volumes=%v err=%v", instanceTypes, volumes, err)
+	}
+	if client.instanceTypeInput == nil || !reflect.DeepEqual(client.instanceTypeInput.InstanceTypes, []types.InstanceType{types.InstanceType("c6a.xlarge")}) || client.volumeInput == nil {
+		t.Fatalf("EC2 补充采集必须按实际实例类型查询规格并分页读取 EBS：typeInput=%+v volumeInput=%+v", client.instanceTypeInput, client.volumeInput)
+	}
+}
+
+// TestCollectEC2RejectsMissingInstanceTypeDetails 防止 CPU 和内存缺失时仍写入看似成功的 EC2 快照。
+func TestCollectEC2RejectsMissingInstanceTypeDetails(t *testing.T) {
+	client := &ec2CollectStub{omitInstanceType: true}
+	if _, _, _, err := collectEC2(context.Background(), client); err == nil {
+		t.Fatal("EC2 实例类型详情不完整时必须使该资源类型采集失败")
+	}
+}
+
+// TestCollectEC2RejectsEmptyInstanceType 防止空实例类型绕过规格查询并写入 0 CPU、0 内存快照。
+func TestCollectEC2RejectsEmptyInstanceType(t *testing.T) {
+	client := &ec2CollectStub{emptyInstanceType: true}
+	if _, _, _, err := collectEC2(context.Background(), client); err == nil {
+		t.Fatal("EC2 实例类型为空时必须使该资源类型采集失败")
+	}
+}
+
+// TestCollectEC2RejectsMissingRootDeviceForAttachedEBS 防止根设备缺失时把系统盘静默标成数据盘。
+func TestCollectEC2RejectsMissingRootDeviceForAttachedEBS(t *testing.T) {
+	client := &ec2CollectStub{emptyRootDevice: true}
+	if _, _, _, err := collectEC2(context.Background(), client); err == nil {
+		t.Fatal("实例存在已挂载 EBS 但缺少根设备名时必须使 EC2 类型失败")
+	}
+}
+
+// TestCollectEC2KeepsOnlyAttachedEBS 防止挂载中、卸载中或已卸载的 EBS 被保存为服务器磁盘。
+func TestCollectEC2KeepsOnlyAttachedEBS(t *testing.T) {
+	client := &ec2CollectStub{volumes: []types.Volume{
+		{VolumeId: awssdk.String("vol-attached"), VolumeType: types.VolumeTypeGp3, Size: awssdk.Int32(40), Encrypted: awssdk.Bool(true), Attachments: []types.VolumeAttachment{{InstanceId: awssdk.String("i-1"), Device: awssdk.String("/dev/sda1"), State: types.VolumeAttachmentStateAttached}}},
+		{VolumeId: awssdk.String("vol-detaching"), VolumeType: types.VolumeTypeGp3, Size: awssdk.Int32(100), Encrypted: awssdk.Bool(false), Attachments: []types.VolumeAttachment{{InstanceId: awssdk.String("i-1"), Device: awssdk.String("/dev/sdf"), State: types.VolumeAttachmentStateDetaching}}},
+	}}
+	_, _, volumes, err := collectEC2(context.Background(), client)
+	if err != nil || len(volumes["i-1"]) != 1 || awssdk.ToString(volumes["i-1"][0].VolumeId) != "vol-attached" {
+		t.Fatalf("EC2 只能保存 attachment 状态为 attached 的 EBS：volumes=%+v err=%v", volumes, err)
+	}
+}
+
+// TestCollectEC2RejectsIncompleteAttachedEBS 防止不完整 EBS 被静默丢弃并以空明细覆盖旧快照。
+func TestCollectEC2RejectsIncompleteAttachedEBS(t *testing.T) {
+	valid := types.Volume{VolumeId: awssdk.String("vol-1"), VolumeType: types.VolumeTypeGp3, Size: awssdk.Int32(100), Encrypted: awssdk.Bool(false), Attachments: []types.VolumeAttachment{{InstanceId: awssdk.String("i-1"), Device: awssdk.String("/dev/sdf"), State: types.VolumeAttachmentStateAttached}}}
+	tests := []struct {
+		name   string
+		mutate func(*types.Volume)
+	}{
+		{name: "缺少磁盘 ID", mutate: func(value *types.Volume) { value.VolumeId = nil }},
+		{name: "缺少磁盘类型", mutate: func(value *types.Volume) { value.VolumeType = "" }},
+		{name: "缺少容量", mutate: func(value *types.Volume) { value.Size = nil }},
+		{name: "容量无效", mutate: func(value *types.Volume) { value.Size = awssdk.Int32(0) }},
+		{name: "缺少加密状态", mutate: func(value *types.Volume) { value.Encrypted = nil }},
+		{name: "缺少实例 ID", mutate: func(value *types.Volume) { value.Attachments[0].InstanceId = nil }},
+		{name: "缺少设备名", mutate: func(value *types.Volume) { value.Attachments[0].Device = nil }},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			value := valid
+			value.Attachments = append([]types.VolumeAttachment(nil), valid.Attachments...)
+			test.mutate(&value)
+			client := &ec2CollectStub{volumes: []types.Volume{value}}
+			if _, _, _, err := collectEC2(context.Background(), client); err == nil {
+				t.Fatal("已挂载 EBS 的必要字段不完整时必须使 EC2 类型失败")
+			}
+		})
 	}
 }
 
@@ -102,6 +297,17 @@ func TestAWSConnectionProbeRequestsOnePagePerType(t *testing.T) {
 	}
 	if ec2Client.input == nil || awssdk.ToInt32(ec2Client.input.MaxResults) != 5 || rdsClient.input == nil || awssdk.ToInt32(rdsClient.input.MaxRecords) != 20 || elbClient.input == nil || awssdk.ToInt32(elbClient.input.PageSize) != 1 {
 		t.Fatal("AWS 连接探测必须使用各 API 允许的最小分页，且不得执行完整采集")
+	}
+}
+
+// TestAWSConnectionProbeChecksHardwareDetailPermissions 防止连接测试放过缺少规格或 EBS 读取权限的接入源。
+func TestAWSConnectionProbeChecksHardwareDetailPermissions(t *testing.T) {
+	ec2Client, rdsClient, elbClient := &ec2ProbeStub{}, &rdsProbeStub{}, &elbProbeStub{}
+	if _, err := probeAWSAccess(context.Background(), ec2Client, rdsClient, elbClient); err != nil {
+		t.Fatalf("AWS 连接探测失败：%v", err)
+	}
+	if ec2Client.instanceTypeInput == nil || awssdk.ToInt32(ec2Client.instanceTypeInput.MaxResults) != 5 || ec2Client.volumeInput == nil || awssdk.ToInt32(ec2Client.volumeInput.MaxResults) != 5 {
+		t.Fatalf("连接测试必须以最小请求验证规格和 EBS 读取权限：type=%+v volume=%+v", ec2Client.instanceTypeInput, ec2Client.volumeInput)
 	}
 }
 

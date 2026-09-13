@@ -320,6 +320,30 @@ describe('项目控制台页面', () => {
     expect(get).toHaveBeenCalledWith('/projects/2/resources', { params: expect.objectContaining({ resource_type: 'ec2' }) })
     app.unmount()
   })
+  it('服务器资产页展示实例规格和云盘汇总', async () => {
+    const projectStore = useProjectStore()
+    projectStore.projects = [{ id: 2, code: 'platform', name: '平台项目', description: '', status: 'enabled', ownerUsername: null, createdAt: '', updatedAt: '' }]
+    projectStore.selectProject(2)
+    get.mockImplementation((_url: string, options?: { params?: { resource_type?: string } }) => Promise.resolve(options?.params?.resource_type === 'ec2' ? {
+      items: [{
+        id: 12, provider: 'aws', resource_type: 'ec2', external_id: 'i-hardware', name: '计算节点', asset_status: 'active',
+        instance_type: 'c6a.xlarge', vcpu: 4, memory: 8192,
+        disks: [
+          { id: 'vol-root', kind: 'system', type: 'gp3', size_gib: 100, device: '/dev/sda1', encrypted: true },
+          { id: 'vol-data-1', kind: 'data', type: 'gp3', size_gib: 200, device: '/dev/sdf', encrypted: true },
+          { id: 'vol-data-2', kind: 'data', type: 'gp3', size_gib: 200, device: '/dev/sdg', encrypted: false },
+        ], endpoints: [],
+      }], total: 1,
+    } : { items: [], total: 0 }))
+
+    const component = { render: () => h(AssetListPage, { category: 'server' }) }
+    const { root, app } = await mount(component, '/assets/servers')
+    expect(text(root)).toContain('实例规格')
+    expect(text(root)).toContain('c6a.xlarge · 4 vCPU · 8 GiB')
+    expect(text(root)).toContain('磁盘')
+    expect(text(root)).toContain('3 块 / 500 GiB')
+    app.unmount()
+  })
   it('系统管理员选择所有项目后汇总资产并显示项目归属', async () => {
     useAuthStore().acceptSession('管理员会话', { username: 'admin', globalRole: 'system_admin' })
     const projectStore = useProjectStore()

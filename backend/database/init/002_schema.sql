@@ -106,8 +106,12 @@ CREATE TABLE resources_servers (
     zone VARCHAR(128) NOT NULL DEFAULT '',
     cloud_status VARCHAR(64) NOT NULL DEFAULT '',
     asset_status VARCHAR(32) NOT NULL DEFAULT 'active' CHECK (asset_status IN ('active', 'lost')),
+    instance_type VARCHAR(128) NOT NULL DEFAULT '',
+    vcpu INTEGER NOT NULL DEFAULT 0 CHECK (vcpu >= 0),
+    memory BIGINT NOT NULL DEFAULT 0 CHECK (memory >= 0),
     private_ips JSONB,
     public_ips JSONB,
+    disks JSONB NOT NULL DEFAULT '[]'::jsonb CHECK (jsonb_typeof(disks) = 'array'),
     raw_attributes JSONB,
     first_seen_at TIMESTAMPTZ(3) NOT NULL,
     last_seen_at TIMESTAMPTZ(3) NOT NULL,
@@ -271,8 +275,12 @@ COMMENT ON COLUMN public.resources_servers.region IS '云资源所属区域';
 COMMENT ON COLUMN public.resources_servers.zone IS '云资源所属可用区';
 COMMENT ON COLUMN public.resources_servers.cloud_status IS '云平台返回的资源状态';
 COMMENT ON COLUMN public.resources_servers.asset_status IS 'CMDB 资产状态，正常或已失联';
+COMMENT ON COLUMN public.resources_servers.instance_type IS '云平台实例类型，例如 c6a.xlarge';
+COMMENT ON COLUMN public.resources_servers.vcpu IS '实例虚拟 CPU 数量';
+COMMENT ON COLUMN public.resources_servers.memory IS '实例内存容量，单位 MiB';
 COMMENT ON COLUMN public.resources_servers.private_ips IS '网卡内网 IP 地址数组';
 COMMENT ON COLUMN public.resources_servers.public_ips IS '网卡公网 IP 地址数组';
+COMMENT ON COLUMN public.resources_servers.disks IS '已挂载云盘明细数组，不包含临时本地盘';
 COMMENT ON COLUMN public.resources_servers.raw_attributes IS '云平台返回的原始非凭证属性';
 COMMENT ON COLUMN public.resources_servers.first_seen_at IS '首次发现时间';
 COMMENT ON COLUMN public.resources_servers.last_seen_at IS '最近一次成功发现时间';

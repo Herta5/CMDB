@@ -33,6 +33,9 @@ type Snapshot struct {
 	Region        string
 	Zone          string
 	CloudStatus   string
+	InstanceType  string
+	VCPU          int
+	Memory        int64
 	Engine        string
 	EngineVersion string
 	NetworkType   string
@@ -40,6 +43,7 @@ type Snapshot struct {
 	// VolatileRawAttributeKeys 声明原始 JSON 中只用于观测、不得触发配置更新统计的顶层键；原始值仍会持久化。
 	VolatileRawAttributeKeys []string
 	Endpoints                []EndpointSnapshot
+	Disks                    []ServerDisk
 }
 
 // EndpointSnapshot 表示采集时观察到的原始地址和动态解析结果。
@@ -56,6 +60,38 @@ type CollectionResult struct {
 	ResourceType string
 	Snapshots    []Snapshot
 	Err          error
+}
+
+// TypeCollection 描述一个资源类型的独立采集操作，由平台模块提供具体云 API 调用。
+type TypeCollection struct {
+	ResourceType string
+	Collect      func(context.Context) ([]Snapshot, error)
+}
+
+// CollectByType 依次执行平台资源类型采集：凭证认证失败整体终止，其他错误只归入对应类型。
+func CollectByType(ctx context.Context, collections []TypeCollection, classifyAccess func(error) error) ([]CollectionResult, error) {
+	results := make([]CollectionResult, 0, len(collections))
+	for _, collection := range collections {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		snapshots, collectErr := collection.Collect(ctx)
+		if collectErr != nil {
+			classifiedErr := collectErr
+			if classifyAccess != nil {
+				if value := classifyAccess(collectErr); value != nil {
+					classifiedErr = value
+				}
+			}
+			if errors.Is(classifiedErr, ErrCloudAuthentication) {
+				return nil, classifiedErr
+			}
+			results = append(results, CollectionResult{ResourceType: collection.ResourceType, Err: classifiedErr})
+			continue
+		}
+		results = append(results, CollectionResult{ResourceType: collection.ResourceType, Snapshots: snapshots})
+	}
+	return results, nil
 }
 
 // Collector 由阿里云和 AWS 模块分别实现。

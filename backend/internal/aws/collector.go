@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net"
+	"sort"
 	"strings"
 
 	"cmdb/internal/resource"
@@ -34,9 +35,18 @@ type credential struct {
 	SessionToken    string `json:"session_token"`
 }
 
-// ec2ProbeAPI 约束连接测试只调用 EC2 列表首页。
+// ec2ProbeAPI 约束连接测试只调用实例、规格与 EBS 列表的最小页面。
 type ec2ProbeAPI interface {
-	DescribeInstances(context.Context, *ec2.DescribeInstancesInput, ...func(*ec2.Options)) (*ec2.DescribeInstancesOutput, error)
+	ec2.DescribeInstancesAPIClient
+	ec2.DescribeInstanceTypesAPIClient
+	ec2.DescribeVolumesAPIClient
+}
+
+// ec2CollectAPI 约束 EC2 完整采集读取实例、规格详情和 EBS，便于使用模拟响应验收。
+type ec2CollectAPI interface {
+	ec2.DescribeInstancesAPIClient
+	ec2.DescribeInstanceTypesAPIClient
+	ec2.DescribeVolumesAPIClient
 }
 
 // rdsProbeAPI 约束连接测试只调用 RDS 列表首页。
@@ -59,22 +69,32 @@ func (c *Collector) Collect(ctx context.Context, source resource.Source, plain [
 	if err != nil {
 		return nil, resource.ErrAuthenticationFailed
 	}
-	results := []resource.CollectionResult{}
-	ec2Output, err := collectEC2(ctx, ec2.NewFromConfig(configuration))
-	if accessErr := classifyAWSAccessError(err); accessErr != nil {
-		return nil, accessErr
+	results, err := resource.CollectByType(ctx, []resource.TypeCollection{
+		{ResourceType: "ec2", Collect: func(ctx context.Context) ([]resource.Snapshot, error) {
+			output, instanceTypes, volumes, collectErr := collectEC2(ctx, ec2.NewFromConfig(configuration))
+			if collectErr != nil {
+				return nil, collectErr
+			}
+			return ec2Snapshots(output, source.Region, instanceTypes, volumes), nil
+		}},
+		{ResourceType: "rds", Collect: func(ctx context.Context) ([]resource.Snapshot, error) {
+			output, collectErr := collectRDS(ctx, rds.NewFromConfig(configuration))
+			if collectErr != nil {
+				return nil, collectErr
+			}
+			return rdsSnapshots(output, source.Region), nil
+		}},
+		{ResourceType: "elb", Collect: func(ctx context.Context) ([]resource.Snapshot, error) {
+			output, listeners, collectErr := collectELB(ctx, elasticloadbalancingv2.NewFromConfig(configuration))
+			if collectErr != nil {
+				return nil, collectErr
+			}
+			return elbSnapshots(output, listeners, source.Region), nil
+		}},
+	}, classifyAWSAccessError)
+	if err != nil {
+		return nil, err
 	}
-	results = append(results, resource.CollectionResult{ResourceType: "ec2", Snapshots: ec2Snapshots(ec2Output, source.Region), Err: err})
-	rdsOutput, err := collectRDS(ctx, rds.NewFromConfig(configuration))
-	if accessErr := classifyAWSAccessError(err); accessErr != nil {
-		return nil, accessErr
-	}
-	results = append(results, resource.CollectionResult{ResourceType: "rds", Snapshots: rdsSnapshots(rdsOutput, source.Region), Err: err})
-	elbOutput, listeners, err := collectELB(ctx, elasticloadbalancingv2.NewFromConfig(configuration))
-	if accessErr := classifyAWSAccessError(err); accessErr != nil {
-		return nil, accessErr
-	}
-	results = append(results, resource.CollectionResult{ResourceType: "elb", Snapshots: elbSnapshots(elbOutput, listeners, source.Region), Err: err})
 	for resultIndex := range results {
 		for snapshotIndex := range results[resultIndex].Snapshots {
 			resolveEndpoints(ctx, &results[resultIndex].Snapshots[snapshotIndex])
@@ -99,6 +119,12 @@ func (c *Collector) Probe(ctx context.Context, source resource.Source, plain []b
 // probeAWSAccess 使用各 API 允许的最小分页，仅返回资源类型可达性。
 func probeAWSAccess(ctx context.Context, ec2Client ec2ProbeAPI, rdsClient rdsProbeAPI, elbClient elbProbeAPI) ([]resource.CollectionResult, error) {
 	_, ec2Err := ec2Client.DescribeInstances(ctx, &ec2.DescribeInstancesInput{MaxResults: awssdk.Int32(5)})
+	if ec2Err == nil {
+		_, ec2Err = ec2Client.DescribeInstanceTypes(ctx, &ec2.DescribeInstanceTypesInput{MaxResults: awssdk.Int32(5)})
+	}
+	if ec2Err == nil {
+		_, ec2Err = ec2Client.DescribeVolumes(ctx, &ec2.DescribeVolumesInput{MaxResults: awssdk.Int32(5)})
+	}
 	_, rdsErr := rdsClient.DescribeDBInstances(ctx, &rds.DescribeDBInstancesInput{MaxRecords: awssdk.Int32(20)})
 	_, elbErr := elbClient.DescribeLoadBalancers(ctx, &elasticloadbalancingv2.DescribeLoadBalancersInput{PageSize: awssdk.Int32(1)})
 	results := []resource.CollectionResult{{ResourceType: "ec2", Err: ec2Err}, {ResourceType: "rds", Err: rdsErr}, {ResourceType: "elb", Err: elbErr}}
@@ -110,17 +136,89 @@ func probeAWSAccess(ctx context.Context, ec2Client ec2ProbeAPI, rdsClient rdsPro
 	return results, nil
 }
 
-func collectEC2(ctx context.Context, client *ec2.Client) (*ec2.DescribeInstancesOutput, error) {
+func collectEC2(ctx context.Context, client ec2CollectAPI) (*ec2.DescribeInstancesOutput, map[ec2types.InstanceType]ec2types.InstanceTypeInfo, map[string][]ec2types.Volume, error) {
 	output := &ec2.DescribeInstancesOutput{}
+	instanceTypes := make(map[ec2types.InstanceType]ec2types.InstanceTypeInfo)
+	volumesByInstance := make(map[string][]ec2types.Volume)
 	paginator := ec2.NewDescribeInstancesPaginator(client, &ec2.DescribeInstancesInput{})
 	for paginator.HasMorePages() {
 		page, err := paginator.NextPage(ctx)
 		if err != nil {
-			return output, err
+			return output, instanceTypes, volumesByInstance, err
 		}
 		output.Reservations = append(output.Reservations, page.Reservations...)
 	}
-	return output, nil
+
+	uniqueTypes := make(map[ec2types.InstanceType]struct{})
+	instanceIDs := make(map[string]struct{})
+	rootDevices := make(map[string]string)
+	for _, reservation := range output.Reservations {
+		for _, instance := range reservation.Instances {
+			if instance.InstanceType == "" {
+				return output, instanceTypes, volumesByInstance, errors.New("EC2 实例规格信息不完整")
+			}
+			uniqueTypes[instance.InstanceType] = struct{}{}
+			if instanceID := awssdk.ToString(instance.InstanceId); instanceID != "" {
+				instanceIDs[instanceID] = struct{}{}
+				rootDevices[instanceID] = awssdk.ToString(instance.RootDeviceName)
+			}
+		}
+	}
+	typeNames := make([]ec2types.InstanceType, 0, len(uniqueTypes))
+	for instanceType := range uniqueTypes {
+		typeNames = append(typeNames, instanceType)
+	}
+	sort.Slice(typeNames, func(left, right int) bool { return typeNames[left] < typeNames[right] })
+	// AWS 单次最多接受 100 个实例类型，按稳定顺序分批查询以覆盖大型账号。
+	for start := 0; start < len(typeNames); start += 100 {
+		end := start + 100
+		if end > len(typeNames) {
+			end = len(typeNames)
+		}
+		typePaginator := ec2.NewDescribeInstanceTypesPaginator(client, &ec2.DescribeInstanceTypesInput{InstanceTypes: typeNames[start:end]})
+		for typePaginator.HasMorePages() {
+			page, err := typePaginator.NextPage(ctx)
+			if err != nil {
+				return output, instanceTypes, volumesByInstance, err
+			}
+			for _, info := range page.InstanceTypes {
+				instanceTypes[info.InstanceType] = info
+			}
+		}
+	}
+	for _, instanceType := range typeNames {
+		info, exists := instanceTypes[instanceType]
+		if !exists || info.VCpuInfo == nil || awssdk.ToInt32(info.VCpuInfo.DefaultVCpus) <= 0 || info.MemoryInfo == nil || awssdk.ToInt64(info.MemoryInfo.SizeInMiB) <= 0 {
+			return output, instanceTypes, volumesByInstance, errors.New("EC2 实例规格信息不完整")
+		}
+	}
+
+	// EBS 需要独立 API 获取；任何失败都使 EC2 类型失败，避免以空磁盘覆盖完整快照。
+	volumePaginator := ec2.NewDescribeVolumesPaginator(client, &ec2.DescribeVolumesInput{})
+	for volumePaginator.HasMorePages() {
+		page, err := volumePaginator.NextPage(ctx)
+		if err != nil {
+			return output, instanceTypes, volumesByInstance, err
+		}
+		for _, volume := range page.Volumes {
+			for _, attachment := range volume.Attachments {
+				if attachment.State != ec2types.VolumeAttachmentStateAttached {
+					continue
+				}
+				instanceID := awssdk.ToString(attachment.InstanceId)
+				if awssdk.ToString(volume.VolumeId) == "" || volume.VolumeType == "" || volume.Size == nil || awssdk.ToInt32(volume.Size) <= 0 || volume.Encrypted == nil || instanceID == "" || awssdk.ToString(attachment.Device) == "" {
+					return output, instanceTypes, volumesByInstance, errors.New("EC2 EBS 信息不完整")
+				}
+				if _, collected := instanceIDs[instanceID]; collected {
+					if rootDevices[instanceID] == "" {
+						return output, instanceTypes, volumesByInstance, errors.New("EC2 根设备信息不完整")
+					}
+					volumesByInstance[instanceID] = append(volumesByInstance[instanceID], volume)
+				}
+			}
+		}
+	}
+	return output, instanceTypes, volumesByInstance, nil
 }
 func collectRDS(ctx context.Context, client *rds.Client) (*rds.DescribeDBInstancesOutput, error) {
 	output := &rds.DescribeDBInstancesOutput{}
@@ -160,7 +258,7 @@ func collectELB(ctx context.Context, client *elasticloadbalancingv2.Client) (*el
 	return output, listeners, nil
 }
 
-func ec2Snapshots(output *ec2.DescribeInstancesOutput, region string) []resource.Snapshot {
+func ec2Snapshots(output *ec2.DescribeInstancesOutput, region string, instanceTypes map[ec2types.InstanceType]ec2types.InstanceTypeInfo, volumesByInstance map[string][]ec2types.Volume) []resource.Snapshot {
 	values := []resource.Snapshot{}
 	if output == nil {
 		return values
@@ -172,7 +270,23 @@ func ec2Snapshots(output *ec2.DescribeInstancesOutput, region string) []resource
 			if instance.State != nil {
 				status = string(instance.State.Name)
 			}
-			value := resource.Snapshot{ResourceType: "ec2", ExternalID: awssdk.ToString(instance.InstanceId), Name: tagName(instance.Tags), Region: region, CloudStatus: status, RawAttributes: raw}
+			instanceID := awssdk.ToString(instance.InstanceId)
+			value := resource.Snapshot{ResourceType: "ec2", ExternalID: instanceID, Name: tagName(instance.Tags), Region: region, CloudStatus: status, InstanceType: string(instance.InstanceType), RawAttributes: raw}
+			if info, exists := instanceTypes[instance.InstanceType]; exists {
+				if info.VCpuInfo != nil {
+					value.VCPU = int(awssdk.ToInt32(info.VCpuInfo.DefaultVCpus))
+				}
+				if info.MemoryInfo != nil {
+					value.Memory = awssdk.ToInt64(info.MemoryInfo.SizeInMiB)
+				}
+			}
+			if instance.CpuOptions != nil {
+				cores := awssdk.ToInt32(instance.CpuOptions.CoreCount)
+				threadsPerCore := awssdk.ToInt32(instance.CpuOptions.ThreadsPerCore)
+				if cores > 0 && threadsPerCore > 0 {
+					value.VCPU = int(cores * threadsPerCore)
+				}
+			}
 			if instance.Placement != nil {
 				value.Zone = awssdk.ToString(instance.Placement.AvailabilityZone)
 			}
@@ -191,6 +305,33 @@ func ec2Snapshots(output *ec2.DescribeInstancesOutput, region string) []resource
 					}
 				}
 			}
+			seenDisks := make(map[string]struct{})
+			for _, volume := range volumesByInstance[instanceID] {
+				volumeID := awssdk.ToString(volume.VolumeId)
+				if volumeID == "" {
+					continue
+				}
+				if _, exists := seenDisks[volumeID]; exists {
+					continue
+				}
+				device := ""
+				for _, attachment := range volume.Attachments {
+					if attachment.State == ec2types.VolumeAttachmentStateAttached && awssdk.ToString(attachment.InstanceId) == instanceID {
+						device = awssdk.ToString(attachment.Device)
+						break
+					}
+				}
+				if device == "" {
+					continue
+				}
+				kind := "data"
+				if device == awssdk.ToString(instance.RootDeviceName) {
+					kind = "system"
+				}
+				seenDisks[volumeID] = struct{}{}
+				value.Disks = append(value.Disks, resource.ServerDisk{ID: volumeID, Kind: kind, Type: string(volume.VolumeType), SizeGiB: int64(awssdk.ToInt32(volume.Size)), Device: device, Encrypted: awssdk.ToBool(volume.Encrypted)})
+			}
+			sort.Slice(value.Disks, func(left, right int) bool { return value.Disks[left].ID < value.Disks[right].ID })
 			values = append(values, value)
 		}
 	}

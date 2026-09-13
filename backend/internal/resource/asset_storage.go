@@ -14,8 +14,12 @@ import (
 // assetRow 覆盖三张表的字段超集，仅在资源核心内部用于统一读写。
 type assetRow struct {
 	AssetBase
+	InstanceType  string
+	VCPU          int `gorm:"column:vcpu"`
+	Memory        int64
 	PrivateIPs    json.RawMessage `gorm:"type:json"`
 	PublicIPs     json.RawMessage `gorm:"type:json"`
+	Disks         json.RawMessage `gorm:"type:json"`
 	Endpoints     json.RawMessage `gorm:"type:json"`
 	Engine        string
 	EngineVersion string
@@ -102,6 +106,36 @@ func normalizedStringSet(values []string) []string {
 	return unique
 }
 
+// normalizedServerDisks 按稳定磁盘 ID 排序去重，避免云 API 返回顺序制造配置变化。
+func normalizedServerDisks(values []ServerDisk) []ServerDisk {
+	result := append([]ServerDisk{}, values...)
+	sort.Slice(result, func(left, right int) bool {
+		if result[left].ID != result[right].ID {
+			return result[left].ID < result[right].ID
+		}
+		if result[left].Kind != result[right].Kind {
+			return result[left].Kind < result[right].Kind
+		}
+		if result[left].Type != result[right].Type {
+			return result[left].Type < result[right].Type
+		}
+		if result[left].SizeGiB != result[right].SizeGiB {
+			return result[left].SizeGiB < result[right].SizeGiB
+		}
+		if result[left].Device != result[right].Device {
+			return result[left].Device < result[right].Device
+		}
+		return !result[left].Encrypted && result[right].Encrypted
+	})
+	unique := result[:0]
+	for _, disk := range result {
+		if disk.ID != "" && (len(unique) == 0 || unique[len(unique)-1].ID != disk.ID) {
+			unique = append(unique, disk)
+		}
+	}
+	return unique
+}
+
 // snapshotBusinessColumns 将云端快照转换为资源表中的业务字段，不包含同步心跳和 CMDB 生命周期字段。
 func snapshotBusinessColumns(table string, snapshot Snapshot) map[string]any {
 	columns := map[string]any{
@@ -113,6 +147,13 @@ func snapshotBusinessColumns(table string, snapshot Snapshot) map[string]any {
 	}
 	for key, value := range endpointColumns(table, snapshot.Endpoints) {
 		columns[key] = value
+	}
+	if table == "resources_servers" {
+		disks, _ := json.Marshal(normalizedServerDisks(snapshot.Disks))
+		columns["instance_type"] = snapshot.InstanceType
+		columns["vcpu"] = snapshot.VCPU
+		columns["memory"] = snapshot.Memory
+		columns["disks"] = disks
 	}
 	if table == "resources_databases" {
 		columns["engine"] = snapshot.Engine
@@ -139,6 +180,12 @@ func changedBusinessColumns(existing assetRow, table string, snapshot Snapshot) 
 			changed = existing.Zone != value
 		case "cloud_status":
 			changed = existing.CloudStatus != value
+		case "instance_type":
+			changed = existing.InstanceType != value
+		case "vcpu":
+			changed = existing.VCPU != value
+		case "memory":
+			changed = existing.Memory != value
 		case "engine":
 			changed = existing.Engine != value
 		case "engine_version":
@@ -151,6 +198,8 @@ func changedBusinessColumns(existing assetRow, table string, snapshot Snapshot) 
 			changed = !jsonStringSetsEqual(existing.PrivateIPs, value.([]byte))
 		case "public_ips":
 			changed = !jsonStringSetsEqual(existing.PublicIPs, value.([]byte))
+		case "disks":
+			changed = !jsonServerDiskSetsEqual(existing.Disks, value.([]byte))
 		case "endpoints":
 			changed = !jsonEndpointSetsEqual(existing.Endpoints, value.([]byte))
 		}
@@ -221,6 +270,26 @@ func decodeEndpointSet(value []byte) ([]EndpointSnapshot, bool) {
 		return nil, false
 	}
 	return normalizedEndpoints(values), true
+}
+
+// jsonServerDiskSetsEqual 将空值和磁盘顺序规范化后比较，防止空集合或返回顺序制造伪更新。
+func jsonServerDiskSetsEqual(left, right []byte) bool {
+	leftValues, leftOK := decodeServerDiskSet(left)
+	rightValues, rightOK := decodeServerDiskSet(right)
+	return leftOK && rightOK && reflect.DeepEqual(leftValues, rightValues)
+}
+
+// decodeServerDiskSet 解析服务器磁盘数组，空值和 null 都视为业务空集合。
+func decodeServerDiskSet(value []byte) ([]ServerDisk, bool) {
+	value = bytes.TrimSpace(value)
+	if len(value) == 0 || bytes.Equal(value, []byte("null")) {
+		return []ServerDisk{}, true
+	}
+	var values []ServerDisk
+	if json.Unmarshal(value, &values) != nil {
+		return nil, false
+	}
+	return normalizedServerDisks(values), true
 }
 
 // jsonValuesEqual 按 JSON 值比较原始属性，忽略对象键顺序和无意义空白造成的伪变化。
@@ -295,6 +364,7 @@ func jsonDecodedValuesEqual(left, right any) bool {
 // resourceFromRow 将各表的地址字段还原为稳定的统一 API 视图。
 func resourceFromRow(row assetRow, table string) Resource {
 	endpoints := make([]EndpointSnapshot, 0)
+	disks := make([]ServerDisk, 0)
 	if table == "resources_servers" {
 		var privateIPs, publicIPs []string
 		_ = json.Unmarshal(row.PrivateIPs, &privateIPs)
@@ -305,8 +375,9 @@ func resourceFromRow(row assetRow, table string) Resource {
 		for _, address := range publicIPs {
 			endpoints = append(endpoints, EndpointSnapshot{Kind: "public", Address: address})
 		}
+		_ = json.Unmarshal(row.Disks, &disks)
 	} else if len(row.Endpoints) > 0 {
 		_ = json.Unmarshal(row.Endpoints, &endpoints)
 	}
-	return Resource{AssetBase: row.AssetBase, Endpoints: endpoints}
+	return Resource{AssetBase: row.AssetBase, InstanceType: row.InstanceType, VCPU: row.VCPU, Memory: row.Memory, Endpoints: endpoints, Disks: disks}
 }

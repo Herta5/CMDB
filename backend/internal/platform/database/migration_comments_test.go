@@ -120,7 +120,7 @@ func TestPostgreSQLSchemaDefinesBusinessStructure(t *testing.T) {
 			"id", "project_id", "provider", "name", "region", "encrypted_credential", "credential_hint", "config", "enabled", "sync_interval_minutes", "last_sync_at", "next_sync_at", "created_at", "updated_at", "cloud_account_id", "identity_verified_at",
 		},
 		"resources_servers": {
-			"id", "project_id", "source_id", "provider", "resource_type", "external_id", "name", "region", "zone", "cloud_status", "asset_status", "private_ips", "public_ips", "raw_attributes", "first_seen_at", "last_seen_at", "missing_since", "created_at", "updated_at",
+			"id", "project_id", "source_id", "provider", "resource_type", "external_id", "name", "region", "zone", "cloud_status", "asset_status", "instance_type", "vcpu", "memory", "private_ips", "public_ips", "disks", "raw_attributes", "first_seen_at", "last_seen_at", "missing_since", "created_at", "updated_at",
 		},
 		"resources_databases": {
 			"id", "project_id", "source_id", "provider", "resource_type", "external_id", "name", "region", "zone", "cloud_status", "asset_status", "engine", "engine_version", "endpoints", "raw_attributes", "first_seen_at", "last_seen_at", "missing_since", "created_at", "updated_at",
