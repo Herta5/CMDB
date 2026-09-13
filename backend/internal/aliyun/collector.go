@@ -12,7 +12,10 @@ import (
 
 	"cmdb/internal/resource"
 	"github.com/aliyun/alibaba-cloud-sdk-go/sdk/requests"
+	"github.com/aliyun/alibaba-cloud-sdk-go/services/alb"
 	"github.com/aliyun/alibaba-cloud-sdk-go/services/ecs"
+	"github.com/aliyun/alibaba-cloud-sdk-go/services/gwlb"
+	"github.com/aliyun/alibaba-cloud-sdk-go/services/nlb"
 	"github.com/aliyun/alibaba-cloud-sdk-go/services/rds"
 	"github.com/aliyun/alibaba-cloud-sdk-go/services/slb"
 )
@@ -59,7 +62,7 @@ type slbProbeAPI interface {
 	DescribeLoadBalancers(*slb.DescribeLoadBalancersRequest) (*slb.DescribeLoadBalancersResponse, error)
 }
 
-// Collect 创建三个产品客户端并按资源类型隔离采集失败。
+// Collect 创建六个产品客户端并按资源类型隔离采集失败。
 func (c *Collector) Collect(ctx context.Context, source resource.Source, plain []byte) ([]resource.CollectionResult, error) {
 	var auth credential
 	if json.Unmarshal(plain, &auth) != nil || auth.AccessKeyID == "" || auth.AccessKeySecret == "" || source.Region == "" {
@@ -77,9 +80,26 @@ func (c *Collector) Collect(ctx context.Context, source resource.Source, plain [
 	if err != nil {
 		return nil, resource.ErrAuthenticationFailed
 	}
+	albClient, err := alb.NewClientWithAccessKey(source.Region, auth.AccessKeyID, auth.AccessKeySecret)
+	if err != nil {
+		return nil, resource.ErrAuthenticationFailed
+	}
+	nlbClient, err := nlb.NewClientWithAccessKey(source.Region, auth.AccessKeyID, auth.AccessKeySecret)
+	if err != nil {
+		return nil, resource.ErrAuthenticationFailed
+	}
+	gwlbClient, err := gwlb.NewClientWithAccessKey(source.Region, auth.AccessKeyID, auth.AccessKeySecret)
+	if err != nil {
+		return nil, resource.ErrAuthenticationFailed
+	}
+	return collectAliyunResources(ctx, ecsClient, rdsClient, slbClient, albClient, nlbClient, gwlbClient, source.Region)
+}
+
+// collectAliyunResources 保持与平台声明一致的六类型顺序；补充 API 失败只影响对应类型。
+func collectAliyunResources(ctx context.Context, ecsClient ecsCollectAPI, rdsClient rdsCollectAPI, slbClient slbCollectAPI, albClient albCollectAPI, nlbClient nlbCollectAPI, gwlbClient gwlbCollectAPI, region string) ([]resource.CollectionResult, error) {
 	results, err := resource.CollectByType(ctx, []resource.TypeCollection{
 		{ResourceType: "ecs", Collect: func(context.Context) ([]resource.Snapshot, error) {
-			items, disks, collectErr := collectECS(ecsClient, source.Region)
+			items, disks, collectErr := collectECS(ecsClient, region)
 			if collectErr != nil {
 				return nil, collectErr
 			}
@@ -93,11 +113,32 @@ func (c *Collector) Collect(ctx context.Context, source resource.Source, plain [
 			return rdsSnapshots(items, networks, attributes), nil
 		}},
 		{ResourceType: "slb", Collect: func(context.Context) ([]resource.Snapshot, error) {
-			items, ports, collectErr := collectSLB(slbClient, source.Region)
+			items, ports, collectErr := collectSLB(slbClient, region)
 			if collectErr != nil {
 				return nil, collectErr
 			}
 			return slbSnapshots(items, ports), nil
+		}},
+		{ResourceType: "alb", Collect: func(context.Context) ([]resource.Snapshot, error) {
+			items, listeners, err := collectALB(albClient)
+			if err != nil {
+				return nil, err
+			}
+			return albSnapshots(items, listeners, region), nil
+		}},
+		{ResourceType: "nlb", Collect: func(context.Context) ([]resource.Snapshot, error) {
+			items, listeners, err := collectNLB(nlbClient)
+			if err != nil {
+				return nil, err
+			}
+			return nlbSnapshots(items, listeners, region), nil
+		}},
+		{ResourceType: "gwlb", Collect: func(context.Context) ([]resource.Snapshot, error) {
+			items, err := collectGWLB(gwlbClient)
+			if err != nil {
+				return nil, err
+			}
+			return gwlbSnapshots(items, region), nil
 		}},
 	}, classifyAliyunAccessError)
 	if err != nil {
@@ -111,7 +152,7 @@ func (c *Collector) Collect(ctx context.Context, source resource.Source, plain [
 	return results, nil
 }
 
-// Probe 通过三类资源的最小分页请求验证认证、权限和网络，不读取详情或解析动态地址。
+// Probe 通过六类资源的最小请求验证认证、权限和网络，不遍历资源或解析动态地址。
 func (c *Collector) Probe(ctx context.Context, source resource.Source, plain []byte) ([]resource.CollectionResult, error) {
 	var auth credential
 	if json.Unmarshal(plain, &auth) != nil || auth.AccessKeyID == "" || auth.AccessKeySecret == "" || source.Region == "" {
@@ -129,11 +170,23 @@ func (c *Collector) Probe(ctx context.Context, source resource.Source, plain []b
 	if err != nil {
 		return nil, resource.ErrAuthenticationFailed
 	}
-	return probeAliyunAccess(ctx, ecsClient, rdsClient, slbClient, source.Region)
+	albClient, err := alb.NewClientWithAccessKey(source.Region, auth.AccessKeyID, auth.AccessKeySecret)
+	if err != nil {
+		return nil, resource.ErrAuthenticationFailed
+	}
+	nlbClient, err := nlb.NewClientWithAccessKey(source.Region, auth.AccessKeyID, auth.AccessKeySecret)
+	if err != nil {
+		return nil, resource.ErrAuthenticationFailed
+	}
+	gwlbClient, err := gwlb.NewClientWithAccessKey(source.Region, auth.AccessKeyID, auth.AccessKeySecret)
+	if err != nil {
+		return nil, resource.ErrAuthenticationFailed
+	}
+	return probeAliyunAccess(ctx, ecsClient, rdsClient, slbClient, albClient, nlbClient, gwlbClient, source.Region)
 }
 
 // probeAliyunAccess 每类资源只取一条数据；返回内容仅表达 API 是否可达，不携带云端资源。
-func probeAliyunAccess(ctx context.Context, ecsClient ecsProbeAPI, rdsClient rdsProbeAPI, slbClient slbProbeAPI, region string) ([]resource.CollectionResult, error) {
+func probeAliyunAccess(ctx context.Context, ecsClient ecsProbeAPI, rdsClient rdsProbeAPI, slbClient slbProbeAPI, albClient albProbeAPI, nlbClient nlbProbeAPI, gwlbClient gwlbProbeAPI, region string) ([]resource.CollectionResult, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -177,7 +230,25 @@ func probeAliyunAccess(ctx context.Context, ecsClient ecsProbeAPI, rdsClient rds
 	slbRequest.PageSize = "1"
 	_, slbErr := slbClient.DescribeLoadBalancers(slbRequest)
 
-	results := []resource.CollectionResult{{ResourceType: "ecs", Err: ecsErr}, {ResourceType: "rds", Err: rdsErr}, {ResourceType: "slb", Err: slbErr}}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	albRequest := alb.CreateListLoadBalancersRequest()
+	albRequest.MaxResults = "1"
+	_, albErr := albClient.ListLoadBalancers(albRequest)
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	nlbRequest := nlb.CreateListLoadBalancersRequest()
+	nlbRequest.MaxResults = "1"
+	_, nlbErr := nlbClient.ListLoadBalancers(nlbRequest)
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	gwlbRequest := gwlb.CreateListLoadBalancersRequest()
+	gwlbRequest.MaxResults = "1"
+	_, gwlbErr := gwlbClient.ListLoadBalancers(gwlbRequest)
+	results := []resource.CollectionResult{{ResourceType: "ecs", Err: ecsErr}, {ResourceType: "rds", Err: rdsErr}, {ResourceType: "slb", Err: slbErr}, {ResourceType: "alb", Err: albErr}, {ResourceType: "nlb", Err: nlbErr}, {ResourceType: "gwlb", Err: gwlbErr}}
 	for _, result := range results {
 		if accessErr := classifyAliyunAccessError(result.Err); accessErr != nil {
 			return nil, accessErr
@@ -326,34 +397,6 @@ func collectRDS(client rdsCollectAPI) ([]rds.DBInstance, map[string][]rds.DBInst
 	}
 	return values, networks, attributes, nil
 }
-func collectSLB(client *slb.Client, region string) ([]slb.LoadBalancer, map[string][]slb.ListenerPortAndProtocol, error) {
-	values := []slb.LoadBalancer{}
-	ports := map[string][]slb.ListenerPortAndProtocol{}
-	for page := 1; ; page++ {
-		request := slb.CreateDescribeLoadBalancersRequest()
-		request.RegionId = region
-		request.PageNumber = requests.Integer(strconv.Itoa(page))
-		request.PageSize = "100"
-		response, err := client.DescribeLoadBalancers(request)
-		if err != nil {
-			return values, ports, err
-		}
-		values = append(values, response.LoadBalancers.LoadBalancer...)
-		if page*response.PageSize >= response.TotalCount || len(response.LoadBalancers.LoadBalancer) == 0 {
-			break
-		}
-	}
-	for _, item := range values {
-		request := slb.CreateDescribeLoadBalancerAttributeRequest()
-		request.LoadBalancerId = item.LoadBalancerId
-		response, err := client.DescribeLoadBalancerAttribute(request)
-		if err != nil {
-			return values, ports, err
-		}
-		ports[item.LoadBalancerId] = response.ListenerPortsAndProtocol.ListenerPortAndProtocol
-	}
-	return values, ports, nil
-}
 
 func ecsSnapshots(instances []ecs.Instance, disksByInstance map[string][]ecs.Disk) []resource.Snapshot {
 	values := []resource.Snapshot{}
@@ -420,30 +463,6 @@ func rdsSnapshots(instances []rds.DBInstance, networks map[string][]rds.DBInstan
 			value.Endpoints = append(value.Endpoints, resource.EndpointSnapshot{Kind: kind, Address: network.ConnectionString, Port: port, Protocol: "tcp"})
 		}
 		values = append(values, value)
-	}
-	return values
-}
-func slbSnapshots(loadBalancers []slb.LoadBalancer, portMaps ...map[string][]slb.ListenerPortAndProtocol) []resource.Snapshot {
-	ports := map[string][]slb.ListenerPortAndProtocol{}
-	if len(portMaps) > 0 {
-		ports = portMaps[0]
-	}
-	values := []resource.Snapshot{}
-	for _, item := range loadBalancers {
-		raw, _ := json.Marshal(item)
-		kind := "private"
-		if strings.EqualFold(item.AddressType, "internet") {
-			kind = "public"
-		}
-		endpoints := []resource.EndpointSnapshot{}
-		if len(ports[item.LoadBalancerId]) == 0 {
-			endpoints = append(endpoints, resource.EndpointSnapshot{Kind: kind, Address: item.Address})
-		} else {
-			for _, listener := range ports[item.LoadBalancerId] {
-				endpoints = append(endpoints, resource.EndpointSnapshot{Kind: kind, Address: item.Address, Port: listener.ListenerPort, Protocol: listener.ListenerProtocol})
-			}
-		}
-		values = append(values, resource.Snapshot{ResourceType: "slb", ExternalID: item.LoadBalancerId, Name: item.LoadBalancerName, Region: item.RegionId, Zone: item.MasterZoneId, CloudStatus: item.LoadBalancerStatus, NetworkType: item.AddressType, RawAttributes: raw, Endpoints: endpoints})
 	}
 	return values
 }

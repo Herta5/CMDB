@@ -248,9 +248,9 @@ func TestAliyunAccessErrorClassification(t *testing.T) {
 // TestAliyunConnectionProbeRequestsOnlyOneItemPerType 验证连接测试只探测三类 API，不遍历资源详情或域名。
 func TestAliyunConnectionProbeRequestsOnlyOneItemPerType(t *testing.T) {
 	ecsClient, rdsClient, slbClient := &ecsProbeStub{}, &rdsProbeStub{}, &slbProbeStub{}
-	results, err := probeAliyunAccess(context.Background(), ecsClient, rdsClient, slbClient, "cn-hangzhou")
-	if err != nil || len(results) != 3 || results[0].ResourceType != "ecs" || results[1].ResourceType != "rds" || results[2].ResourceType != "slb" {
-		t.Fatalf("阿里云连接探测必须返回三类资源结果：%v，错误：%v", results, err)
+	results, err := probeAliyunAccess(context.Background(), ecsClient, rdsClient, slbClient, &albCollectStub{}, &nlbCollectStub{}, &gwlbCollectStub{}, "cn-hangzhou")
+	if err != nil || len(results) != 6 || results[0].ResourceType != "ecs" || results[1].ResourceType != "rds" || results[2].ResourceType != "slb" || results[3].ResourceType != "alb" || results[4].ResourceType != "nlb" || results[5].ResourceType != "gwlb" {
+		t.Fatalf("阿里云连接探测必须返回六类资源结果：%v，错误：%v", results, err)
 	}
 	if ecsClient.request == nil || string(ecsClient.request.PageSize) != "1" || rdsClient.request == nil || string(rdsClient.request.PageSize) != "1" || slbClient.request == nil || string(slbClient.request.PageSize) != "1" {
 		t.Fatal("阿里云连接探测每类资源只能请求一条数据")
@@ -260,7 +260,7 @@ func TestAliyunConnectionProbeRequestsOnlyOneItemPerType(t *testing.T) {
 // TestAliyunConnectionProbeChecksRDSAttributePermission 防止连接测试放过缺少 RDS 规格详情读取权限的接入源。
 func TestAliyunConnectionProbeChecksRDSAttributePermission(t *testing.T) {
 	ecsClient, rdsClient, slbClient := &ecsProbeStub{}, &rdsProbeStub{}, &slbProbeStub{}
-	if _, err := probeAliyunAccess(context.Background(), ecsClient, rdsClient, slbClient, "cn-hangzhou"); err != nil {
+	if _, err := probeAliyunAccess(context.Background(), ecsClient, rdsClient, slbClient, &albCollectStub{}, &nlbCollectStub{}, &gwlbCollectStub{}, "cn-hangzhou"); err != nil {
 		t.Fatalf("阿里云连接探测失败：%v", err)
 	}
 	if rdsClient.attributeRequest == nil || rdsClient.attributeRequest.DBInstanceId != "rm-probe" {
@@ -271,7 +271,7 @@ func TestAliyunConnectionProbeChecksRDSAttributePermission(t *testing.T) {
 // TestAliyunConnectionProbeChecksCloudDiskPermission 防止连接测试放过缺少 DescribeDisks 权限的接入源。
 func TestAliyunConnectionProbeChecksCloudDiskPermission(t *testing.T) {
 	ecsClient, rdsClient, slbClient := &ecsProbeStub{}, &rdsProbeStub{}, &slbProbeStub{}
-	if _, err := probeAliyunAccess(context.Background(), ecsClient, rdsClient, slbClient, "cn-hangzhou"); err != nil {
+	if _, err := probeAliyunAccess(context.Background(), ecsClient, rdsClient, slbClient, &albCollectStub{}, &nlbCollectStub{}, &gwlbCollectStub{}, "cn-hangzhou"); err != nil {
 		t.Fatalf("阿里云连接探测失败：%v", err)
 	}
 	if ecsClient.diskRequest == nil || string(ecsClient.diskRequest.PageSize) != "1" || ecsClient.diskRequest.DiskType != "all" || ecsClient.diskRequest.Status != "In_use" {
