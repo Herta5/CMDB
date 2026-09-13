@@ -90,4 +90,21 @@ describe('审计日志页面', () => {
     expect(get).toHaveBeenLastCalledWith('/audit-logs', { params: expect.objectContaining({ actor_username: 'audit_admin', page: 1, page_size: 20 }) })
     app.unmount()
   })
+
+  it('以官方大写缩写展示各类负载均衡审计对象', async () => {
+    get.mockResolvedValue({
+      items: ['clb', 'alb', 'nlb', 'gwlb'].map((resource_type, id) => ({
+        id, actor_username: 'audit_admin', actor_display_name: '审计管理员', project_id: 7, project_name: '云项目',
+        action: 'resource.updated', resource_type, resource_id: `lb-${id}`, detail: {}, request_ip: '', created_at: '2026-09-10T08:00:00Z',
+      })),
+      total: 4, page: 1, page_size: 20,
+    })
+    const { app, root } = await mountAuditPage()
+    const objectLabels = all(root)
+      .filter(value => value.type === 'strong')
+      .map(text)
+      .filter(value => ['CLB', 'ALB', 'NLB', 'GWLB'].includes(value))
+    expect(objectLabels).toEqual(['CLB', 'ALB', 'NLB', 'GWLB'])
+    app.unmount()
+  })
 })

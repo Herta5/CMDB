@@ -23,7 +23,7 @@ const actionLabels: Record<string, string> = {
   'resource.created': '发现资源', 'resource.updated': '更新资源', 'resource.restored': '资源恢复', 'resource.lost': '资源失联', 'resource.deleted': '删除失联资源',
 }
 /** resourceTypeLabels 统一常见对象类型，未知平台类型仍保留原值以便排查。 */
-const resourceTypeLabels: Record<string, string> = { user: '用户', project: '项目', project_member: '项目成员', resource_source: '接入源', ecs: 'ECS', ec2: 'EC2', rds: 'RDS', slb: 'SLB', elb: 'ELB' }
+const resourceTypeLabels: Record<string, string> = { user: '用户', project: '项目', project_member: '项目成员', resource_source: '接入源', ecs: 'ECS', ec2: 'EC2', rds: 'RDS', slb: 'SLB', clb: 'CLB', alb: 'ALB', nlb: 'NLB', gwlb: 'GWLB' }
 const actionOptions = Object.entries(actionLabels).map(([value, label]) => ({ value, label }))
 const totalPages = computed(() => Math.max(1, Math.ceil(audit.total / pageSize)))
 

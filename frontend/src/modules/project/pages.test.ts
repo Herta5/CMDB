@@ -12,6 +12,7 @@ import ProjectDetailPage from './ProjectDetailPage.vue'
 import ConsoleLayout from '@/layouts/ConsoleLayout.vue'
 import UserManagementPage from '@/modules/user/UserManagementPage.vue'
 import AssetListPage from '@/modules/resource/AssetListPage.vue'
+import CloudPlatformPage from '@/modules/resource/CloudPlatformPage.vue'
 import CloudSyncManagementPage from '@/modules/resource/CloudSyncManagementPage.vue'
 import { useResourceStore } from '@/modules/resource/store'
 
@@ -320,6 +321,20 @@ describe('项目控制台页面', () => {
     expect(get).toHaveBeenCalledWith('/projects/2/resources', { params: expect.objectContaining({ resource_type: 'ec2' }) })
     app.unmount()
   })
+  it('负载均衡资产页按官方类型顺序查询且不查询 ELB', async () => {
+    const projectStore = useProjectStore()
+    projectStore.projects = [{ id: 2, code: 'platform', name: '平台项目', description: '', status: 'enabled', ownerUsername: null, createdAt: '', updatedAt: '' }]
+    projectStore.selectProject(2)
+    get.mockResolvedValue({ items: [], total: 0 })
+    const component = { render: () => h(AssetListPage, { category: 'load_balancer' }) }
+    const { app } = await mount(component, '/assets/load-balancers')
+    const requestedTypes = get.mock.calls
+      .filter(([url]) => url === '/projects/2/resources')
+      .map(([, options]) => options.params.resource_type)
+    expect(requestedTypes).toEqual(['slb', 'clb', 'alb', 'nlb', 'gwlb'])
+    expect(requestedTypes).not.toContain('elb')
+    app.unmount()
+  })
   it('服务器资产页展示实例规格和云盘汇总', async () => {
     const projectStore = useProjectStore()
     projectStore.projects = [{ id: 2, code: 'platform', name: '平台项目', description: '', status: 'enabled', ownerUsername: null, createdAt: '', updatedAt: '' }]
@@ -405,6 +420,23 @@ describe('项目控制台页面', () => {
     expect(text(root)).toContain('阿里云')
     expect(text(root)).toContain('AWS')
     app.unmount()
+  })
+  it('平台资源类型筛选展示各云平台的官方产品范围', async () => {
+    const projectStore = useProjectStore()
+    projectStore.projects = [{ id: 2, code: 'platform', name: '平台项目', description: '', status: 'enabled', ownerUsername: null, currentRole: 'project_admin', createdAt: '', updatedAt: '' }]
+    projectStore.listState = 'ready'
+    projectStore.selectProject(2)
+    get.mockImplementation((url: string) => Promise.resolve(url.endsWith('/sources') ? [] : { items: [], total: 0 }))
+
+    const aliyun = await mount({ render: () => h(CloudPlatformPage, { provider: 'aliyun' }) }, '/aliyun')
+    const aliyunTypes = all(aliyun.root).find(node => node.type === 'select' && node.props['aria-label'] === '资源类型')!.options.map(node => text(node))
+    expect(aliyunTypes).toEqual(['全部类型', 'ECS', 'RDS', 'SLB', 'ALB', 'NLB', 'GWLB'])
+    aliyun.app.unmount()
+
+    const aws = await mount({ render: () => h(CloudPlatformPage, { provider: 'aws' }) }, '/aws')
+    const awsTypes = all(aws.root).find(node => node.type === 'select' && node.props['aria-label'] === '资源类型')!.options.map(node => text(node))
+    expect(awsTypes).toEqual(['全部类型', 'EC2', 'RDS', 'CLB', 'ALB', 'NLB', 'GWLB'])
+    aws.app.unmount()
   })
   it('同步成功任务在结果列展示资源统计', async () => {
     const projectStore = useProjectStore()

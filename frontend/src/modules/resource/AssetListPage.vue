@@ -22,7 +22,7 @@ const hasAssetScope = computed(() => viewingAllProjects.value ? projects.project
 const category = computed(() => ({
   server: { title: '服务器', types: ['ecs', 'ec2'] },
   database: { title: '数据库', types: ['rds'] },
-  load_balancer: { title: '负载均衡', types: ['slb', 'elb'] },
+  load_balancer: { title: '负载均衡', types: ['slb', 'clb', 'alb', 'nlb', 'gwlb'] },
 }[props.category]))
 
 /** 按资产类别并行查询底层资源类型，过期响应不能覆盖新项目的结果。 */
