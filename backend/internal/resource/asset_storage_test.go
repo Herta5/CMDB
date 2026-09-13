@@ -9,6 +9,19 @@ import (
 	"testing"
 )
 
+// TestAssetTableForTypeRoutesConcreteLoadBalancers 防止具体负载均衡类型未写入共享资产表，或旧 ELB 类型继续产生。
+func TestAssetTableForTypeRoutesConcreteLoadBalancers(t *testing.T) {
+	for _, resourceType := range []string{"slb", "clb", "alb", "nlb", "gwlb"} {
+		table, err := assetTableForType(resourceType)
+		if err != nil || table != "resources_load_balancers" {
+			t.Fatalf("%s 必须路由到负载均衡表：table=%q err=%v", resourceType, table, err)
+		}
+	}
+	if _, err := assetTableForType("elb"); err == nil {
+		t.Fatal("旧 elb 类型不得继续作为新资源类型")
+	}
+}
+
 // TestSnapshotBusinessColumnsUsesEmptyDiskArray 防止无云盘服务器写入 JSON null 并违反数组契约。
 func TestSnapshotBusinessColumnsUsesEmptyDiskArray(t *testing.T) {
 	columns := snapshotBusinessColumns("resources_servers", Snapshot{})

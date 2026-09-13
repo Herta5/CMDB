@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -57,11 +58,11 @@ func TestAliyunConfigValidationOnlyAllowsEmptyObject(t *testing.T) {
 	}
 }
 
-// TestAliyunResourceTypesKeepsInitialScope 防止平台模块超出首期 ECS、RDS 和 SLB 的采集边界。
-func TestAliyunResourceTypesKeepsInitialScope(t *testing.T) {
-	values := NewCollector().ResourceTypes()
-	if len(values) != 3 || values[0] != "ecs" || values[1] != "rds" || values[2] != "slb" {
-		t.Fatalf("阿里云首期资源类型必须固定为 ecs、rds、slb：%v", values)
+// TestAliyunResourceTypesCoversAllOfficialLoadBalancers 防止官方负载均衡类型未进入阿里云同步范围。
+func TestAliyunResourceTypesCoversAllOfficialLoadBalancers(t *testing.T) {
+	want := []string{"ecs", "rds", "slb", "alb", "nlb", "gwlb"}
+	if got := NewCollector().ResourceTypes(); !reflect.DeepEqual(got, want) {
+		t.Fatalf("阿里云资源类型错误：got=%v want=%v", got, want)
 	}
 }
 

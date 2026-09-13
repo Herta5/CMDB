@@ -38,9 +38,9 @@ func (c *Collector) ValidateConfig(raw json.RawMessage) error {
 	return resource.ValidateEmptyConfig(raw)
 }
 
-// ResourceTypes 返回首期阿里云采集范围，顺序与同步结果保持一致。
+// ResourceTypes 返回阿里云固定资源类型；旧 elb 不属于阿里云类型且不再产生。
 func (c *Collector) ResourceTypes() []string {
-	return []string{"ecs", "rds", "slb"}
+	return []string{"ecs", "rds", "slb", "alb", "nlb", "gwlb"}
 }
 
 // ResolveCloudAccountID 通过 STS 确认凭证所属账号，原始 SDK 错误不得离开平台模块。

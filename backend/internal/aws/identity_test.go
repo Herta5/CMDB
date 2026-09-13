@@ -7,6 +7,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -76,11 +77,11 @@ func TestAWSConfigValidationOnlyAllowsEmptyObject(t *testing.T) {
 	}
 }
 
-// TestAWSResourceTypesKeepsInitialScope 防止平台模块超出首期 EC2、RDS 和 ELB 的采集边界。
-func TestAWSResourceTypesKeepsInitialScope(t *testing.T) {
-	values := NewCollector().ResourceTypes()
-	if len(values) != 3 || values[0] != "ec2" || values[1] != "rds" || values[2] != "elb" {
-		t.Fatal("AWS 首期资源类型必须固定为 ec2、rds、elb")
+// TestAWSResourceTypesCoversAllOfficialLoadBalancers 防止官方负载均衡类型未进入 AWS 同步范围。
+func TestAWSResourceTypesCoversAllOfficialLoadBalancers(t *testing.T) {
+	want := []string{"ec2", "rds", "clb", "alb", "nlb", "gwlb"}
+	if got := NewCollector().ResourceTypes(); !reflect.DeepEqual(got, want) {
+		t.Fatalf("AWS 资源类型错误：got=%v want=%v", got, want)
 	}
 }
 

@@ -39,9 +39,9 @@ func (c *Collector) ValidateConfig(raw json.RawMessage) error {
 	return resource.ValidateEmptyConfig(raw)
 }
 
-// ResourceTypes 返回首期 AWS 采集范围，顺序与同步结果保持一致。
+// ResourceTypes 返回 AWS 固定资源类型；旧 elb 已由具体负载均衡类型替代，不再产生。
 func (c *Collector) ResourceTypes() []string {
-	return []string{"ec2", "rds", "elb"}
+	return []string{"ec2", "rds", "clb", "alb", "nlb", "gwlb"}
 }
 
 // ResolveCloudAccountID 通过 STS 确认凭证所属账号，原始 SDK 错误不得离开平台模块。

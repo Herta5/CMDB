@@ -29,14 +29,14 @@ type assetRow struct {
 	NetworkType    string
 }
 
-// assetTableForType 将受支持的云产品路由到固定表名，表名不会来自外部输入。
+// assetTableForType 将受支持的云产品路由到固定表名；旧 elb 不再作为新资源类型产生。
 func assetTableForType(resourceType string) (string, error) {
 	switch strings.ToLower(resourceType) {
 	case "ecs", "ec2":
 		return "resources_servers", nil
 	case "rds":
 		return "resources_databases", nil
-	case "slb", "elb", "alb", "nlb":
+	case "slb", "clb", "alb", "nlb", "gwlb":
 		return "resources_load_balancers", nil
 	default:
 		return "", fmt.Errorf("不支持的资源类型：%s", resourceType)
