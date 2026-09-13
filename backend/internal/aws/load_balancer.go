@@ -164,6 +164,15 @@ func collectELBV2ByType(ctx context.Context, client elbV2API, values []elbv2type
 	results := make([]resource.CollectionResult, 0, len(resourceTypes))
 	for _, resourceType := range resourceTypes {
 		snapshots, err := collectELBV2Group(ctx, client, groups[resourceType], region, resourceType)
+		if err != nil {
+			if accessErr := classifyAWSAccessError(err); accessErr != nil {
+				err = accessErr
+			}
+			// 凭证失效影响整个接入源，必须立即停止后续类型请求并丢弃此前成功结果。
+			if errors.Is(err, resource.ErrCloudAuthentication) {
+				return nil, err
+			}
+		}
 		results = append(results, resource.CollectionResult{ResourceType: resourceType, Snapshots: snapshots, Err: err})
 	}
 	return results, nil

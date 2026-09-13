@@ -14,6 +14,7 @@ import (
 	elbtypes "github.com/aws/aws-sdk-go-v2/service/elasticloadbalancing/types"
 	"github.com/aws/aws-sdk-go-v2/service/elasticloadbalancingv2"
 	elbv2types "github.com/aws/aws-sdk-go-v2/service/elasticloadbalancingv2/types"
+	"github.com/aws/smithy-go"
 )
 
 // classicELBStub 只模拟 Classic ELB 的列表调用，用于隔离云端网络并保留请求分页参数。
@@ -362,6 +363,66 @@ func TestCollectELBV2ListenerFailureOnlyFailsItsType(t *testing.T) {
 	}
 	if results[1].Err != nil || len(results[1].Snapshots) != 1 || results[2].Err != nil || len(results[2].Snapshots) != 1 {
 		t.Fatalf("NLB 与 GWLB 必须继续成功：%+v", results)
+	}
+}
+
+// TestCollectELBV2AuthenticationStopsFollowingTypes 防止认证失效后继续请求后续类型，或返回此前成功类型的局部结果。
+func TestCollectELBV2AuthenticationStopsFollowingTypes(t *testing.T) {
+	values := []elbv2types.LoadBalancer{
+		{LoadBalancerArn: awssdk.String("arn:alb:1"), Type: elbv2types.LoadBalancerTypeEnumApplication},
+		{LoadBalancerArn: awssdk.String("arn:nlb:1"), Type: elbv2types.LoadBalancerTypeEnumNetwork},
+		{LoadBalancerArn: awssdk.String("arn:gwlb:1"), Type: elbv2types.LoadBalancerTypeEnumGateway},
+	}
+	for _, test := range []struct {
+		name      string
+		failedARN string
+		wantCalls map[string]int
+	}{
+		{name: "ALB 认证失败立即停止", failedARN: "arn:alb:1", wantCalls: map[string]int{"arn:alb:1": 1, "arn:nlb:1": 0, "arn:gwlb:1": 0}},
+		{name: "NLB 认证失败丢弃此前结果并停止", failedARN: "arn:nlb:1", wantCalls: map[string]int{"arn:alb:1": 1, "arn:nlb:1": 1, "arn:gwlb:1": 0}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			client := &elbV2Stub{
+				listenerPages:  map[string][]*elasticloadbalancingv2.DescribeListenersOutput{"arn:alb:1": {{}}, "arn:nlb:1": {{}}, "arn:gwlb:1": {{}}},
+				listenerErrors: map[string][]error{test.failedARN: {&smithy.GenericAPIError{Code: "ExpiredToken", Message: "虚构认证响应"}}},
+			}
+			results, err := collectELBV2ByType(context.Background(), client, values, "cn-north-1")
+			if err != resource.ErrCloudAuthentication || results != nil {
+				t.Errorf("辅助函数必须直接返回稳定认证错误和空结果：结果数=%d err=%v", len(results), err)
+			}
+			for arn, want := range test.wantCalls {
+				if got := len(client.listenerInputs[arn]); got != want {
+					t.Errorf("认证失败后不得继续请求后续类型：arn=%s 调用次数=%d 期望=%d", arn, got, want)
+				}
+			}
+		})
+	}
+}
+
+// TestCollectELBV2ClassifiesPermissionAndContinues 防止权限错误泄露云端响应或被误当成整体认证失败，普通错误仍保留原始领域内原因。
+func TestCollectELBV2ClassifiesPermissionAndContinues(t *testing.T) {
+	ordinaryErr := errors.New("监听器暂不可用")
+	values := []elbv2types.LoadBalancer{
+		{LoadBalancerArn: awssdk.String("arn:alb:1"), Type: elbv2types.LoadBalancerTypeEnumApplication},
+		{LoadBalancerArn: awssdk.String("arn:nlb:1"), Type: elbv2types.LoadBalancerTypeEnumNetwork},
+		{LoadBalancerArn: awssdk.String("arn:gwlb:1"), Type: elbv2types.LoadBalancerTypeEnumGateway},
+	}
+	client := &elbV2Stub{
+		listenerPages: map[string][]*elasticloadbalancingv2.DescribeListenersOutput{"arn:gwlb:1": {{}}},
+		listenerErrors: map[string][]error{
+			"arn:alb:1": {&smithy.GenericAPIError{Code: "AccessDeniedException", Message: "虚构权限响应"}},
+			"arn:nlb:1": {ordinaryErr},
+		},
+	}
+	results, err := collectELBV2ByType(context.Background(), client, values, "cn-north-1")
+	if err != nil || len(results) != 3 {
+		t.Fatalf("非认证错误必须继续采集并返回三类型结果：results=%+v err=%v", results, err)
+	}
+	if results[0].ResourceType != "alb" || results[0].Err != resource.ErrCloudPermission || len(results[0].Snapshots) != 0 || results[1].ResourceType != "nlb" || !errors.Is(results[1].Err, ordinaryErr) || len(results[1].Snapshots) != 0 {
+		t.Fatalf("权限应安全分类、普通错误保留原原因，失败类型不得返回快照：ALB 错误=%v NLB 错误=%v", results[0].Err, results[1].Err)
+	}
+	if results[2].ResourceType != "gwlb" || results[2].Err != nil || len(results[2].Snapshots) != 1 || results[2].Snapshots[0].ExternalID != "arn:gwlb:1" {
+		t.Fatalf("前置非认证失败不得阻断后续类型的完整快照：%+v", results[2])
 	}
 }
 

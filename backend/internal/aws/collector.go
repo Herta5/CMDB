@@ -114,6 +114,12 @@ func collectAWSResources(ctx context.Context, ec2Client ec2CollectAPI, rdsClient
 	values, listErr := listELBV2LoadBalancers(ctx, v2Client)
 	var v2Results []resource.CollectionResult
 	if listErr != nil {
+		if accessErr := classifyAWSAccessError(listErr); accessErr != nil {
+			listErr = accessErr
+		}
+		if errors.Is(listErr, resource.ErrCloudAuthentication) {
+			return nil, listErr
+		}
 		// 不完整列表无法判断任何 v2 类型是否缺失，三类必须共同失败，保留此前完整类型。
 		for _, resourceType := range []string{"alb", "nlb", "gwlb"} {
 			v2Results = append(v2Results, resource.CollectionResult{ResourceType: resourceType, Err: listErr})
@@ -124,20 +130,7 @@ func collectAWSResources(ctx context.Context, ec2Client ec2CollectAPI, rdsClient
 			return nil, err
 		}
 	}
-	for index := range v2Results {
-		result := &v2Results[index]
-		if result.Err == nil {
-			continue
-		}
-		// 每类监听器错误独立收敛；未分类错误继续交给共享核心生成安全摘要。
-		if accessErr := classifyAWSAccessError(result.Err); accessErr != nil {
-			result.Err = accessErr
-		}
-		if errors.Is(result.Err, resource.ErrAuthenticationFailed) {
-			return nil, result.Err
-		}
-		result.Snapshots = nil
-	}
+	// 分组采集已在监听器请求后立即完成访问错误分类，顶层直接保留其类型隔离结果。
 	results = append(results, v2Results...)
 	for resultIndex := range results {
 		if results[resultIndex].Err != nil {
