@@ -5,10 +5,14 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
+	"net/http"
 	"reflect"
+	"strings"
 	"testing"
 
 	"cmdb/internal/resource"
+	aliyunresponses "github.com/aliyun/alibaba-cloud-sdk-go/sdk/responses"
 	"github.com/aliyun/alibaba-cloud-sdk-go/services/alb"
 	"github.com/aliyun/alibaba-cloud-sdk-go/services/gwlb"
 	"github.com/aliyun/alibaba-cloud-sdk-go/services/nlb"
@@ -42,13 +46,26 @@ func (s *nlbCollectStub) ListLoadBalancers(r *nlb.ListLoadBalancersRequest) (*nl
 	if s.list != nil {
 		return s.list(r)
 	}
-	return nlb.CreateListLoadBalancersResponse(), nil
+	return successfulNLBListResponse(), nil
 }
 func (s *nlbCollectStub) ListListeners(r *nlb.ListListenersRequest) (*nlb.ListListenersResponse, error) {
 	if s.listeners != nil {
 		return s.listeners(r)
 	}
-	return nlb.CreateListListenersResponse(), nil
+	return successfulNLBListenersResponse(), nil
+}
+
+// successfulNLBListResponse 显式表达 HTTP 和业务均成功，避免 Success 零值掩盖错误响应。
+func successfulNLBListResponse() *nlb.ListLoadBalancersResponse {
+	r := nlb.CreateListLoadBalancersResponse()
+	r.Success, r.Code, r.HttpStatusCode = true, "200", http.StatusOK
+	return r
+}
+
+func successfulNLBListenersResponse() *nlb.ListListenersResponse {
+	r := nlb.CreateListListenersResponse()
+	r.Success, r.Code, r.HttpStatusCode = true, "200", http.StatusOK
+	return r
 }
 
 type gwlbCollectStub struct {
@@ -134,7 +151,7 @@ func TestCollectNLBReadsAllPagesAndListeners(t *testing.T) {
 			if r.MaxResults != "100" {
 				t.Fatal("NLB 列表页大小必须为 100")
 			}
-			response := nlb.CreateListLoadBalancersResponse()
+			response := successfulNLBListResponse()
 			if r.NextToken == "" {
 				response.LoadBalancers = []nlb.LoadbalancerInfo{{LoadBalancerId: "nlb-1", DNSName: "nlb.example.invalid", AddressType: "Intranet"}}
 				response.NextToken = "第二页"
@@ -149,7 +166,7 @@ func TestCollectNLBReadsAllPagesAndListeners(t *testing.T) {
 			if r.MaxResults != "100" || r.LoadBalancerIds == nil || len(*r.LoadBalancerIds) != 1 {
 				t.Fatal("NLB 监听器必须按实例分页")
 			}
-			response := nlb.CreateListListenersResponse()
+			response := successfulNLBListenersResponse()
 			id := (*r.LoadBalancerIds)[0]
 			if r.NextToken == "" {
 				response.Listeners = []nlb.ListenerInfo{{LoadBalancerId: id, ListenerPort: 53, ListenerProtocol: "TCP"}}
@@ -267,7 +284,7 @@ func TestAliyunLoadBalancerTypeFailureKeepsOtherTypes(t *testing.T) {
 					return alb.CreateListListenersResponse(), nil
 				}
 				n.list = func(*nlb.ListLoadBalancersRequest) (*nlb.ListLoadBalancersResponse, error) {
-					r := nlb.CreateListLoadBalancersResponse()
+					r := successfulNLBListResponse()
 					r.LoadBalancers = []nlb.LoadbalancerInfo{{LoadBalancerId: "nlb-nlb"}}
 					if product == "nlb" && failure != "监听器权限" {
 						return nil, cloudErr
@@ -278,7 +295,7 @@ func TestAliyunLoadBalancerTypeFailureKeepsOtherTypes(t *testing.T) {
 					if product == "nlb" && failure == "监听器权限" {
 						return nil, cloudErr
 					}
-					return nlb.CreateListListenersResponse(), nil
+					return successfulNLBListenersResponse(), nil
 				}
 				g.list = func(*gwlb.ListLoadBalancersRequest) (*gwlb.ListLoadBalancersResponse, error) {
 					r := gwlb.CreateListLoadBalancersResponse()
@@ -348,14 +365,14 @@ func TestAliyunLoadBalancerRejectsRepeatedTokens(t *testing.T) {
 					return r, nil
 				}}
 				n := &nlbCollectStub{list: func(*nlb.ListLoadBalancersRequest) (*nlb.ListLoadBalancersResponse, error) {
-					r := nlb.CreateListLoadBalancersResponse()
+					r := successfulNLBListResponse()
 					r.LoadBalancers = []nlb.LoadbalancerInfo{{LoadBalancerId: "nlb"}}
 					if stage == "列表" {
 						r.NextToken = next()
 					}
 					return r, nil
 				}, listeners: func(*nlb.ListListenersRequest) (*nlb.ListListenersResponse, error) {
-					r := nlb.CreateListListenersResponse()
+					r := successfulNLBListenersResponse()
 					r.NextToken = next()
 					return r, nil
 				}}
@@ -399,7 +416,7 @@ func TestAliyunLoadBalancerProbeUsesOnlyFirstListPage(t *testing.T) {
 		if r.MaxResults != "1" || r.NextToken != "" {
 			t.Fatal("NLB 探测只能读取一条列表数据")
 		}
-		v := nlb.CreateListLoadBalancersResponse()
+		v := successfulNLBListResponse()
 		v.NextToken = "不应读取"
 		v.LoadBalancers = []nlb.LoadbalancerInfo{{LoadBalancerId: "nlb", DNSName: "nlb.example.invalid"}}
 		return v, nil
@@ -422,6 +439,95 @@ func TestAliyunLoadBalancerProbeUsesOnlyFirstListPage(t *testing.T) {
 	for _, result := range results {
 		if result.Err != nil || len(result.Snapshots) != 0 {
 			t.Fatalf("探测只能表达可达性：%v", result)
+		}
+	}
+}
+
+// decodeNLBHTTP200 使用 SDK 真实反序列化路径复现 HTTP 成功但业务失败、Go error 为 nil 的响应。
+func decodeNLBHTTP200(t *testing.T, response aliyunresponses.AcsResponse, body string) {
+	t.Helper()
+	if err := aliyunresponses.Unmarshal(response, &http.Response{StatusCode: http.StatusOK, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(body))}, "JSON"); err != nil {
+		t.Fatalf("模拟 HTTP 200 响应应由 SDK 正常解码：%v", err)
+	}
+}
+
+// TestNLBHTTP200BusinessFailure 防止业务失败空列表推进生命周期、监听失败输出局部快照或探测误报可达。
+func TestNLBHTTP200BusinessFailure(t *testing.T) {
+	for _, tc := range []struct {
+		name, body string
+		want       error
+	}{
+		{name: "权限错误码", body: `{"Success":false,"Code":"Forbidden.RAM","HttpStatusCode":200,"Message":"不应泄露的响应正文"}`, want: resource.ErrPermissionDenied},
+		{name: "认证错误码", body: `{"Success":false,"Code":"InvalidAccessKeyId.NotFound","HttpStatusCode":200,"Message":"不应泄露的响应正文"}`, want: resource.ErrAuthenticationFailed},
+		{name: "未知业务错误", body: `{"Success":false,"Code":"InternalError","HttpStatusCode":200,"Message":"不应泄露的响应正文"}`},
+		{name: "缺失成功标记", body: `{"Code":"200","HttpStatusCode":200,"Message":"不应泄露的响应正文"}`},
+		{name: "业务权限状态", body: `{"Success":false,"Code":"","HttpStatusCode":403,"Message":"不应泄露的响应正文"}`, want: resource.ErrPermissionDenied},
+		{name: "业务认证状态", body: `{"Success":false,"Code":"","HttpStatusCode":401,"Message":"不应泄露的响应正文"}`, want: resource.ErrAuthenticationFailed},
+		{name: "成功标记与错误码矛盾", body: `{"Success":true,"Code":"Forbidden.RAM","HttpStatusCode":200,"Message":"不应泄露的响应正文"}`, want: resource.ErrPermissionDenied},
+	} {
+		for _, stage := range []string{"列表", "监听器"} {
+			t.Run(tc.name+"/"+stage, func(t *testing.T) {
+				client := &nlbCollectStub{
+					list: func(*nlb.ListLoadBalancersRequest) (*nlb.ListLoadBalancersResponse, error) {
+						r := successfulNLBListResponse()
+						if stage == "列表" {
+							r = nlb.CreateListLoadBalancersResponse()
+							decodeNLBHTTP200(t, r, tc.body)
+						} else {
+							r.LoadBalancers = []nlb.LoadbalancerInfo{{LoadBalancerId: "nlb-1"}}
+						}
+						return r, nil
+					},
+					listeners: func(request *nlb.ListListenersRequest) (*nlb.ListListenersResponse, error) {
+						r := successfulNLBListenersResponse()
+						if request.NextToken == "" {
+							r.Listeners = []nlb.ListenerInfo{{LoadBalancerId: "nlb-1", ListenerPort: 443, ListenerProtocol: "TCP"}}
+							r.NextToken = "第二页"
+						} else {
+							r = nlb.CreateListListenersResponse()
+							decodeNLBHTTP200(t, r, tc.body)
+						}
+						return r, nil
+					},
+				}
+				results, err := collectAliyunResources(context.Background(), &ecsProbeStub{}, &rdsCollectStub{}, &slbCollectStub{}, &albCollectStub{}, client, &gwlbCollectStub{}, "cn-hangzhou")
+				if errors.Is(tc.want, resource.ErrAuthenticationFailed) {
+					if !errors.Is(err, tc.want) || results != nil {
+						t.Fatalf("NLB 业务认证失败必须整体终止：结果=%v 错误=%v", results, err)
+					}
+				} else {
+					if err != nil || len(results) != 6 {
+						t.Fatalf("NLB 业务失败必须保留其他类型：%v %v", results, err)
+					}
+					for _, result := range results {
+						if result.ResourceType != "nlb" {
+							if result.Err != nil {
+								t.Fatalf("NLB 失败不得影响其他类型：%v", result)
+							}
+							continue
+						}
+						if result.Err == nil || len(result.Snapshots) != 0 {
+							t.Fatalf("NLB 业务失败不能输出成功或局部快照：%v", result)
+						}
+						if tc.want != nil && !errors.Is(result.Err, tc.want) {
+							t.Fatalf("NLB 业务错误分类错误：%v", result.Err)
+						}
+						if strings.Contains(result.Err.Error(), "不应泄露") {
+							t.Fatal("不得回显 NLB Message")
+						}
+					}
+				}
+				if stage == "列表" {
+					results, err = probeAliyunAccess(context.Background(), &ecsProbeStub{}, &rdsProbeStub{}, &slbProbeStub{}, &albCollectStub{}, client, &gwlbCollectStub{}, "cn-hangzhou")
+					if tc.want != nil {
+						if !errors.Is(err, tc.want) {
+							t.Fatalf("Probe 必须保留安全访问错误分类：%v %v", results, err)
+						}
+					} else if err != nil || len(results) != 6 || results[4].Err == nil {
+						t.Fatalf("Probe 不得将 NLB 业务失败标记可达：%v %v", results, err)
+					}
+				}
+			})
 		}
 	}
 }

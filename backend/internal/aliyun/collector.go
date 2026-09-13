@@ -241,7 +241,14 @@ func probeAliyunAccess(ctx context.Context, ecsClient ecsProbeAPI, rdsClient rds
 	}
 	nlbRequest := nlb.CreateListLoadBalancersRequest()
 	nlbRequest.MaxResults = "1"
-	_, nlbErr := nlbClient.ListLoadBalancers(nlbRequest)
+	nlbResponse, nlbErr := nlbClient.ListLoadBalancers(nlbRequest)
+	if nlbErr == nil {
+		if nlbResponse == nil {
+			nlbErr = errors.New("NLB 列表响应为空")
+		} else {
+			nlbErr = validateNLBResponse(nlbResponse.Success, nlbResponse.Code, nlbResponse.HttpStatusCode)
+		}
+	}
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -490,6 +497,13 @@ func resolveEndpoints(ctx context.Context, snapshot *resource.Snapshot) {
 func classifyAliyunAccessError(err error) error {
 	if err == nil {
 		return nil
+	}
+	// 已收敛的业务错误直接保留身份，避免中文安全摘要在二次分类时丢失认证或权限语义。
+	if errors.Is(err, resource.ErrAuthenticationFailed) {
+		return resource.ErrAuthenticationFailed
+	}
+	if errors.Is(err, resource.ErrPermissionDenied) {
+		return resource.ErrPermissionDenied
 	}
 	value := strings.ToLower(err.Error())
 	if strings.Contains(value, "forbidden") || strings.Contains(value, "not authorized") || strings.Contains(value, "permission") {

@@ -161,6 +161,9 @@ func collectNLB(client nlbCollectAPI) ([]nlb.LoadbalancerInfo, map[string][]nlb.
 		if response == nil {
 			return nil, "", errors.New("NLB 列表响应为空")
 		}
+		if err := validateNLBResponse(response.Success, response.Code, response.HttpStatusCode); err != nil {
+			return nil, "", err
+		}
 		return response.LoadBalancers, response.NextToken, nil
 	})
 	if err != nil {
@@ -180,6 +183,9 @@ func collectNLB(client nlbCollectAPI) ([]nlb.LoadbalancerInfo, map[string][]nlb.
 			if response == nil {
 				return nil, "", errors.New("NLB 监听器响应为空")
 			}
+			if err := validateNLBResponse(response.Success, response.Code, response.HttpStatusCode); err != nil {
+				return nil, "", err
+			}
 			return response.Listeners, response.NextToken, nil
 		})
 		if err != nil {
@@ -188,6 +194,25 @@ func collectNLB(client nlbCollectAPI) ([]nlb.LoadbalancerInfo, map[string][]nlb.
 		listeners[item.LoadBalancerId] = items
 	}
 	return values, listeners, nil
+}
+
+// validateNLBResponse 防止 SDK 将 HTTP 2xx 内的业务失败当作成功空页；只用业务码和状态分类，不接收或回显 Message。
+func validateNLBResponse(success bool, code string, status int) error {
+	if classified := classifyAliyunAccessError(errors.New(code)); classified != nil {
+		return classified
+	}
+	if status == 401 {
+		return resource.ErrAuthenticationFailed
+	}
+	if status == 403 {
+		return resource.ErrPermissionDenied
+	}
+	validCode := code == "" || code == "200" || strings.EqualFold(code, "success")
+	validStatus := status == 0 || (status >= 200 && status < 300)
+	if !success || !validCode || !validStatus {
+		return errors.New("NLB API 返回业务失败")
+	}
+	return nil
 }
 
 // collectGWLB 只遍历网关型负载均衡列表，地址直接来自 Zone Mapping。
