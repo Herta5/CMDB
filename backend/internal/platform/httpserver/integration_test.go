@@ -946,6 +946,9 @@ func TestSyncFailureHTTPContract(t *testing.T) {
 // integrationCollector 保留真实 AWS 输入校验，只替换会访问云端的适配器边界。
 type integrationCollector struct{ *awscollector.Collector }
 
+// ResourceTypes 固定集成夹具返回的三类通用模拟结果，避免继承真实 AWS 采集器的完整类型集合。
+func (integrationCollector) ResourceTypes() []string { return []string{"ec2", "rds", "alb"} }
+
 // ResolveCloudAccountID 返回虚构稳定账号，HTTP 验收不访问真实 AWS。
 func (integrationCollector) ResolveCloudAccountID(_ context.Context, _ cloudresource.Source, plain []byte) (string, error) {
 	var credential struct {
@@ -973,17 +976,17 @@ func (integrationCollector) ResolveCloudAccountID(_ context.Context, _ cloudreso
 func (integrationCollector) Collect(_ context.Context, source cloudresource.Source, _ []byte) ([]cloudresource.CollectionResult, error) {
 	switch source.Name {
 	case "集成全部失败":
-		return []cloudresource.CollectionResult{{ResourceType: "ec2", Err: fmt.Errorf("虚构原始认证响应：%w", cloudresource.ErrCloudAuthentication)}, {ResourceType: "rds", Err: cloudresource.ErrCloudNetwork}, {ResourceType: "elb", Err: cloudresource.ErrCloudPermission}}, nil
+		return []cloudresource.CollectionResult{{ResourceType: "ec2", Err: fmt.Errorf("虚构原始认证响应：%w", cloudresource.ErrCloudAuthentication)}, {ResourceType: "rds", Err: cloudresource.ErrCloudNetwork}, {ResourceType: "alb", Err: cloudresource.ErrCloudPermission}}, nil
 	case "集成空结果":
 		return nil, nil
 	case "集成缺少类型":
 		return []cloudresource.CollectionResult{{ResourceType: "ec2"}}, nil
 	case "集成重复类型":
-		return []cloudresource.CollectionResult{{ResourceType: "ec2"}, {ResourceType: "ec2"}, {ResourceType: "elb"}}, nil
+		return []cloudresource.CollectionResult{{ResourceType: "ec2"}, {ResourceType: "ec2"}, {ResourceType: "alb"}}, nil
 	case "集成部分成功":
-		return []cloudresource.CollectionResult{{ResourceType: "ec2", Snapshots: []cloudresource.Snapshot{{ExternalID: "i-partial", Name: "成功类型实例"}}}, {ResourceType: "rds", Err: cloudresource.ErrCloudNetwork}, {ResourceType: "elb", Err: cloudresource.ErrCloudPermission}}, nil
+		return []cloudresource.CollectionResult{{ResourceType: "ec2", Snapshots: []cloudresource.Snapshot{{ExternalID: "i-partial", Name: "成功类型实例"}}}, {ResourceType: "rds", Err: cloudresource.ErrCloudNetwork}, {ResourceType: "alb", Err: cloudresource.ErrCloudPermission}}, nil
 	}
-	return []cloudresource.CollectionResult{{ResourceType: "ec2", Snapshots: []cloudresource.Snapshot{{ResourceType: "ec2", ExternalID: "i-integration", Name: "集成计算节点", CloudStatus: "running", Endpoints: []cloudresource.EndpointSnapshot{{Kind: "private", Address: "10.0.0.8"}}}}}, {ResourceType: "rds"}, {ResourceType: "elb"}}, nil
+	return []cloudresource.CollectionResult{{ResourceType: "ec2", Snapshots: []cloudresource.Snapshot{{ResourceType: "ec2", ExternalID: "i-integration", Name: "集成计算节点", CloudStatus: "running", Endpoints: []cloudresource.EndpointSnapshot{{Kind: "private", Address: "10.0.0.8"}}}}}, {ResourceType: "rds"}, {ResourceType: "alb"}}, nil
 }
 
 // Probe 为集成测试提供不含快照的轻量连接结果，避免连接测试与同步行为混淆。

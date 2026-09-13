@@ -55,13 +55,13 @@ func TestSyncFailureConvergence(t *testing.T) {
 					case "网络失败":
 						collector.err = fmt.Errorf("虚构原始网络载荷：%w", ErrCloudNetwork)
 					case "全部类型失败":
-						collector.results = []CollectionResult{{ResourceType: "ec2", Err: ErrCloudAuthentication}, {ResourceType: "rds", Err: ErrCloudNetwork}, {ResourceType: "elb", Err: errors.New("虚构原始云响应")}}
+						collector.results = []CollectionResult{{ResourceType: "ec2", Err: ErrCloudAuthentication}, {ResourceType: "rds", Err: ErrCloudNetwork}, {ResourceType: "alb", Err: errors.New("虚构原始云响应")}}
 					case "缺少类型":
 						collector.results = []CollectionResult{{ResourceType: "ec2"}}
 					case "重复类型":
-						collector.results = []CollectionResult{{ResourceType: "ec2"}, {ResourceType: "ec2"}, {ResourceType: "elb"}}
+						collector.results = []CollectionResult{{ResourceType: "ec2"}, {ResourceType: "ec2"}, {ResourceType: "alb"}}
 					case "最终事务失败", "部分成功最终事务失败":
-						collector.results = []CollectionResult{{ResourceType: "ec2", Snapshots: []Snapshot{{ExternalID: "新增但须回滚的实例"}}}, {ResourceType: "rds"}, {ResourceType: "elb"}}
+						collector.results = []CollectionResult{{ResourceType: "ec2", Snapshots: []Snapshot{{ExternalID: "新增但须回滚的实例"}}}, {ResourceType: "rds"}, {ResourceType: "alb"}}
 						if scenario == "部分成功最终事务失败" {
 							collector.results[1].Err = ErrCloudNetwork
 						}
@@ -148,7 +148,7 @@ type blockingCollector struct {
 func (c blockingCollector) Collect(context.Context, Source, []byte) ([]CollectionResult, error) {
 	close(c.entered)
 	<-c.release
-	return []CollectionResult{{ResourceType: "ec2"}, {ResourceType: "rds"}, {ResourceType: "elb"}}, nil
+	return []CollectionResult{{ResourceType: "ec2"}, {ResourceType: "rds"}, {ResourceType: "alb"}}, nil
 }
 
 // Probe 让阻塞采集器满足统一接口；并发同步测试不应进入连接探测路径。
@@ -175,7 +175,7 @@ func (c collectorStub) Collect(context.Context, Source, []byte) ([]CollectionRes
 		return c.results, c.err
 	}
 	results := append([]CollectionResult(nil), c.results...)
-	for _, resourceType := range []string{"ec2", "rds", "elb"} {
+	for _, resourceType := range []string{"ec2", "rds", "alb"} {
 		found := false
 		for _, result := range results {
 			if result.ResourceType == resourceType {
@@ -307,7 +307,7 @@ func TestSyncIsIdempotentMarksMissingAndRestores(t *testing.T) {
 	if err != nil {
 		t.Fatalf("首次同步失败：%v", err)
 	}
-	if string(firstJob.Statistics) != `{"ec2":{"added":1,"deleted":0,"failed":0,"lost":0,"restored":0,"updated":0},"elb":{"added":0,"deleted":0,"failed":0,"lost":0,"restored":0,"updated":0},"rds":{"added":0,"deleted":0,"failed":0,"lost":0,"restored":0,"updated":0}}` {
+	if string(firstJob.Statistics) != `{"alb":{"added":0,"deleted":0,"failed":0,"lost":0,"restored":0,"updated":0},"ec2":{"added":1,"deleted":0,"failed":0,"lost":0,"restored":0,"updated":0},"rds":{"added":0,"deleted":0,"failed":0,"lost":0,"restored":0,"updated":0}}` {
 		t.Fatal("首次同步必须记录完整且脱敏的资源变更统计")
 	}
 	*now = now.Add(time.Hour)
@@ -370,7 +370,7 @@ func TestSyncUnchangedResourceOnlyRefreshesLastSeen(t *testing.T) {
 	if err != nil {
 		t.Fatalf("重复同步失败：%v", err)
 	}
-	if string(job.Statistics) != `{"ec2":{"added":0,"deleted":0,"failed":0,"lost":0,"restored":0,"updated":0},"elb":{"added":0,"deleted":0,"failed":0,"lost":0,"restored":0,"updated":0},"rds":{"added":0,"deleted":0,"failed":0,"lost":0,"restored":0,"updated":0}}` {
+	if string(job.Statistics) != `{"alb":{"added":0,"deleted":0,"failed":0,"lost":0,"restored":0,"updated":0},"ec2":{"added":0,"deleted":0,"failed":0,"lost":0,"restored":0,"updated":0},"rds":{"added":0,"deleted":0,"failed":0,"lost":0,"restored":0,"updated":0}}` {
 		t.Fatalf("相同快照不得计为业务更新：%s", job.Statistics)
 	}
 	if len(updatedColumns) != 1 || updatedColumns["last_seen_at"] != 1 {
@@ -420,7 +420,7 @@ func TestSyncVolatileRawAttributeOnlyRefreshesSnapshot(t *testing.T) {
 	if err != nil {
 		t.Fatalf("同步易变 RDS 属性失败：%v", err)
 	}
-	if string(job.Statistics) != `{"ec2":{"added":0,"deleted":0,"failed":0,"lost":0,"restored":0,"updated":0},"elb":{"added":0,"deleted":0,"failed":0,"lost":0,"restored":0,"updated":0},"rds":{"added":0,"deleted":0,"failed":0,"lost":0,"restored":0,"updated":0}}` {
+	if string(job.Statistics) != `{"alb":{"added":0,"deleted":0,"failed":0,"lost":0,"restored":0,"updated":0},"ec2":{"added":0,"deleted":0,"failed":0,"lost":0,"restored":0,"updated":0},"rds":{"added":0,"deleted":0,"failed":0,"lost":0,"restored":0,"updated":0}}` {
 		t.Fatalf("仅易变属性变化不得计为资源更新：%s", job.Statistics)
 	}
 	var persisted Database
@@ -459,7 +459,7 @@ func TestSyncVolatileRawAttributeDoesNotHideConfigurationChange(t *testing.T) {
 	if err != nil {
 		t.Fatalf("同步 RDS 配置变化失败：%v", err)
 	}
-	if string(job.Statistics) != `{"ec2":{"added":0,"deleted":0,"failed":0,"lost":0,"restored":0,"updated":0},"elb":{"added":0,"deleted":0,"failed":0,"lost":0,"restored":0,"updated":0},"rds":{"added":0,"deleted":0,"failed":0,"lost":0,"restored":0,"updated":1}}` {
+	if string(job.Statistics) != `{"alb":{"added":0,"deleted":0,"failed":0,"lost":0,"restored":0,"updated":0},"ec2":{"added":0,"deleted":0,"failed":0,"lost":0,"restored":0,"updated":0},"rds":{"added":0,"deleted":0,"failed":0,"lost":0,"restored":0,"updated":1}}` {
 		t.Fatalf("稳定配置变化必须计为资源更新：%s", job.Statistics)
 	}
 }
@@ -490,7 +490,7 @@ func TestSyncConfigurationChangeAlsoRefreshesVolatileRawAttribute(t *testing.T) 
 	if err := db.Where("external_id = ?", firstSnapshot.ExternalID).First(&persisted).Error; err != nil {
 		t.Fatalf("读取区域变化后的 RDS 失败：%v", err)
 	}
-	if string(job.Statistics) != `{"ec2":{"added":0,"deleted":0,"failed":0,"lost":0,"restored":0,"updated":0},"elb":{"added":0,"deleted":0,"failed":0,"lost":0,"restored":0,"updated":0},"rds":{"added":0,"deleted":0,"failed":0,"lost":0,"restored":0,"updated":1}}` || persisted.Region != secondSnapshot.Region || !jsonValuesEqual(persisted.RawAttributes, secondSnapshot.RawAttributes) {
+	if string(job.Statistics) != `{"alb":{"added":0,"deleted":0,"failed":0,"lost":0,"restored":0,"updated":0},"ec2":{"added":0,"deleted":0,"failed":0,"lost":0,"restored":0,"updated":0},"rds":{"added":0,"deleted":0,"failed":0,"lost":0,"restored":0,"updated":1}}` || persisted.Region != secondSnapshot.Region || !jsonValuesEqual(persisted.RawAttributes, secondSnapshot.RawAttributes) {
 		t.Fatalf("真实配置变化必须计数并同时保存最新原始快照：statistics=%s region=%s raw=%s", job.Statistics, persisted.Region, persisted.RawAttributes)
 	}
 }
@@ -510,7 +510,7 @@ func TestSyncChangedResourceRecordsOneUpdate(t *testing.T) {
 	if err != nil {
 		t.Fatalf("同步资源变更失败：%v", err)
 	}
-	if string(job.Statistics) != `{"ec2":{"added":0,"deleted":0,"failed":0,"lost":0,"restored":0,"updated":1},"elb":{"added":0,"deleted":0,"failed":0,"lost":0,"restored":0,"updated":0},"rds":{"added":0,"deleted":0,"failed":0,"lost":0,"restored":0,"updated":0}}` {
+	if string(job.Statistics) != `{"alb":{"added":0,"deleted":0,"failed":0,"lost":0,"restored":0,"updated":0},"ec2":{"added":0,"deleted":0,"failed":0,"lost":0,"restored":0,"updated":1},"rds":{"added":0,"deleted":0,"failed":0,"lost":0,"restored":0,"updated":0}}` {
 		t.Fatalf("真实业务变化必须计为一次更新：%s", job.Statistics)
 	}
 	var persisted Server
@@ -528,7 +528,7 @@ func TestSyncDetectsTypeSpecificFieldChanges(t *testing.T) {
 	service, db, source, now := newResourceServiceTest(t)
 	first := []CollectionResult{
 		{ResourceType: "rds", Snapshots: []Snapshot{{ExternalID: "db-specific", Engine: "mysql", EngineVersion: "8.0"}}},
-		{ResourceType: "elb", Snapshots: []Snapshot{{ExternalID: "lb-specific", NetworkType: "internet-facing"}}},
+		{ResourceType: "alb", Snapshots: []Snapshot{{ExternalID: "lb-specific", NetworkType: "internet-facing"}}},
 	}
 	if _, err := service.Sync(context.Background(), source.ID, "manual", collectorStub{results: first}); err != nil {
 		t.Fatalf("准备类型专属字段测试失败：%v", err)
@@ -536,13 +536,13 @@ func TestSyncDetectsTypeSpecificFieldChanges(t *testing.T) {
 	*now = now.Add(time.Hour)
 	second := []CollectionResult{
 		{ResourceType: "rds", Snapshots: []Snapshot{{ExternalID: "db-specific", Engine: "postgres", EngineVersion: "17"}}},
-		{ResourceType: "elb", Snapshots: []Snapshot{{ExternalID: "lb-specific", NetworkType: "internal"}}},
+		{ResourceType: "alb", Snapshots: []Snapshot{{ExternalID: "lb-specific", NetworkType: "internal"}}},
 	}
 	job, err := service.Sync(context.Background(), source.ID, "scheduled", collectorStub{results: second})
 	if err != nil {
 		t.Fatalf("同步类型专属字段变化失败：%v", err)
 	}
-	if string(job.Statistics) != `{"ec2":{"added":0,"deleted":0,"failed":0,"lost":0,"restored":0,"updated":0},"elb":{"added":0,"deleted":0,"failed":0,"lost":0,"restored":0,"updated":1},"rds":{"added":0,"deleted":0,"failed":0,"lost":0,"restored":0,"updated":1}}` {
+	if string(job.Statistics) != `{"alb":{"added":0,"deleted":0,"failed":0,"lost":0,"restored":0,"updated":1},"ec2":{"added":0,"deleted":0,"failed":0,"lost":0,"restored":0,"updated":0},"rds":{"added":0,"deleted":0,"failed":0,"lost":0,"restored":0,"updated":1}}` {
 		t.Fatalf("类型专属字段变化必须分别计为更新：%s", job.Statistics)
 	}
 	var database Database
@@ -592,7 +592,7 @@ func TestSyncEndpointOrderDoesNotCreateFalseUpdates(t *testing.T) {
 	if err != nil {
 		t.Fatalf("重复端点集合同步失败：%v", err)
 	}
-	if string(job.Statistics) != `{"ec2":{"added":0,"deleted":0,"failed":0,"lost":0,"restored":0,"updated":0},"elb":{"added":0,"deleted":0,"failed":0,"lost":0,"restored":0,"updated":0},"rds":{"added":0,"deleted":0,"failed":0,"lost":0,"restored":0,"updated":0}}` {
+	if string(job.Statistics) != `{"alb":{"added":0,"deleted":0,"failed":0,"lost":0,"restored":0,"updated":0},"ec2":{"added":0,"deleted":0,"failed":0,"lost":0,"restored":0,"updated":0},"rds":{"added":0,"deleted":0,"failed":0,"lost":0,"restored":0,"updated":0}}` {
 		t.Fatalf("相同端点集合换序不得计为更新：%s", job.Statistics)
 	}
 }
@@ -623,7 +623,7 @@ func TestSyncLegacyEndpointOrderDoesNotCreateUpgradeUpdate(t *testing.T) {
 	if err != nil {
 		t.Fatalf("同步旧版端点数据失败：%v", err)
 	}
-	if string(job.Statistics) != `{"ec2":{"added":0,"deleted":0,"failed":0,"lost":0,"restored":0,"updated":0},"elb":{"added":0,"deleted":0,"failed":0,"lost":0,"restored":0,"updated":0},"rds":{"added":0,"deleted":0,"failed":0,"lost":0,"restored":0,"updated":0}}` {
+	if string(job.Statistics) != `{"alb":{"added":0,"deleted":0,"failed":0,"lost":0,"restored":0,"updated":0},"ec2":{"added":0,"deleted":0,"failed":0,"lost":0,"restored":0,"updated":0},"rds":{"added":0,"deleted":0,"failed":0,"lost":0,"restored":0,"updated":0}}` {
 		t.Fatalf("旧版端点数据与相同快照不得产生升级伪更新：%s", job.Statistics)
 	}
 }
@@ -643,7 +643,7 @@ func TestSyncRawAttributesPreserveLargeIntegerChanges(t *testing.T) {
 	if err != nil {
 		t.Fatalf("同步大整数属性变化失败：%v", err)
 	}
-	if string(job.Statistics) != `{"ec2":{"added":0,"deleted":0,"failed":0,"lost":0,"restored":0,"updated":1},"elb":{"added":0,"deleted":0,"failed":0,"lost":0,"restored":0,"updated":0},"rds":{"added":0,"deleted":0,"failed":0,"lost":0,"restored":0,"updated":0}}` {
+	if string(job.Statistics) != `{"alb":{"added":0,"deleted":0,"failed":0,"lost":0,"restored":0,"updated":0},"ec2":{"added":0,"deleted":0,"failed":0,"lost":0,"restored":0,"updated":1},"rds":{"added":0,"deleted":0,"failed":0,"lost":0,"restored":0,"updated":0}}` {
 		t.Fatalf("大整数属性变化必须计为更新：%s", job.Statistics)
 	}
 	var persisted Server
@@ -658,7 +658,7 @@ func TestSyncRoutesAssetsIntoThreeTables(t *testing.T) {
 	results := []CollectionResult{
 		{ResourceType: "ec2", Snapshots: []Snapshot{{ExternalID: "i-1", Endpoints: []EndpointSnapshot{{Kind: "private", Address: "10.0.0.8"}}}}},
 		{ResourceType: "rds", Snapshots: []Snapshot{{ExternalID: "db-1", Engine: "mysql", EngineVersion: "8.0", Endpoints: []EndpointSnapshot{{Kind: "hostname", Address: "db.example", Port: 3306}}}}},
-		{ResourceType: "elb", Snapshots: []Snapshot{{ExternalID: "lb-1", NetworkType: "internet-facing", Endpoints: []EndpointSnapshot{{Kind: "public", Address: "lb.example", Port: 443}}}}},
+		{ResourceType: "alb", Snapshots: []Snapshot{{ExternalID: "lb-1", NetworkType: "internet-facing", Endpoints: []EndpointSnapshot{{Kind: "public", Address: "lb.example", Port: 443}}}}},
 	}
 	if _, err := service.Sync(context.Background(), source.ID, "manual", collectorStub{results: results}); err != nil {
 		t.Fatalf("三类资产同步失败：%v", err)
@@ -685,7 +685,7 @@ func TestSyncPersistsAndReturnsServerHardwareDetails(t *testing.T) {
 	results := []CollectionResult{
 		{ResourceType: "ec2", Snapshots: []Snapshot{{ExternalID: "i-hardware", InstanceType: "c6a.xlarge", VCPU: 4, Memory: 8192, Disks: snapshotDisks}}},
 		{ResourceType: "rds"},
-		{ResourceType: "elb"},
+		{ResourceType: "alb"},
 	}
 	if _, err := service.Sync(context.Background(), source.ID, "manual", collectorStub{results: results}); err != nil {
 		t.Fatalf("同步服务器规格失败：%v", err)
@@ -874,7 +874,7 @@ func TestSyncDeletesExpiredLostResourcesAfterRestoringSeenResources(t *testing.T
 	if err != nil {
 		t.Fatalf("执行带过期失联资源的同步失败：%v", err)
 	}
-	if string(job.Statistics) != `{"ec2":{"added":0,"deleted":1,"failed":0,"lost":0,"restored":1,"updated":0},"elb":{"added":0,"deleted":0,"failed":0,"lost":0,"restored":0,"updated":0},"rds":{"added":0,"deleted":0,"failed":0,"lost":0,"restored":0,"updated":0}}` {
+	if string(job.Statistics) != `{"alb":{"added":0,"deleted":0,"failed":0,"lost":0,"restored":0,"updated":0},"ec2":{"added":0,"deleted":1,"failed":0,"lost":0,"restored":1,"updated":0},"rds":{"added":0,"deleted":0,"failed":0,"lost":0,"restored":0,"updated":0}}` {
 		t.Fatalf("同步任务必须记录恢复和删除数量：%s", job.Statistics)
 	}
 	var deletedCount int64
@@ -985,7 +985,7 @@ func TestConnectionUsesLightweightProbe(t *testing.T) {
 	collectCalls, probeCalls := 0, 0
 	collector := collectorStub{
 		results:      []CollectionResult{{ResourceType: "ec2", Err: errors.New("完整采集不应执行")}},
-		probeResults: []CollectionResult{{ResourceType: "ec2"}, {ResourceType: "rds"}, {ResourceType: "elb"}},
+		probeResults: []CollectionResult{{ResourceType: "ec2"}, {ResourceType: "rds"}, {ResourceType: "alb"}},
 		collectCalls: &collectCalls,
 		probeCalls:   &probeCalls,
 	}
@@ -1002,12 +1002,12 @@ func TestConnectionUsesLightweightProbe(t *testing.T) {
 // TestConnectionReturnsEmptyJSONArrays 防止成功响应把空类型集合编码为 null 并导致前端读取 length 失败。
 func TestConnectionReturnsEmptyJSONArrays(t *testing.T) {
 	service, _, source, _ := newResourceServiceTest(t)
-	result, err := service.TestConnection(context.Background(), source.ProjectID, source.ID, collectorStub{probeResults: []CollectionResult{{ResourceType: "ec2"}, {ResourceType: "rds"}, {ResourceType: "elb"}}})
+	result, err := service.TestConnection(context.Background(), source.ProjectID, source.ID, collectorStub{probeResults: []CollectionResult{{ResourceType: "ec2"}, {ResourceType: "rds"}, {ResourceType: "alb"}}})
 	if err != nil {
 		t.Fatalf("连接探测失败：%v", err)
 	}
 	encoded, err := json.Marshal(result)
-	if err != nil || !strings.Contains(string(encoded), `"reachable_types":["ec2","rds","elb"]`) || !strings.Contains(string(encoded), `"failed_types":[]`) {
+	if err != nil || !strings.Contains(string(encoded), `"reachable_types":["ec2","rds","alb"]`) || !strings.Contains(string(encoded), `"failed_types":[]`) {
 		t.Fatalf("连接结果必须使用 JSON 数组：%s，错误：%v", encoded, err)
 	}
 }

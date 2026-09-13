@@ -51,7 +51,7 @@ func TestProjectDeletionDependencies(t *testing.T) {
 				base.ResourceType = "rds"
 				asset = &resource.Database{AssetBase: base, Endpoints: json.RawMessage(`[{"address":"db.example.invalid","port":5432}]`)}
 			case strings.HasPrefix(dependency, "负载均衡"):
-				base.ResourceType = "elb"
+				base.ResourceType = "alb"
 				asset = &resource.LoadBalancer{AssetBase: base, Endpoints: json.RawMessage(`[{"address":"lb.example.invalid","port":443}]`)}
 			}
 			if asset != nil {

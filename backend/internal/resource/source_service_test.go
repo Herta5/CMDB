@@ -38,7 +38,7 @@ func TestSourceDeletionDependencies(t *testing.T) {
 				base.ResourceType = "rds"
 				asset = &Database{AssetBase: base, Endpoints: json.RawMessage(`[{"address":"db.example.invalid","port":5432}]`)}
 			case strings.HasPrefix(dependency, "负载均衡"):
-				base.ResourceType = "elb"
+				base.ResourceType = "alb"
 				asset = &LoadBalancer{AssetBase: base, Endpoints: json.RawMessage(`[{"address":"lb.example.invalid","port":443}]`)}
 			}
 			if asset != nil {
@@ -130,7 +130,7 @@ func (a identityAdapterStub) ValidateConfig(raw json.RawMessage) error {
 }
 
 // ResourceTypes 提供同步测试使用的 AWS 首期资源范围。
-func (a identityAdapterStub) ResourceTypes() []string { return []string{"ec2", "rds", "elb"} }
+func (a identityAdapterStub) ResourceTypes() []string { return []string{"ec2", "rds", "alb"} }
 
 // ResolveCloudAccountID 替代联网身份解析，返回测试显式指定的安全响应。
 func (a identityAdapterStub) ResolveCloudAccountID(ctx context.Context, source Source, plain []byte) (string, error) {
