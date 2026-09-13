@@ -198,6 +198,16 @@ func (c collectorStub) Probe(context.Context, Source, []byte) ([]CollectionResul
 	return c.probeResults, c.probeErr
 }
 
+// loadBalancerTypesAdapter 仅为具体负载均衡类型回归测试声明 AWS 六类资源范围。
+type loadBalancerTypesAdapter struct {
+	identityAdapterStub
+}
+
+// ResourceTypes 保持具体负载均衡类型独立，不让旧 elb 聚合类型进入同步契约。
+func (loadBalancerTypesAdapter) ResourceTypes() []string {
+	return []string{"ec2", "rds", "clb", "alb", "nlb", "gwlb"}
+}
+
 func newResourceServiceTest(t *testing.T) (*Service, *gorm.DB, *Source, *time.Time) {
 	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{Logger: logger.Default.LogMode(logger.Silent)})
 	if err != nil {
@@ -674,6 +684,91 @@ func TestSyncRoutesAssetsIntoThreeTables(t *testing.T) {
 	}
 }
 
+// TestSyncLoadBalancerTypesKeepIndependentLifecycleAndStatistics 验证共表负载均衡仍按具体类型隔离身份、生命周期和统计。
+func TestSyncLoadBalancerTypesKeepIndependentLifecycleAndStatistics(t *testing.T) {
+	service, db, source, now := newResourceServiceTest(t)
+	service.adapters[ProviderAWS] = loadBalancerTypesAdapter{}
+	const sharedExternalID = "lb-shared-identity"
+	first := []CollectionResult{
+		{ResourceType: "ec2"},
+		{ResourceType: "rds"},
+		{ResourceType: "clb", Snapshots: []Snapshot{{ExternalID: sharedExternalID, Name: "CLB 基线", NetworkType: "classic", RawAttributes: []byte(`{"kind":"clb"}`)}}},
+		{ResourceType: "alb", Snapshots: []Snapshot{{ExternalID: sharedExternalID, Name: "ALB 基线", NetworkType: "internet-facing", RawAttributes: []byte(`{"kind":"alb","version":1}`)}}},
+		{ResourceType: "nlb", Snapshots: []Snapshot{{ExternalID: sharedExternalID, Name: "NLB 基线", NetworkType: "internet-facing", RawAttributes: []byte(`{"kind":"nlb"}`)}}},
+		{ResourceType: "gwlb", Snapshots: []Snapshot{{ExternalID: sharedExternalID, Name: "GWLB 基线", NetworkType: "internal", RawAttributes: []byte(`{"kind":"gwlb"}`)}}},
+	}
+	if _, err := service.Sync(context.Background(), source.ID, "manual", collectorStub{results: first, rawResults: true}); err != nil {
+		t.Fatalf("准备具体负载均衡基线失败：%v", err)
+	}
+
+	var baseline []LoadBalancer
+	if err := db.Where("source_id = ? AND external_id = ?", source.ID, sharedExternalID).Order("resource_type").Find(&baseline).Error; err != nil {
+		t.Fatalf("读取具体负载均衡基线失败：%v", err)
+	}
+	if len(baseline) != 4 {
+		t.Fatalf("相同云端 ID 必须按四种具体负载均衡类型创建四条记录，实际 %d 条", len(baseline))
+	}
+	baselineByType := make(map[string]LoadBalancer, len(baseline))
+	for _, value := range baseline {
+		baselineByType[value.ResourceType] = value
+	}
+
+	*now = now.Add(time.Hour)
+	second := []CollectionResult{
+		{ResourceType: "ec2"},
+		{ResourceType: "rds"},
+		{ResourceType: "clb"},
+		{ResourceType: "alb", Err: errors.New("ALB 类型采集失败")},
+		{ResourceType: "nlb", Snapshots: []Snapshot{{ExternalID: sharedExternalID, Name: "NLB 基线", NetworkType: "internet-facing", RawAttributes: []byte(`{"kind":"nlb"}`)}}},
+		{ResourceType: "gwlb", Snapshots: []Snapshot{{ExternalID: sharedExternalID, Name: "GWLB 基线", NetworkType: "internet-facing", RawAttributes: []byte(`{"kind":"gwlb"}`)}}},
+	}
+	job, err := service.Sync(context.Background(), source.ID, "manual", collectorStub{results: second, rawResults: true})
+	if err != nil || job.Status != "partial_success" {
+		t.Fatalf("单个具体负载均衡类型失败时任务必须部分成功：job=%+v err=%v", job, err)
+	}
+
+	currentByType := make(map[string]LoadBalancer, 4)
+	for _, resourceType := range []string{"clb", "alb", "nlb", "gwlb"} {
+		var current LoadBalancer
+		if err := db.Where("source_id = ? AND resource_type = ? AND external_id = ?", source.ID, resourceType, sharedExternalID).First(&current).Error; err != nil {
+			t.Fatalf("读取 %s 负载均衡失败：%v", resourceType, err)
+		}
+		currentByType[resourceType] = current
+	}
+	clb := currentByType["clb"]
+	if clb.AssetStatus != AssetStatusLost || clb.MissingSince == nil {
+		t.Fatalf("CLB 成功空采集必须只将 CLB 标记失联：%+v", clb)
+	}
+	alb, albBaseline := currentByType["alb"], baselineByType["alb"]
+	if alb.AssetStatus != AssetStatusActive || alb.MissingSince != nil || !alb.LastSeenAt.Equal(albBaseline.LastSeenAt) || alb.Name != albBaseline.Name || alb.NetworkType != albBaseline.NetworkType || !jsonValuesEqual(alb.RawAttributes, albBaseline.RawAttributes) {
+		t.Fatalf("ALB 类型失败必须完整保留原状态、最近发现时间和快照：before=%+v after=%+v", albBaseline, alb)
+	}
+	nlb := currentByType["nlb"]
+	if nlb.AssetStatus != AssetStatusActive || nlb.MissingSince != nil || !nlb.LastSeenAt.Equal(*now) {
+		t.Fatalf("NLB 成功重见必须保持正常并刷新最近发现时间：%+v", nlb)
+	}
+	gwlb := currentByType["gwlb"]
+	if gwlb.AssetStatus != AssetStatusActive || gwlb.MissingSince != nil || gwlb.NetworkType != "internet-facing" {
+		t.Fatalf("GWLB 真实业务字段变化必须独立更新且保持正常：%+v", gwlb)
+	}
+
+	var statistics map[string]map[string]int
+	if err := json.Unmarshal(job.Statistics, &statistics); err != nil {
+		t.Fatalf("解析六类型同步统计失败：%v", err)
+	}
+	wantStatistics := map[string]map[string]int{
+		"ec2":  {"added": 0, "updated": 0, "restored": 0, "lost": 0, "deleted": 0, "failed": 0},
+		"rds":  {"added": 0, "updated": 0, "restored": 0, "lost": 0, "deleted": 0, "failed": 0},
+		"clb":  {"added": 0, "updated": 0, "restored": 0, "lost": 1, "deleted": 0, "failed": 0},
+		"alb":  {"added": 0, "updated": 0, "restored": 0, "lost": 0, "deleted": 0, "failed": 1},
+		"nlb":  {"added": 0, "updated": 0, "restored": 0, "lost": 0, "deleted": 0, "failed": 0},
+		"gwlb": {"added": 0, "updated": 1, "restored": 0, "lost": 0, "deleted": 0, "failed": 0},
+	}
+	if !reflect.DeepEqual(statistics, wantStatistics) {
+		t.Fatalf("六类型统计必须完全隔离且不得包含 elb：got=%v want=%v", statistics, wantStatistics)
+	}
+}
+
 // TestSyncPersistsAndReturnsServerHardwareDetails 防止服务器规格或磁盘明细在统一持久化与查询链路中丢失。
 func TestSyncPersistsAndReturnsServerHardwareDetails(t *testing.T) {
 	service, db, source, _ := newResourceServiceTest(t)
@@ -976,6 +1071,37 @@ func TestConnectionDoesNotPersistSnapshots(t *testing.T) {
 	_ = db.Model(&Server{}).Count(&count).Error
 	if count != 0 {
 		t.Fatal("连接测试不得持久化探测快照")
+	}
+}
+
+// TestConnectionKeepsConcreteLoadBalancerTypes 验证连接探测只报告具体类型并保持各结果集合的输入顺序。
+func TestConnectionKeepsConcreteLoadBalancerTypes(t *testing.T) {
+	service, db, source, _ := newResourceServiceTest(t)
+	probeResults := []CollectionResult{
+		{ResourceType: "ec2"},
+		{ResourceType: "rds"},
+		{ResourceType: "clb"},
+		{ResourceType: "alb", Err: ErrCloudPermission},
+		{ResourceType: "nlb"},
+		{ResourceType: "gwlb"},
+	}
+	result, err := service.TestConnection(context.Background(), source.ProjectID, source.ID, collectorStub{probeResults: probeResults})
+	if err != nil {
+		t.Fatalf("具体负载均衡类型连接探测失败：%v", err)
+	}
+	wantReachable := []string{"ec2", "rds", "clb", "nlb", "gwlb"}
+	wantFailed := []string{"alb"}
+	if !reflect.DeepEqual(result.ReachableTypes, wantReachable) || !reflect.DeepEqual(result.FailedTypes, wantFailed) {
+		t.Fatalf("连接结果必须按输入顺序保留具体类型且不得聚合为 elb：got=%+v", result)
+	}
+	for _, resourceType := range append(append([]string{}, result.ReachableTypes...), result.FailedTypes...) {
+		if resourceType == "elb" {
+			t.Fatal("连接结果不得包含旧 elb 聚合类型")
+		}
+	}
+	var count int64
+	if err := db.Model(&LoadBalancer{}).Count(&count).Error; err != nil || count != 0 {
+		t.Fatalf("连接探测不得写入任何负载均衡资源：count=%d err=%v", count, err)
 	}
 }
 
