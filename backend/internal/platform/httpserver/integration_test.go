@@ -587,6 +587,9 @@ func TestProjectSourceAPINeverReturnsCredentials(t *testing.T) {
 	if !strings.Contains(resources.Body.String(), "i-integration") || !strings.Contains(resources.Body.String(), "10.0.0.8") || !strings.Contains(resources.Body.String(), `"source_name":"AWS 更新账号"`) {
 		t.Fatal("同步资源查询必须在分页前搜索全部资源并包含脱敏接入源名称")
 	}
+	if strings.Contains(resources.Body.String(), "raw_attributes") || strings.Contains(resources.Body.String(), "example-secret") {
+		t.Fatal("资源公开响应不得把云平台原始属性快照传到浏览器")
+	}
 	invalidResources := integrationRequest(t, server, member, http.MethodGet, path+"/resources?sort_by=raw_attributes", nil, http.StatusBadRequest)
 	if invalidResources.Body.String() != `{"code":"RESOURCE_INVALID_QUERY","message":"资源查询参数无效"}` {
 		t.Fatalf("非法资源查询必须返回稳定中文参数错误：%s", invalidResources.Body.String())

@@ -119,6 +119,10 @@ func (r *Repository) ListResources(ctx context.Context, projectID uint64, filter
 			}
 		}
 	}
+	// 服务器列表是当前高频分页入口，必须由数据库在完整范围筛选、排序后只返回当前页。
+	if len(tables) == 1 && tables[0] == "resources_servers" {
+		return r.listServerResources(ctx, projectID, filter)
+	}
 	sourceQuery := r.db.WithContext(ctx)
 	if projectID > 0 {
 		sourceQuery = sourceQuery.Where("project_id = ?", projectID)
@@ -204,6 +208,77 @@ func (r *Repository) ListResources(ctx context.Context, projectID uint64, filter
 		end = len(values)
 	}
 	return values[offset:end], total, nil
+}
+
+// listServerResources 使用固定投影排除原始属性，并让数据库承担搜索、计数、排序和分页。
+func (r *Repository) listServerResources(ctx context.Context, projectID uint64, filter ResourceListQuery) ([]Resource, int64, error) {
+	query := r.db.WithContext(ctx).Table("resources_servers AS assets").
+		Joins("JOIN resource_sources AS sources ON sources.id = assets.source_id").
+		Joins("JOIN projects ON projects.id = assets.project_id")
+	if projectID > 0 {
+		query = query.Where("assets.project_id = ?", projectID)
+	}
+	if len(filter.Providers) > 0 {
+		query = query.Where("assets.provider IN ?", filter.Providers)
+	}
+	if len(filter.ResourceTypes) > 0 {
+		query = query.Where("assets.resource_type IN ?", filter.ResourceTypes)
+	}
+	if filter.SourceID > 0 {
+		query = query.Where("assets.source_id = ?", filter.SourceID)
+	}
+	if filter.Region != "" {
+		query = query.Where("assets.region = ?", filter.Region)
+	}
+	if filter.CloudStatus != "" {
+		query = query.Where("LOWER(assets.cloud_status) = ?", strings.ToLower(filter.CloudStatus))
+	}
+	if filter.AssetStatus != "" {
+		query = query.Where("assets.asset_status = ?", filter.AssetStatus)
+	}
+	if keyword := strings.TrimSpace(filter.Keyword); keyword != "" {
+		pattern := "%" + strings.ToLower(escapedLikeValue(keyword)) + "%"
+		query = query.Where("(LOWER(assets.name) LIKE ? ESCAPE '\\' OR LOWER(assets.external_id) LIKE ? ESCAPE '\\' OR LOWER(CAST(assets.private_ips AS TEXT)) LIKE ? ESCAPE '\\' OR LOWER(CAST(assets.public_ips AS TEXT)) LIKE ? ESCAPE '\\')", pattern, pattern, pattern, pattern)
+	}
+	var total int64
+	if err := query.Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
+	orderColumn := map[string]string{
+		"name": "LOWER(assets.name)", "project": "LOWER(projects.name)", "source": "LOWER(sources.name)",
+		"resource_type": "assets.resource_type", "instance_type": "LOWER(assets.instance_type)", "vcpu": "assets.vcpu", "memory": "assets.memory",
+		"region": "LOWER(assets.region)", "cloud_status": "LOWER(assets.cloud_status)", "asset_status": "assets.asset_status", "last_seen_at": "assets.last_seen_at",
+	}[filter.SortBy]
+	if filter.SortBy == "disk_size" {
+		if r.db.Dialector.Name() == "postgres" {
+			orderColumn = "COALESCE((SELECT SUM(CAST(disk.value->>'size_gib' AS BIGINT)) FROM json_array_elements(assets.disks) AS disk(value)), 0)"
+		} else {
+			orderColumn = "COALESCE((SELECT SUM(CAST(json_extract(disk.value, '$.size_gib') AS INTEGER)) FROM json_each(assets.disks) AS disk), 0)"
+		}
+	}
+	orderDirection := "ASC"
+	if filter.SortOrder == "desc" {
+		orderDirection = "DESC"
+	}
+	selectColumns := "assets.id, assets.project_id, assets.source_id, assets.provider, assets.resource_type, assets.external_id, assets.name, assets.region, assets.zone, assets.cloud_status, assets.asset_status, assets.first_seen_at, assets.last_seen_at, assets.missing_since, assets.created_at, assets.updated_at, assets.instance_type, assets.vcpu, assets.memory, assets.private_ips, assets.public_ips, assets.disks, sources.name AS source_name, projects.name AS project_name"
+	var rows []assetRow
+	if err := query.Select(selectColumns).
+		Order(orderColumn + " " + orderDirection).
+		Order("assets.source_id ASC, assets.resource_type ASC, assets.external_id ASC").
+		Offset((filter.Page - 1) * filter.PageSize).Limit(filter.PageSize).Scan(&rows).Error; err != nil {
+		return nil, 0, err
+	}
+	values := make([]Resource, 0, len(rows))
+	for _, row := range rows {
+		value := resourceFromRow(row, "resources_servers")
+		value.SourceName, value.ProjectName = row.SourceName, row.ProjectName
+		values = append(values, value)
+	}
+	return values, total, nil
+}
+
+func escapedLikeValue(value string) string {
+	return strings.NewReplacer("\\", "\\\\", "%", "\\%", "_", "\\_").Replace(value)
 }
 
 // resourceMatchesKeyword 对列表公开字段做不区分大小写的模糊匹配，服务器 IP 直接使用规范化端点视图。

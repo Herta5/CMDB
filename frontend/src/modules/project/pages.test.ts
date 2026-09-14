@@ -342,6 +342,7 @@ describe('项目控制台页面', () => {
       .map(([, options]) => options.params.resource_type)
     expect(requestedTypes).toEqual(['slb,clb,alb,nlb,gwlb'])
     expect(requestedTypes).not.toContain('elb')
+    expect(get).toHaveBeenCalledWith('/projects/2/resources', { params: expect.objectContaining({ page: 1, page_size: 200 }) })
     app.unmount()
   })
   it('首页只汇总当前项目的正常服务器、数据库和负载均衡', async () => {
@@ -491,6 +492,7 @@ describe('项目控制台页面', () => {
     const provider = all(root).find(n => n.type === 'select' && text(n).includes('阿里云') && text(n).includes('AWS'))!
     const updateProvider = provider.props.onChange ?? provider.props['onUpdate:modelValue']
     if (provider.props.onChange) await updateProvider({ target: { value: 'aws' } }); else await updateProvider('aws')
+    expect(text(root)).not.toContain('云平台：AWS')
     await all(root).find(n => n.type === 'button' && text(n) === '应用筛选')!.props.onClick()
     await flush()
     expect(get).toHaveBeenLastCalledWith('/projects/2/resources', { params: expect.objectContaining({ provider: 'aws', page: 1 }) })

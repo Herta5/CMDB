@@ -336,6 +336,9 @@ func normalizedResourceListQuery(query ResourceListQuery) (ResourceListQuery, er
 	if query.PageSize < 1 || query.PageSize > 200 {
 		query.PageSize = 20
 	}
+	if query.Page > int(^uint(0)>>1)/query.PageSize {
+		return query, ErrInvalidResourceQuery
+	}
 	return query, nil
 }
 

@@ -15,6 +15,8 @@ import (
 // assetRow 覆盖三张表的字段超集，仅在资源核心内部用于统一读写。
 type assetRow struct {
 	AssetBase
+	SourceName     string
+	ProjectName    string
 	InstanceType   string
 	VCPU           sql.NullInt64 `gorm:"column:vcpu"`
 	Memory         sql.NullInt64

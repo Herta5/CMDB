@@ -43,18 +43,19 @@ func (Source) TableName() string { return "resource_sources" }
 
 // AssetBase 是三类资产共享的持久化字段，业务逻辑通过它保持一致。
 type AssetBase struct {
-	ID            uint64          `gorm:"primaryKey" json:"id"`
-	ProjectID     uint64          `gorm:"not null;index" json:"project_id"`
-	SourceID      uint64          `gorm:"not null;uniqueIndex:,composite:resource_identity" json:"source_id"`
-	Provider      string          `gorm:"size:32;not null;index" json:"provider"`
-	ResourceType  string          `gorm:"size:64;not null;uniqueIndex:,composite:resource_identity" json:"resource_type"`
-	ExternalID    string          `gorm:"size:255;not null;uniqueIndex:,composite:resource_identity" json:"external_id"`
-	Name          string          `gorm:"size:255;not null" json:"name"`
-	Region        string          `gorm:"size:128;not null" json:"region"`
-	Zone          string          `gorm:"size:128;not null" json:"zone"`
-	CloudStatus   string          `gorm:"size:64;not null" json:"cloud_status"`
-	AssetStatus   string          `gorm:"size:32;not null;index" json:"asset_status"`
-	RawAttributes json.RawMessage `gorm:"type:json" json:"raw_attributes"`
+	ID           uint64 `gorm:"primaryKey" json:"id"`
+	ProjectID    uint64 `gorm:"not null;index" json:"project_id"`
+	SourceID     uint64 `gorm:"not null;uniqueIndex:,composite:resource_identity" json:"source_id"`
+	Provider     string `gorm:"size:32;not null;index" json:"provider"`
+	ResourceType string `gorm:"size:64;not null;uniqueIndex:,composite:resource_identity" json:"resource_type"`
+	ExternalID   string `gorm:"size:255;not null;uniqueIndex:,composite:resource_identity" json:"external_id"`
+	Name         string `gorm:"size:255;not null" json:"name"`
+	Region       string `gorm:"size:128;not null" json:"region"`
+	Zone         string `gorm:"size:128;not null" json:"zone"`
+	CloudStatus  string `gorm:"size:64;not null" json:"cloud_status"`
+	AssetStatus  string `gorm:"size:32;not null;index" json:"asset_status"`
+	// 原始属性只供同步模块比较与持久化，任何公开 API 都不得序列化该快照。
+	RawAttributes json.RawMessage `gorm:"type:json" json:"-"`
 	FirstSeenAt   time.Time       `json:"first_seen_at"`
 	LastSeenAt    time.Time       `json:"last_seen_at"`
 	MissingSince  *time.Time      `json:"missing_since"`

@@ -896,6 +896,14 @@ func TestListResourcesSupportsServerSearchFiltersAndStableSorting(t *testing.T) 
 	if err != nil || total != 2 || len(values) != 1 || values[0].Name != "A-订单节点" {
 		t.Fatalf("名称升序与服务端分页不正确：total=%d values=%+v err=%v", total, values, err)
 	}
+	values, _, err = service.ListResources(context.Background(), 1, ResourceListQuery{ResourceTypes: []string{"ecs", "ec2"}, SortBy: "disk_size", SortOrder: "desc", Page: 1, PageSize: 1})
+	if err != nil || len(values) != 1 || values[0].ExternalID != "i-z" {
+		t.Fatalf("磁盘总容量必须由数据库排序后再分页：values=%+v err=%v", values, err)
+	}
+	values, _, err = service.ListResources(context.Background(), 1, ResourceListQuery{ResourceTypes: []string{"ecs", "ec2"}, SortBy: "vcpu", SortOrder: "desc", Page: 1, PageSize: 2})
+	if err != nil || len(values) != 2 || values[0].SourceID != source.ID || values[1].SourceID != secondSource.ID {
+		t.Fatalf("主排序同值时资源身份次级排序必须固定升序：values=%+v err=%v", values, err)
+	}
 }
 
 // TestListResourcesRejectsUnsupportedQuery 验证未知筛选值和排序字段不会下沉成数据库故障。
@@ -907,6 +915,7 @@ func TestListResourcesRejectsUnsupportedQuery(t *testing.T) {
 		{AssetStatus: "deleted"},
 		{SortBy: "raw_attributes"},
 		{SortBy: "name", SortOrder: "sideways"},
+		{Page: int(^uint(0) >> 1), PageSize: 100},
 	} {
 		if _, _, err := service.ListResources(context.Background(), source.ProjectID, query); !errors.Is(err, ErrInvalidResourceQuery) {
 			t.Fatalf("非法资源查询应返回稳定参数错误：query=%+v err=%v", query, err)
