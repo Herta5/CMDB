@@ -60,19 +60,38 @@ func run(args []string, input io.Reader, db *gorm.DB) error {
 	if err != nil {
 		return errors.New("生成初始化密码哈希失败")
 	}
-	// 关闭此敏感写入的 SQL 日志，失败时也不得输出密码哈希；固定首个 ID 使并发初始化最多成功一次。
-	return db.Session(&gorm.Session{Logger: logger.Default.LogMode(logger.Silent)}).Transaction(func(tx *gorm.DB) error {
+	databaseSetupError := errors.New("初始化失败：请先完成数据库首次初始化")
+	nonEmptyDatabaseError := errors.New("初始化被拒绝：用户库非空")
+	createAdminError := errors.New("管理员初始化失败，未覆盖已有身份")
+	// 关闭此敏感写入的 SQL 日志，失败时也不得输出密码哈希；生产库先串行化空库判断，防止并发创建多个管理员。
+	transactionError := db.Session(&gorm.Session{Logger: logger.Default.LogMode(logger.Silent)}).Transaction(func(tx *gorm.DB) error {
+		if tx.Dialector.Name() == "postgres" {
+			// 初始化只执行一次且此时尚无可登录用户，短时表锁不会影响正常业务写入。
+			if err := tx.Exec("LOCK TABLE users IN EXCLUSIVE MODE").Error; err != nil {
+				return databaseSetupError
+			}
+		}
 		var count int64
 		if err := tx.Model(&identity.User{}).Count(&count).Error; err != nil {
-			return errors.New("初始化失败：请先完成数据库首次初始化")
+			return databaseSetupError
 		}
 		if count != 0 {
-			return errors.New("初始化被拒绝：用户库非空")
+			return nonEmptyDatabaseError
 		}
-		user := identity.User{ID: 1, Username: name, PasswordHash: hash, DisplayName: name, GlobalRole: identity.GlobalRoleSystemAdmin, Status: "active"}
+		user := identity.User{Username: name, PasswordHash: hash, DisplayName: name, GlobalRole: identity.GlobalRoleSystemAdmin, Status: "active"}
 		if err := tx.Create(&user).Error; err != nil {
-			return errors.New("管理员初始化失败，未覆盖已有身份")
+			return createAdminError
 		}
 		return nil
 	})
+	if transactionError == nil {
+		return nil
+	}
+	for _, safeError := range []error{databaseSetupError, nonEmptyDatabaseError, createAdminError} {
+		if errors.Is(transactionError, safeError) {
+			return safeError
+		}
+	}
+	// Begin、Commit 等事务边界错误不经过回调，必须在命令输出前统一收敛底层细节。
+	return errors.New("管理员初始化失败，请稍后重试")
 }

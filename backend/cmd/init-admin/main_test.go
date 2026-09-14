@@ -49,6 +49,23 @@ func TestInitializeAdminRequiresInitialDatabaseSetup(t *testing.T) {
 	}
 }
 
+// TestInitializeAdminHidesTransactionErrors 验证事务边界故障不会向操作者输出驱动或连接细节。
+func TestInitializeAdminHidesTransactionErrors(t *testing.T) {
+	db := adminDatabase(t)
+	sqlDB, err := db.DB()
+	if err != nil {
+		t.Fatal("读取初始化测试连接失败")
+	}
+	if err := sqlDB.Close(); err != nil {
+		t.Fatal("关闭初始化测试连接失败")
+	}
+
+	err = run([]string{"--username", "operator"}, strings.NewReader(adminPassword(t)), db)
+	if err == nil || err.Error() != "管理员初始化失败，请稍后重试" {
+		t.Fatalf("事务边界故障必须收敛为固定中文错误，实际为：%v", err)
+	}
+}
+
 // TestInitializeAdminRejectsUnsafeInput 防止凭证通过参数泄露或无效输入创建身份。
 func TestInitializeAdminRejectsUnsafeInput(t *testing.T) {
 	for _, test := range []struct {

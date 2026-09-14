@@ -5,8 +5,10 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"testing"
 
+	"github.com/jackc/pgx/v5/pgconn"
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
@@ -77,8 +79,8 @@ func TestUserRepositoryCreatesAndFindsUserByUsername(t *testing.T) {
 	}
 }
 
-// TestUserRepositoryClassifiesDuplicateUsername 验证并发创建绕过预检查后，数据库唯一约束仍会转换为稳定业务错误。
-func TestUserRepositoryClassifiesDuplicateUsername(t *testing.T) {
+// TestUserRepositoryDoesNotClassifyUnnamedUniqueConstraint 验证缺少 PostgreSQL 约束名时仓储保留内部错误。
+func TestUserRepositoryDoesNotClassifyUnnamedUniqueConstraint(t *testing.T) {
 	db, _ := newUserRepositoryTestDB(t)
 	if err := db.Exec("CREATE UNIQUE INDEX uk_users_username ON users(username)").Error; err != nil {
 		t.Fatalf("准备用户名唯一约束失败：%v", err)
@@ -89,8 +91,26 @@ func TestUserRepositoryClassifiesDuplicateUsername(t *testing.T) {
 	if err := repository.Create(context.Background(), first); err != nil {
 		t.Fatalf("准备首个用户失败：%v", err)
 	}
-	if err := repository.CreateWithPermissions(context.Background(), second, nil); !errors.Is(err, ErrDuplicateUsername) {
+	if err := repository.CreateWithPermissions(context.Background(), second, nil); err == nil || errors.Is(err, ErrDuplicateUsername) {
+		t.Fatalf("缺少 PostgreSQL 约束名的唯一冲突必须保留为内部错误，实际为：%v", err)
+	}
+}
+
+// TestNormalizeUserWriteErrorOnlyClassifiesUsernameConstraint 防止主键等内部唯一冲突被误报为用户名已存在。
+func TestNormalizeUserWriteErrorOnlyClassifiesUsernameConstraint(t *testing.T) {
+	usernameConflict := fmt.Errorf("%w: %w", gorm.ErrDuplicatedKey, &pgconn.PgError{Code: "23505", ConstraintName: "uk_users_username"})
+	if err := normalizeUserWriteError(usernameConflict); !errors.Is(err, ErrDuplicateUsername) {
 		t.Fatalf("用户名唯一约束必须转换为重复用户名错误，实际为：%v", err)
+	}
+
+	primaryKeyConflict := fmt.Errorf("%w: %w", gorm.ErrDuplicatedKey, &pgconn.PgError{Code: "23505", ConstraintName: "users_pkey"})
+	if err := normalizeUserWriteError(primaryKeyConflict); errors.Is(err, ErrDuplicateUsername) {
+		t.Fatalf("用户主键冲突不得伪装为重复用户名错误：%v", err)
+	}
+
+	unnamedConflict := fmt.Errorf("未识别唯一约束: %w", gorm.ErrDuplicatedKey)
+	if err := normalizeUserWriteError(unnamedConflict); errors.Is(err, ErrDuplicateUsername) {
+		t.Fatalf("缺少约束名的唯一冲突不得猜测为重复用户名错误：%v", err)
 	}
 }
 

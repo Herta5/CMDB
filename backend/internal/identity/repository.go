@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"cmdb/internal/audit"
+	"github.com/jackc/pgx/v5/pgconn"
 	"gorm.io/gorm"
 )
 
@@ -120,11 +121,19 @@ func (r *gormUserRepository) CreateWithPermissions(ctx context.Context, user *Us
 	})
 }
 
-// normalizeUserWriteError 将数据库唯一约束转换为稳定业务错误，覆盖并发创建绕过预检查的时序。
+// normalizeUserWriteError 只将用户名唯一约束转换为稳定业务错误，主键等内部冲突必须保留为服务故障。
 func normalizeUserWriteError(err error) error {
-	if errors.Is(err, gorm.ErrDuplicatedKey) {
-		return ErrDuplicateUsername
+	if !errors.Is(err, gorm.ErrDuplicatedKey) {
+		return err
 	}
+	var postgresError *pgconn.PgError
+	if errors.As(err, &postgresError) {
+		if postgresError.ConstraintName == "uk_users_username" {
+			return ErrDuplicateUsername
+		}
+		return err
+	}
+	// 无法确认约束名时不得猜测业务原因，避免把主键等内部冲突伪装成用户名重复。
 	return err
 }
 
