@@ -68,27 +68,29 @@ func (c *Collector) Collect(ctx context.Context, source resource.Source, plain [
 	if json.Unmarshal(plain, &auth) != nil || auth.AccessKeyID == "" || auth.AccessKeySecret == "" || source.Region == "" {
 		return nil, resource.ErrAuthenticationFailed
 	}
-	ecsClient, err := ecs.NewClientWithAccessKey(source.Region, auth.AccessKeyID, auth.AccessKeySecret)
+	clientConfig := newAliyunHTTPSConfig()
+	clientCredential := newAliyunSDKCredential(auth.AccessKeyID, auth.AccessKeySecret)
+	ecsClient, err := ecs.NewClientWithOptions(source.Region, clientConfig, clientCredential)
 	if err != nil {
 		return nil, resource.ErrAuthenticationFailed
 	}
-	rdsClient, err := rds.NewClientWithAccessKey(source.Region, auth.AccessKeyID, auth.AccessKeySecret)
+	rdsClient, err := rds.NewClientWithOptions(source.Region, clientConfig, clientCredential)
 	if err != nil {
 		return nil, resource.ErrAuthenticationFailed
 	}
-	slbClient, err := slb.NewClientWithAccessKey(source.Region, auth.AccessKeyID, auth.AccessKeySecret)
+	slbClient, err := slb.NewClientWithOptions(source.Region, clientConfig, clientCredential)
 	if err != nil {
 		return nil, resource.ErrAuthenticationFailed
 	}
-	albClient, err := alb.NewClientWithAccessKey(source.Region, auth.AccessKeyID, auth.AccessKeySecret)
+	albClient, err := alb.NewClientWithOptions(source.Region, clientConfig, clientCredential)
 	if err != nil {
 		return nil, resource.ErrAuthenticationFailed
 	}
-	nlbClient, err := nlb.NewClientWithAccessKey(source.Region, auth.AccessKeyID, auth.AccessKeySecret)
+	nlbClient, err := nlb.NewClientWithOptions(source.Region, clientConfig, clientCredential)
 	if err != nil {
 		return nil, resource.ErrAuthenticationFailed
 	}
-	gwlbClient, err := gwlb.NewClientWithAccessKey(source.Region, auth.AccessKeyID, auth.AccessKeySecret)
+	gwlbClient, err := gwlb.NewClientWithOptions(source.Region, clientConfig, clientCredential)
 	if err != nil {
 		return nil, resource.ErrAuthenticationFailed
 	}
@@ -158,27 +160,29 @@ func (c *Collector) Probe(ctx context.Context, source resource.Source, plain []b
 	if json.Unmarshal(plain, &auth) != nil || auth.AccessKeyID == "" || auth.AccessKeySecret == "" || source.Region == "" {
 		return nil, resource.ErrAuthenticationFailed
 	}
-	ecsClient, err := ecs.NewClientWithAccessKey(source.Region, auth.AccessKeyID, auth.AccessKeySecret)
+	clientConfig := newAliyunHTTPSConfig()
+	clientCredential := newAliyunSDKCredential(auth.AccessKeyID, auth.AccessKeySecret)
+	ecsClient, err := ecs.NewClientWithOptions(source.Region, clientConfig, clientCredential)
 	if err != nil {
 		return nil, resource.ErrAuthenticationFailed
 	}
-	rdsClient, err := rds.NewClientWithAccessKey(source.Region, auth.AccessKeyID, auth.AccessKeySecret)
+	rdsClient, err := rds.NewClientWithOptions(source.Region, clientConfig, clientCredential)
 	if err != nil {
 		return nil, resource.ErrAuthenticationFailed
 	}
-	slbClient, err := slb.NewClientWithAccessKey(source.Region, auth.AccessKeyID, auth.AccessKeySecret)
+	slbClient, err := slb.NewClientWithOptions(source.Region, clientConfig, clientCredential)
 	if err != nil {
 		return nil, resource.ErrAuthenticationFailed
 	}
-	albClient, err := alb.NewClientWithAccessKey(source.Region, auth.AccessKeyID, auth.AccessKeySecret)
+	albClient, err := alb.NewClientWithOptions(source.Region, clientConfig, clientCredential)
 	if err != nil {
 		return nil, resource.ErrAuthenticationFailed
 	}
-	nlbClient, err := nlb.NewClientWithAccessKey(source.Region, auth.AccessKeyID, auth.AccessKeySecret)
+	nlbClient, err := nlb.NewClientWithOptions(source.Region, clientConfig, clientCredential)
 	if err != nil {
 		return nil, resource.ErrAuthenticationFailed
 	}
-	gwlbClient, err := gwlb.NewClientWithAccessKey(source.Region, auth.AccessKeyID, auth.AccessKeySecret)
+	gwlbClient, err := gwlb.NewClientWithOptions(source.Region, clientConfig, clientCredential)
 	if err != nil {
 		return nil, resource.ErrAuthenticationFailed
 	}

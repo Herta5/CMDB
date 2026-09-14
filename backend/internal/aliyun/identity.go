@@ -24,7 +24,7 @@ type stsClientFactory func(region, accessKeyID, accessKeySecret string) (aliyunI
 
 // newAliyunSTSClient 使用接入源区域及已校验凭证创建官方 STS 客户端。
 func newAliyunSTSClient(region, accessKeyID, accessKeySecret string) (aliyunIdentityAPI, error) {
-	return sts.NewClientWithAccessKey(region, accessKeyID, accessKeySecret)
+	return sts.NewClientWithOptions(region, newAliyunHTTPSConfig(), newAliyunSDKCredential(accessKeyID, accessKeySecret))
 }
 
 // ValidateCredential 只允许阿里云 AccessKey 的两个必填字段进入凭证加密流程。

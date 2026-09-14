@@ -5,12 +5,16 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
+	"net/http"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
 	"cmdb/internal/resource"
 	awssdk "github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
 	"github.com/aws/aws-sdk-go-v2/service/ec2/types"
 	"github.com/aws/aws-sdk-go-v2/service/elasticloadbalancing"
@@ -149,6 +153,44 @@ type elbProbeStub struct {
 func (s *elbProbeStub) DescribeLoadBalancers(_ context.Context, input *elasticloadbalancingv2.DescribeLoadBalancersInput, _ ...func(*elasticloadbalancingv2.Options)) (*elasticloadbalancingv2.DescribeLoadBalancersOutput, error) {
 	s.input = input
 	return &elasticloadbalancingv2.DescribeLoadBalancersOutput{}, nil
+}
+
+// awsProtocolHTTPClient 在签名后、拨号前记录官方 SDK v2 的最终请求协议。
+type awsProtocolHTTPClient struct {
+	schemes []string
+}
+
+func (client *awsProtocolHTTPClient) Do(request *http.Request) (*http.Response, error) {
+	client.schemes = append(client.schemes, request.URL.Scheme)
+	return &http.Response{
+		StatusCode: http.StatusBadRequest,
+		Header:     make(http.Header),
+		Body:       io.NopCloser(strings.NewReader(`{}`)),
+		Request:    request,
+	}, nil
+}
+
+// TestAWSResourceClientsUseHTTPS 固化当前四个 AWS 资源客户端的加密传输默认值。
+func TestAWSResourceClientsUseHTTPS(t *testing.T) {
+	httpClient := &awsProtocolHTTPClient{}
+	configuration := awssdk.Config{
+		Region:      "us-east-1",
+		Credentials: awssdk.NewCredentialsCache(credentials.NewStaticCredentialsProvider("AKIAFAKEACCESSKEY", "FakeSecretValueForTestsOnly123456", "")),
+		HTTPClient:  httpClient,
+	}
+	_, _ = ec2.NewFromConfig(configuration).DescribeInstances(context.Background(), &ec2.DescribeInstancesInput{})
+	_, _ = rds.NewFromConfig(configuration).DescribeDBInstances(context.Background(), &rds.DescribeDBInstancesInput{})
+	_, _ = elasticloadbalancing.NewFromConfig(configuration).DescribeLoadBalancers(context.Background(), &elasticloadbalancing.DescribeLoadBalancersInput{})
+	_, _ = elasticloadbalancingv2.NewFromConfig(configuration).DescribeLoadBalancers(context.Background(), &elasticloadbalancingv2.DescribeLoadBalancersInput{})
+
+	if len(httpClient.schemes) != 4 {
+		t.Fatalf("AWS 四个资源客户端必须全部发出请求：got=%v", httpClient.schemes)
+	}
+	for _, scheme := range httpClient.schemes {
+		if scheme != "https" {
+			t.Fatalf("AWS 云 API 最终出站协议必须为 HTTPS：got=%q all=%v", scheme, httpClient.schemes)
+		}
+	}
 }
 
 // TestEC2SnapshotsKeepNetworkInterfaceAddresses 验证 EC2 保存网卡上的全部内外网 IP。

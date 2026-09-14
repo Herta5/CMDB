@@ -6,8 +6,10 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
 
 	"cmdb/internal/resource"
@@ -124,6 +126,81 @@ type slbProbeStub struct {
 func (s *slbProbeStub) DescribeLoadBalancers(request *slb.DescribeLoadBalancersRequest) (*slb.DescribeLoadBalancersResponse, error) {
 	s.request = request
 	return slb.CreateDescribeLoadBalancersResponse(), nil
+}
+
+// TestAliyunCollectorCloudRequestsUseHTTPS 防止任一资源客户端继承官方 SDK v1 的明文 HTTP 默认值。
+func TestAliyunCollectorCloudRequestsUseHTTPS(t *testing.T) {
+	credential := []byte(`{"access_key_id":"LTAI5tFakeAccessKey","access_key_secret":"FakeSecretValueForTestsOnly123456"}`)
+	source := resource.Source{Region: "cn-hangzhou"}
+	var mutex sync.Mutex
+	schemes := []string{}
+	proxy := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		scheme := request.URL.Scheme
+		if request.Method == http.MethodConnect {
+			scheme = "https"
+		}
+		mutex.Lock()
+		schemes = append(schemes, scheme)
+		mutex.Unlock()
+		if request.Method == http.MethodConnect {
+			writer.WriteHeader(http.StatusBadGateway)
+			return
+		}
+		writer.Header().Set("Content-Type", "application/json")
+		_, _ = writer.Write([]byte(`{}`))
+	}))
+	defer proxy.Close()
+	for _, name := range []string{"HTTP_PROXY", "http_proxy", "HTTPS_PROXY", "https_proxy"} {
+		t.Setenv(name, proxy.URL)
+	}
+	t.Setenv("NO_PROXY", "")
+	t.Setenv("no_proxy", "")
+	tests := []struct {
+		name string
+		run  func(*Collector) ([]resource.CollectionResult, error)
+	}{
+		{name: "连接探测", run: func(collector *Collector) ([]resource.CollectionResult, error) {
+			return collector.Probe(context.Background(), source, credential)
+		}},
+		{name: "完整同步", run: func(collector *Collector) ([]resource.CollectionResult, error) {
+			return collector.Collect(context.Background(), source, credential)
+		}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			mutex.Lock()
+			start := len(schemes)
+			mutex.Unlock()
+			_, _ = test.run(NewCollector())
+			mutex.Lock()
+			captured := append([]string(nil), schemes[start:]...)
+			mutex.Unlock()
+			if len(captured) == 0 {
+				t.Fatal("阿里云云 API 请求必须被进程内代理截获")
+			}
+			for _, scheme := range captured {
+				if scheme != "https" {
+					t.Fatalf("阿里云云 API 最终出站协议必须为 HTTPS：got=%q all=%v", scheme, captured)
+				}
+			}
+		})
+	}
+}
+
+// TestAliyunClientConfigRejectsHTTPDowngrade 防止 HTTPS 端点通过重定向再次落到明文传输。
+func TestAliyunClientConfigRejectsHTTPDowngrade(t *testing.T) {
+	clientConfig := newAliyunHTTPSConfig()
+	if clientConfig.Transport == nil {
+		t.Fatal("阿里云客户端必须在传输层阻止 HTTP 降级")
+	}
+	request, err := http.NewRequest(http.MethodGet, "http://aliyun.example.invalid", nil)
+	if err != nil {
+		t.Fatalf("创建虚构 HTTP 请求失败：%v", err)
+	}
+	response, err := clientConfig.Transport.RoundTrip(request)
+	if err == nil || response != nil {
+		t.Fatal("阿里云客户端不得把降级后的 HTTP 请求交给外部网络")
+	}
 }
 
 // TestECSSnapshotsKeepPrivateAndPublicAddresses 验证 ECS 保存实例返回的全部内外网 IP。
