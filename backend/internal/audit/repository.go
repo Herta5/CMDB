@@ -224,6 +224,9 @@ func applyNameSnapshots(log *Log) {
 	if log.ProjectName == "" {
 		log.ProjectName, _ = detail["project_name"].(string)
 	}
+	if log.ResourceType == "resource_source" {
+		log.ResourceName, _ = detail["source_name"].(string)
+	}
 	if (log.ResourceType == "user" || log.ResourceType == "project_member") && isNumericIdentifier(log.ResourceID) {
 		// 仅快照可以区分数字用户名与旧数据库主键；缺少快照时不可猜测用户身份。
 		log.ResourceID, _ = detail["target_username"].(string)

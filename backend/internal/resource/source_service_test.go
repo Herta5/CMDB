@@ -503,7 +503,7 @@ func TestUpdateSourceKeepsCredentialAndDeletesWithoutDependencies(t *testing.T) 
 	_ = db.Exec("PRAGMA foreign_keys = ON").Error
 	_ = db.AutoMigrate(&Source{}, &Server{}, &Database{}, &LoadBalancer{}, &SyncJob{}, &audit.Log{})
 	prepareSourceParentProjects(t, db)
-	service := NewService(NewRepository(db), NewCredentialCipher("source-update-key"), identityTestAdapters())
+	service := NewService(NewRepository(db), NewCredentialCipher("source-update-key"), identityTestAdapters(), audit.NewRepository(db))
 	created, err := service.CreateSource(context.Background(), CreateSourceInput{ProjectID: 3, Provider: ProviderAWS, Name: "旧名称", Credential: json.RawMessage(`{"access_key_id":"虚构标识","secret_access_key":"虚构密钥"}`)})
 	if err != nil {
 		t.Fatal("准备接入源失败")
@@ -521,6 +521,37 @@ func TestUpdateSourceKeepsCredentialAndDeletesWithoutDependencies(t *testing.T) 
 	}
 	if _, err := service.FindSourceForProject(context.Background(), 3, created.ID); !errors.Is(err, gorm.ErrRecordNotFound) {
 		t.Fatal("删除后接入源必须不可见")
+	}
+	var entries []audit.Log
+	if err := db.Order("id ASC").Find(&entries).Error; err != nil {
+		t.Fatalf("查询接入源审计失败：%v", err)
+	}
+	wantNames := map[string]string{
+		audit.ActionSourceCreated: "旧名称",
+		audit.ActionSourceUpdated: "新名称",
+		audit.ActionSourceDeleted: "新名称",
+	}
+	if len(entries) != len(wantNames) {
+		t.Fatalf("创建、编辑和删除都必须保留审计：%+v", entries)
+	}
+	seen := make(map[string]int, len(wantNames))
+	for _, entry := range entries {
+		if _, ok := wantNames[entry.Action]; !ok {
+			t.Fatalf("接入源操作不得写入未预期审计：%+v", entry)
+		}
+		var detail map[string]any
+		if err := json.Unmarshal(entry.Detail, &detail); err != nil {
+			t.Fatalf("解析接入源审计详情失败：%v", err)
+		}
+		if detail["source_name"] != wantNames[entry.Action] {
+			t.Fatalf("%s 审计必须保存操作时的接入源名称：%+v", entry.Action, detail)
+		}
+		seen[entry.Action]++
+	}
+	for action := range wantNames {
+		if seen[action] != 1 {
+			t.Fatalf("%s 审计必须且只能记录一次：%d", action, seen[action])
+		}
 	}
 }
 

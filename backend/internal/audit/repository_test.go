@@ -230,6 +230,26 @@ func TestListFiltersEffectiveUserResourceID(t *testing.T) {
 	}
 }
 
+// TestListReturnsPersistedSourceNameSnapshot 防止接入源删除后审计展示回查已不存在的来源。
+func TestListReturnsPersistedSourceNameSnapshot(t *testing.T) {
+	db := auditDatabase(t)
+	entry := audit.Log{
+		Action: audit.ActionSourceSynced, ResourceType: "resource_source", ResourceID: "7",
+		Detail:    json.RawMessage(`{"source_name":"生产环境阿里云"}`),
+		CreatedAt: time.Date(2026, 9, 14, 8, 0, 0, 0, time.UTC),
+	}
+	if err := db.Create(&entry).Error; err != nil {
+		t.Fatalf("准备接入源审计失败：%v", err)
+	}
+	items, _, _, err := audit.NewRepository(db).List(context.Background(), audit.Filter{Page: 1, PageSize: 20})
+	if err != nil || len(items) != 1 {
+		t.Fatalf("查询接入源审计失败：%v，记录数=%d", err, len(items))
+	}
+	if items[0].ResourceName != "生产环境阿里云" {
+		t.Fatalf("接入源名称必须来自持久化快照：%q", items[0].ResourceName)
+	}
+}
+
 // TestListUsesStableNewestFirstPagination 防止同一时间产生的审计在翻页时重复或遗漏。
 func TestListUsesStableNewestFirstPagination(t *testing.T) {
 	db := auditDatabase(t)

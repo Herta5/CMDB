@@ -111,7 +111,7 @@ func (s *Service) CreateSource(ctx context.Context, input CreateSourceInput) (*S
 		if err := repository.CreateSource(ctx, source); err != nil {
 			return err
 		}
-		return recordAuditWith(ctx, recorder, audit.Entry{ProjectID: &projectID, Action: audit.ActionSourceCreated, ResourceType: "resource_source", ResourceID: strconv.FormatUint(source.ID, 10), Detail: map[string]any{"provider": source.Provider, "name": source.Name}})
+		return recordAuditWith(ctx, recorder, audit.Entry{ProjectID: &projectID, Action: audit.ActionSourceCreated, ResourceType: "resource_source", ResourceID: strconv.FormatUint(source.ID, 10), Detail: map[string]any{"provider": source.Provider, "source_name": source.Name}})
 	}); err != nil {
 		return nil, err
 	}
@@ -170,7 +170,7 @@ func (s *Service) UpdateSource(ctx context.Context, projectID, sourceID uint64, 
 		if err := repository.UpdateSource(ctx, current, updates); err != nil {
 			return err
 		}
-		return recordAuditWith(ctx, recorder, audit.Entry{ProjectID: &projectIDCopy, Action: audit.ActionSourceUpdated, ResourceType: "resource_source", ResourceID: strconv.FormatUint(sourceID, 10), Detail: map[string]any{"provider": source.Provider, "name": input.Name, "credential_replaced": credentialReplaced}})
+		return recordAuditWith(ctx, recorder, audit.Entry{ProjectID: &projectIDCopy, Action: audit.ActionSourceUpdated, ResourceType: "resource_source", ResourceID: strconv.FormatUint(sourceID, 10), Detail: map[string]any{"provider": source.Provider, "source_name": input.Name, "credential_replaced": credentialReplaced}})
 	}); err != nil {
 		return nil, err
 	}
@@ -235,7 +235,7 @@ func (s *Service) DeleteSource(ctx context.Context, projectID, sourceID uint64) 
 		}
 		source = current
 		// 同一事务内确认无依赖后才写成功删除审计；外键拒绝时也必须一起回滚。
-		if err := recordAuditWith(ctx, recorder, audit.Entry{ProjectID: &projectIDCopy, Action: audit.ActionSourceDeleted, ResourceType: "resource_source", ResourceID: strconv.FormatUint(sourceID, 10), Detail: map[string]any{"provider": source.Provider, "name": source.Name}}); err != nil {
+		if err := recordAuditWith(ctx, recorder, audit.Entry{ProjectID: &projectIDCopy, Action: audit.ActionSourceDeleted, ResourceType: "resource_source", ResourceID: strconv.FormatUint(sourceID, 10), Detail: map[string]any{"provider": source.Provider, "source_name": source.Name}}); err != nil {
 			return err
 		}
 		return repository.DeleteSource(ctx, source)
@@ -383,7 +383,7 @@ func (s *Service) TestConnection(ctx context.Context, projectID, sourceID uint64
 	results, err := collector.Probe(ctx, *source, credential)
 	if err != nil {
 		projectIDCopy := projectID
-		if auditErr := s.recordAudit(ctx, audit.Entry{ProjectID: &projectIDCopy, Action: audit.ActionSourceConnectionTested, ResourceType: "resource_source", ResourceID: strconv.FormatUint(sourceID, 10), Detail: map[string]any{"status": "failed", "error_code": safeConnectionErrorCode(err)}}); auditErr != nil {
+		if auditErr := s.recordAudit(ctx, audit.Entry{ProjectID: &projectIDCopy, Action: audit.ActionSourceConnectionTested, ResourceType: "resource_source", ResourceID: strconv.FormatUint(sourceID, 10), Detail: map[string]any{"source_name": source.Name, "status": "failed", "error_code": safeConnectionErrorCode(err)}}); auditErr != nil {
 			return nil, auditErr
 		}
 		return nil, err
@@ -398,7 +398,7 @@ func (s *Service) TestConnection(ctx context.Context, projectID, sourceID uint64
 		}
 	}
 	projectIDCopy := projectID
-	if err := s.recordAudit(ctx, audit.Entry{ProjectID: &projectIDCopy, Action: audit.ActionSourceConnectionTested, ResourceType: "resource_source", ResourceID: strconv.FormatUint(sourceID, 10), Detail: map[string]any{"reachable_types": value.ReachableTypes, "failed_types": value.FailedTypes}}); err != nil {
+	if err := s.recordAudit(ctx, audit.Entry{ProjectID: &projectIDCopy, Action: audit.ActionSourceConnectionTested, ResourceType: "resource_source", ResourceID: strconv.FormatUint(sourceID, 10), Detail: map[string]any{"source_name": source.Name, "reachable_types": value.ReachableTypes, "failed_types": value.FailedTypes}}); err != nil {
 		return nil, err
 	}
 	return value, nil
@@ -500,7 +500,7 @@ func (s *Service) executeSync(ctx context.Context, sourceID uint64, trigger stri
 			return err
 		}
 		projectID := source.ProjectID
-		return audit.RecordInTransaction(ctx, tx, audit.Entry{ProjectID: &projectID, Action: audit.ActionSourceSynced, ResourceType: "resource_source", ResourceID: strconv.FormatUint(source.ID, 10), Detail: map[string]any{"trigger": trigger, "status": job.Status, "statistics": statistics, "error_summary": job.ErrorSummary}})
+		return audit.RecordInTransaction(ctx, tx, audit.Entry{ProjectID: &projectID, Action: audit.ActionSourceSynced, ResourceType: "resource_source", ResourceID: strconv.FormatUint(source.ID, 10), Detail: map[string]any{"source_name": source.Name, "trigger": trigger, "status": job.Status, "statistics": statistics, "error_summary": job.ErrorSummary}})
 	})
 	if applyErr != nil {
 		// 外层事务已经回滚全部资源变化，失败任务不得保留尚未生效的统计。
@@ -545,7 +545,7 @@ func (s *Service) convergeFailedJob(ctx context.Context, job *SyncJob, source *S
 				return err
 			}
 		}
-		return recordAuditWith(ctx, recorder, audit.Entry{ProjectID: &failed.ProjectID, Action: audit.ActionSourceSynced, ResourceType: "resource_source", ResourceID: strconv.FormatUint(failed.SourceID, 10), Detail: map[string]any{"trigger": failed.Trigger, "status": failed.Status, "statistics": statistics, "error_summary": summary}})
+		return recordAuditWith(ctx, recorder, audit.Entry{ProjectID: &failed.ProjectID, Action: audit.ActionSourceSynced, ResourceType: "resource_source", ResourceID: strconv.FormatUint(failed.SourceID, 10), Detail: map[string]any{"source_name": source.Name, "trigger": failed.Trigger, "status": failed.Status, "statistics": statistics, "error_summary": summary}})
 	})
 	if err == nil {
 		*job = failed

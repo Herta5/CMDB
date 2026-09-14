@@ -255,6 +255,7 @@ func TestSyncAuditContainsChangesButNeverCredential(t *testing.T) {
 	if !strings.Contains(string(encoded), "resource.created") || strings.Contains(string(encoded), "example") || strings.Contains(string(encoded), "token") {
 		t.Fatal("审计必须记录资源变化且不得包含凭证内容或字段")
 	}
+	assertSourceAuditName(t, audits, audit.ActionSourceSynced, source.Name)
 }
 
 // TestSyncPersistsDatabaseSpecification 验证统一同步链路把 RDS 规格写入数据库资产表并保持容量单位。
@@ -881,6 +882,7 @@ func TestPermissionFailureKeepsSafeJobSummary(t *testing.T) {
 	if !strings.Contains(string(auditEntry.Detail), `"status":"failed"`) || strings.Contains(string(auditEntry.Detail), "example") {
 		t.Fatalf("失败同步审计必须只有安全状态摘要：%s", auditEntry.Detail)
 	}
+	assertSourceAuditName(t, []audit.Log{auditEntry}, audit.ActionSourceSynced, source.Name)
 }
 
 // TestSyncFinalStateRollsBackWhenAuditWriteFails 防止同步最终状态和调度时间先于汇总审计提交。
@@ -955,6 +957,7 @@ func TestConnectionFailureWritesSafeAudit(t *testing.T) {
 	if !strings.Contains(string(auditEntry.Detail), `"status":"failed"`) || strings.Contains(string(auditEntry.Detail), "example") {
 		t.Fatalf("失败连接审计必须只有安全状态摘要：%s", auditEntry.Detail)
 	}
+	assertSourceAuditName(t, []audit.Log{auditEntry}, audit.ActionSourceConnectionTested, source.Name)
 }
 
 // TestSyncDeletesExpiredLostResourcesAfterRestoringSeenResources 验证删除只发生在成功类型同步中，并归入当前任务统计。
@@ -1072,6 +1075,30 @@ func TestConnectionDoesNotPersistSnapshots(t *testing.T) {
 	if count != 0 {
 		t.Fatal("连接测试不得持久化探测快照")
 	}
+	var entries []audit.Log
+	if err := db.Where("action = ?", audit.ActionSourceConnectionTested).Find(&entries).Error; err != nil {
+		t.Fatalf("读取成功连接审计失败：%v", err)
+	}
+	assertSourceAuditName(t, entries, audit.ActionSourceConnectionTested, source.Name)
+}
+
+// assertSourceAuditName 直接检查已持久化详情，确保所有接入源审计使用统一公开快照键。
+func assertSourceAuditName(t *testing.T, entries []audit.Log, action, want string) {
+	t.Helper()
+	for _, entry := range entries {
+		if entry.Action != action {
+			continue
+		}
+		var detail map[string]any
+		if err := json.Unmarshal(entry.Detail, &detail); err != nil {
+			t.Fatalf("解析接入源审计详情失败：%v", err)
+		}
+		if detail["source_name"] != want {
+			t.Fatalf("%s 审计必须保存操作时的接入源名称：%+v", action, detail)
+		}
+		return
+	}
+	t.Fatalf("未找到 %s 接入源审计", action)
 }
 
 // TestConnectionKeepsConcreteLoadBalancerTypes 验证连接探测只报告具体类型并保持各结果集合的输入顺序。

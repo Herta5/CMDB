@@ -51,18 +51,20 @@ const (
 
 // Log 映射长期保留的 audit_logs 表，并附带查询时得到的公开显示名称。
 type Log struct {
-	ID               uint64          `gorm:"primaryKey" json:"id"`
-	ActorID          *uint64         `json:"-"`
-	ActorUsername    string          `gorm:"->" json:"actor_username"`
-	ActorDisplayName string          `gorm:"->" json:"actor_display_name"`
-	ProjectID        *uint64         `gorm:"index" json:"project_id"`
-	ProjectName      string          `gorm:"->" json:"project_name"`
-	Action           string          `gorm:"size:128;not null" json:"action"`
-	ResourceType     string          `gorm:"size:64;not null" json:"resource_type"`
-	ResourceID       string          `gorm:"size:255" json:"resource_id"`
-	Detail           json.RawMessage `gorm:"type:json" json:"detail"`
-	RequestIP        string          `gorm:"size:45" json:"request_ip"`
-	CreatedAt        time.Time       `json:"created_at"`
+	ID               uint64  `gorm:"primaryKey" json:"id"`
+	ActorID          *uint64 `json:"-"`
+	ActorUsername    string  `gorm:"->" json:"actor_username"`
+	ActorDisplayName string  `gorm:"->" json:"actor_display_name"`
+	ProjectID        *uint64 `gorm:"index" json:"project_id"`
+	ProjectName      string  `gorm:"->" json:"project_name"`
+	Action           string  `gorm:"size:128;not null" json:"action"`
+	ResourceType     string  `gorm:"size:64;not null" json:"resource_type"`
+	ResourceID       string  `gorm:"size:255" json:"resource_id"`
+	// ResourceName 是从审计详情快照派生的公开对象名称，不参与持久化或身份判断。
+	ResourceName string          `gorm:"->" json:"resource_name"`
+	Detail       json.RawMessage `gorm:"type:json" json:"detail"`
+	RequestIP    string          `gorm:"size:45" json:"request_ip"`
+	CreatedAt    time.Time       `json:"created_at"`
 }
 
 // TableName 明确复用平台初始化脚本中的长期审计表。
