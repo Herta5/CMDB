@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
@@ -298,14 +299,74 @@ func (h *HTTPHandler) ListResources(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"code": "RESOURCE_INVALID_REQUEST", "message": "请求格式错误"})
 		return
 	}
-	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
-	pageSize, _ := strconv.Atoi(c.DefaultQuery("page_size", "50"))
-	values, total, err := h.service.ListResources(c.Request.Context(), projectID, c.Query("provider"), c.Query("resource_type"), c.Query("asset_status"), page, pageSize)
+	query, queryOK := resourceListQuery(c)
+	if !queryOK {
+		c.JSON(http.StatusBadRequest, gin.H{"code": "RESOURCE_INVALID_QUERY", "message": "资源查询参数无效"})
+		return
+	}
+	values, total, err := h.service.ListResources(c.Request.Context(), projectID, query)
+	if errors.Is(err, ErrInvalidResourceQuery) {
+		c.JSON(http.StatusBadRequest, gin.H{"code": "RESOURCE_INVALID_QUERY", "message": "资源查询参数无效"})
+		return
+	}
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"code": "RESOURCE_SERVICE_UNAVAILABLE", "message": "资源服务暂不可用"})
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"items": values, "total": total, "page": page, "page_size": pageSize})
+	c.JSON(http.StatusOK, gin.H{"items": values, "total": total, "page": query.Page, "page_size": query.PageSize})
+}
+
+// ListAllResources 返回跨项目统一分页视图；仅系统管理员路由可以调用此处理器。
+func (h *HTTPHandler) ListAllResources(c *gin.Context) {
+	query, ok := resourceListQuery(c)
+	if !ok {
+		c.JSON(http.StatusBadRequest, gin.H{"code": "RESOURCE_INVALID_QUERY", "message": "资源查询参数无效"})
+		return
+	}
+	values, total, err := h.service.ListAllResources(c.Request.Context(), query)
+	if errors.Is(err, ErrInvalidResourceQuery) {
+		c.JSON(http.StatusBadRequest, gin.H{"code": "RESOURCE_INVALID_QUERY", "message": "资源查询参数无效"})
+		return
+	}
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"code": "RESOURCE_SERVICE_UNAVAILABLE", "message": "资源服务暂不可用"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"items": values, "total": total, "page": query.Page, "page_size": query.PageSize})
+}
+
+func resourceListQuery(c *gin.Context) (ResourceListQuery, bool) {
+	page, pageError := strconv.Atoi(c.DefaultQuery("page", "1"))
+	pageSize, pageSizeError := strconv.Atoi(c.DefaultQuery("page_size", "20"))
+	var sourceID uint64
+	var sourceError error
+	if sourceValue := c.Query("source_id"); sourceValue != "" {
+		sourceID, sourceError = strconv.ParseUint(sourceValue, 10, 64)
+	}
+	if pageError != nil || pageSizeError != nil || sourceError != nil {
+		return ResourceListQuery{}, false
+	}
+	if page < 1 {
+		page = 1
+	}
+	if pageSize < 1 || pageSize > 200 {
+		pageSize = 20
+	}
+	return ResourceListQuery{
+		Providers: splitQueryValues(c.Query("provider")), ResourceTypes: splitQueryValues(c.Query("resource_type")), SourceID: sourceID,
+		Keyword: c.Query("keyword"), Region: c.Query("region"), CloudStatus: c.Query("cloud_status"), AssetStatus: c.Query("asset_status"),
+		SortBy: c.Query("sort_by"), SortOrder: c.Query("sort_order"), Page: page, PageSize: pageSize,
+	}, true
+}
+
+func splitQueryValues(value string) []string {
+	values := make([]string, 0)
+	for _, item := range strings.Split(value, ",") {
+		if item = strings.TrimSpace(item); item != "" {
+			values = append(values, strings.ToLower(item))
+		}
+	}
+	return values
 }
 
 // projectID 严格解析项目路径标识，拒绝零值和非数字。

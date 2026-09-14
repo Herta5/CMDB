@@ -857,13 +857,80 @@ func TestSyncPersistsAndReturnsServerHardwareDetails(t *testing.T) {
 		t.Fatalf("服务器规格未完整持久化：%+v disks=%s", persisted, persisted.Disks)
 	}
 
-	resources, total, err := service.ListResources(context.Background(), source.ProjectID, ProviderAWS, "ec2", "", 1, 20)
+	resources, total, err := service.ListResources(context.Background(), source.ProjectID, ResourceListQuery{Providers: []string{ProviderAWS}, ResourceTypes: []string{"ec2"}, Page: 1, PageSize: 20})
 	if err != nil || total != 1 || len(resources) != 1 {
 		t.Fatalf("查询服务器规格失败：total=%d values=%+v err=%v", total, resources, err)
 	}
 	got := resources[0]
 	if got.InstanceType != "c6a.xlarge" || got.VCPU != 4 || got.Memory != 8192 || !reflect.DeepEqual(got.Disks, wantDisks) {
 		t.Fatalf("统一资源接口丢失服务器规格：%+v", got)
+	}
+}
+
+// TestListResourcesSupportsServerSearchFiltersAndStableSorting 验证服务器列表以一次项目级查询完成搜索、筛选、排序和分页。
+func TestListResourcesSupportsServerSearchFiltersAndStableSorting(t *testing.T) {
+	service, db, source, now := newResourceServiceTest(t)
+	secondSource := &Source{ProjectID: source.ProjectID, Provider: ProviderAliyun, Name: "华东生产账号", Region: "cn-shanghai", EncryptedCredential: "cipher", Enabled: true, SyncIntervalMinutes: 60, CloudAccountID: "aliyun-account", IdentityVerifiedAt: now}
+	if err := db.Create(secondSource).Error; err != nil {
+		t.Fatalf("准备第二接入源失败：%v", err)
+	}
+	servers := []Server{
+		{AssetBase: AssetBase{ProjectID: 1, SourceID: source.ID, Provider: ProviderAWS, ResourceType: "ec2", ExternalID: "i-z", Name: "A-订单节点", Region: "ap-southeast-1", CloudStatus: "running", AssetStatus: AssetStatusActive, LastSeenAt: *now}, InstanceType: "c6a.large", VCPU: 2, Memory: 4096, PrivateIPs: json.RawMessage(`["10.0.0.8"]`), PublicIPs: json.RawMessage(`["8.8.8.8"]`), Disks: json.RawMessage(`[{"id":"vol-z","kind":"system","type":"gp3","size_gib":140,"device":"/dev/sda","encrypted":true}]`)},
+		{AssetBase: AssetBase{ProjectID: 1, SourceID: secondSource.ID, Provider: ProviderAliyun, ResourceType: "ecs", ExternalID: "i-a", Name: "B-支付节点", Region: "cn-shanghai", CloudStatus: "Running", AssetStatus: AssetStatusActive, LastSeenAt: now.Add(-time.Minute)}, InstanceType: "ecs.g7.large", VCPU: 2, Memory: 8192, PrivateIPs: json.RawMessage(`["10.0.0.9"]`), PublicIPs: json.RawMessage(`[]`), Disks: json.RawMessage(`[]`)},
+	}
+	if err := db.Create(&servers).Error; err != nil {
+		t.Fatalf("准备服务器列表失败：%v", err)
+	}
+
+	values, total, err := service.ListResources(context.Background(), 1, ResourceListQuery{
+		Providers: []string{ProviderAWS, ProviderAliyun}, ResourceTypes: []string{"ecs", "ec2"}, Keyword: "8.8.8", CloudStatus: "running", SortBy: "name", SortOrder: "asc", Page: 1, PageSize: 20,
+	})
+	if err != nil || total != 1 || len(values) != 1 {
+		t.Fatalf("服务器组合查询失败：total=%d values=%+v err=%v", total, values, err)
+	}
+	if values[0].ExternalID != "i-z" || values[0].SourceName != source.Name {
+		t.Fatalf("搜索结果必须包含脱敏接入源名称：%+v", values[0])
+	}
+
+	values, total, err = service.ListResources(context.Background(), 1, ResourceListQuery{ResourceTypes: []string{"ecs", "ec2"}, SortBy: "name", SortOrder: "asc", Page: 1, PageSize: 1})
+	if err != nil || total != 2 || len(values) != 1 || values[0].Name != "A-订单节点" {
+		t.Fatalf("名称升序与服务端分页不正确：total=%d values=%+v err=%v", total, values, err)
+	}
+}
+
+// TestListResourcesRejectsUnsupportedQuery 验证未知筛选值和排序字段不会下沉成数据库故障。
+func TestListResourcesRejectsUnsupportedQuery(t *testing.T) {
+	service, _, source, _ := newResourceServiceTest(t)
+	for _, query := range []ResourceListQuery{
+		{Providers: []string{"unknown"}},
+		{ResourceTypes: []string{"unknown"}},
+		{AssetStatus: "deleted"},
+		{SortBy: "raw_attributes"},
+		{SortBy: "name", SortOrder: "sideways"},
+	} {
+		if _, _, err := service.ListResources(context.Background(), source.ProjectID, query); !errors.Is(err, ErrInvalidResourceQuery) {
+			t.Fatalf("非法资源查询应返回稳定参数错误：query=%+v err=%v", query, err)
+		}
+	}
+}
+
+// TestListAllResourcesSearchesBeforeGlobalPagination 验证系统管理员“所有项目”列表由后端统一搜索、排序和分页。
+func TestListAllResourcesSearchesBeforeGlobalPagination(t *testing.T) {
+	service, db, source, now := newResourceServiceTest(t)
+	otherSource := &Source{ProjectID: 2, Provider: ProviderAliyun, Name: "另一项目来源", Region: "cn-shanghai", EncryptedCredential: "cipher", Enabled: true, SyncIntervalMinutes: 60, CloudAccountID: "other-account", IdentityVerifiedAt: now}
+	if err := db.Create(otherSource).Error; err != nil {
+		t.Fatalf("准备另一项目来源失败：%v", err)
+	}
+	servers := []Server{
+		{AssetBase: AssetBase{ProjectID: 1, SourceID: source.ID, Provider: ProviderAWS, ResourceType: "ec2", ExternalID: "i-project-a", Name: "A 节点", AssetStatus: AssetStatusActive}, PrivateIPs: json.RawMessage(`["10.0.0.1"]`), PublicIPs: json.RawMessage(`[]`), Disks: json.RawMessage(`[]`)},
+		{AssetBase: AssetBase{ProjectID: 2, SourceID: otherSource.ID, Provider: ProviderAliyun, ResourceType: "ecs", ExternalID: "i-project-b", Name: "B 节点", AssetStatus: AssetStatusActive}, PrivateIPs: json.RawMessage(`["10.0.0.2"]`), PublicIPs: json.RawMessage(`[]`), Disks: json.RawMessage(`[]`)},
+	}
+	if err := db.Create(&servers).Error; err != nil {
+		t.Fatalf("准备跨项目资源失败：%v", err)
+	}
+	values, total, err := service.ListAllResources(context.Background(), ResourceListQuery{ResourceTypes: []string{"ecs", "ec2"}, Keyword: "节点", SortBy: "name", SortOrder: "asc", Page: 2, PageSize: 1})
+	if err != nil || total != 2 || len(values) != 1 || values[0].ProjectName != "另一测试项目" {
+		t.Fatalf("跨项目搜索必须先于统一分页并返回项目名称：total=%d values=%+v err=%v", total, values, err)
 	}
 }
 

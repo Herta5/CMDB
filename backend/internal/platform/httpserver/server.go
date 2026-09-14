@@ -74,6 +74,14 @@ func New(dependencies Dependencies) *gin.Engine {
 		}
 		auditHandler.ListGlobal(c)
 	})
+	// “所有项目”资源由后端统一搜索、排序和分页，只向系统管理员开放。
+	engine.GET("/api/v1/resources", authenticator.RequireUser(), func(c *gin.Context) {
+		if CurrentUser(c).GlobalRole != identity.GlobalRoleSystemAdmin {
+			c.JSON(http.StatusForbidden, gin.H{"code": "RESOURCE_FORBIDDEN", "message": "无权查看全部项目资源"})
+			return
+		}
+		resourceHandler.ListAllResources(c)
+	})
 	projects := engine.Group("/api/v1/projects")
 	projects.Use(authenticator.RequireUser())
 	projects.GET("", func(c *gin.Context) {

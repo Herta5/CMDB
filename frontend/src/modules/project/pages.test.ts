@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { createRenderer, h, nextTick, type Component } from 'vue'
 import { createPinia, setActivePinia } from 'pinia'
 import { createMemoryHistory, createRouter } from 'vue-router'
-const { get, post, put, remove } = vi.hoisted(() => ({ get: vi.fn(), post: vi.fn(), put: vi.fn(), remove: vi.fn() }))
+const { get, post, put, remove, writeText } = vi.hoisted(() => ({ get: vi.fn(), post: vi.fn(), put: vi.fn(), remove: vi.fn(), writeText: vi.fn() }))
 vi.mock('@/utils/request', () => ({ default: { get, post, put, delete: remove } }))
 import { useAuthStore } from '@/modules/auth/store'
 import { useProjectStore } from './store'
@@ -56,6 +56,7 @@ beforeEach(() => {
   vi.stubGlobal('localStorage', { getItem: (key: string) => storage.get(key) ?? null, setItem: (key: string, value: string) => storage.set(key, value), removeItem: (key: string) => storage.delete(key) })
   vi.stubGlobal('Document', class {})
   vi.stubGlobal('ShadowRoot', class {})
+  vi.stubGlobal('navigator', { clipboard: { writeText } })
   pinia = createPinia()
   setActivePinia(pinia)
   useAuthStore().acceptSession('测试会话', { username: 'operator', displayName: '运维用户', globalRole: 'user' })
@@ -63,6 +64,7 @@ beforeEach(() => {
   post.mockReset()
   put.mockReset()
   remove.mockReset()
+  writeText.mockReset().mockResolvedValue(undefined)
 })
 
 /** 等待页面异步接口与 Vue 更新队列，不引入固定延时。 */
@@ -309,11 +311,14 @@ describe('项目控制台页面', () => {
     expect(router.currentRoute.value.path).toBe('/assets/servers')
     app.unmount()
   })
-  it('服务器资产页合并当前项目的 ECS 和 EC2', async () => {
+  it('服务器资产页以一次服务端查询合并当前项目的 ECS 和 EC2', async () => {
     const projectStore = useProjectStore()
     projectStore.projects = [{ id: 2, code: 'platform', name: '平台项目', description: '', status: 'enabled', ownerUsername: null, createdAt: '', updatedAt: '' }]
     projectStore.selectProject(2)
-    get.mockImplementation((_url: string, options?: { params?: { resource_type?: string } }) => Promise.resolve({ items: [{ id: options?.params?.resource_type === 'ecs' ? 11 : 12, provider: options?.params?.resource_type === 'ecs' ? 'aliyun' : 'aws', resource_type: options?.params?.resource_type, external_id: 'asset', asset_status: 'active', endpoints: [] }], total: 1 }))
+    get.mockResolvedValue({ items: [
+      { id: 11, provider: 'aliyun', resource_type: 'ecs', external_id: 'asset-ecs', asset_status: 'active', endpoints: [] },
+      { id: 12, provider: 'aws', resource_type: 'ec2', external_id: 'asset-ec2', asset_status: 'active', endpoints: [] },
+    ], total: 2 })
     const component = { render: () => h(AssetListPage, { category: 'server' }) }
     const { root, app } = await mount(component, '/assets/servers')
     expect(text(root)).toContain('服务器列表')
@@ -322,11 +327,10 @@ describe('项目控制台页面', () => {
     expect(text(root)).toContain('AWS')
     expect(text(root)).toContain('资产状态')
     expect(text(root)).not.toContain('生命周期')
-    expect(get).toHaveBeenCalledWith('/projects/2/resources', { params: expect.objectContaining({ resource_type: 'ecs' }) })
-    expect(get).toHaveBeenCalledWith('/projects/2/resources', { params: expect.objectContaining({ resource_type: 'ec2' }) })
+    expect(get).toHaveBeenCalledWith('/projects/2/resources', { params: expect.objectContaining({ resource_type: 'ecs,ec2', page: 1, page_size: 20, sort_by: 'name', sort_order: 'asc' }) })
     app.unmount()
   })
-  it('负载均衡资产页按官方类型顺序查询且不查询 ELB', async () => {
+  it('负载均衡资产页按官方类型集合查询且不查询 ELB', async () => {
     const projectStore = useProjectStore()
     projectStore.projects = [{ id: 2, code: 'platform', name: '平台项目', description: '', status: 'enabled', ownerUsername: null, createdAt: '', updatedAt: '' }]
     projectStore.selectProject(2)
@@ -336,7 +340,7 @@ describe('项目控制台页面', () => {
     const requestedTypes = get.mock.calls
       .filter(([url]) => url === '/projects/2/resources')
       .map(([, options]) => options.params.resource_type)
-    expect(requestedTypes).toEqual(['slb', 'clb', 'alb', 'nlb', 'gwlb'])
+    expect(requestedTypes).toEqual(['slb,clb,alb,nlb,gwlb'])
     expect(requestedTypes).not.toContain('elb')
     app.unmount()
   })
@@ -402,28 +406,133 @@ describe('项目控制台页面', () => {
     expect(text(root)).toContain('暂无可访问的项目')
     app.unmount()
   })
-  it('服务器资产页展示实例规格和云盘汇总', async () => {
+  it('服务器资产页分列展示核心字段并由名称打开只读详情抽屉', async () => {
     const projectStore = useProjectStore()
     projectStore.projects = [{ id: 2, code: 'platform', name: '平台项目', description: '', status: 'enabled', ownerUsername: null, createdAt: '', updatedAt: '' }]
     projectStore.selectProject(2)
-    get.mockImplementation((_url: string, options?: { params?: { resource_type?: string } }) => Promise.resolve(options?.params?.resource_type === 'ec2' ? {
+    get.mockResolvedValue({
       items: [{
-        id: 12, provider: 'aws', resource_type: 'ec2', external_id: 'i-hardware', name: '计算节点', asset_status: 'active',
+        id: 12, source_id: 7, source_name: '生产账号', provider: 'aws', resource_type: 'ec2', external_id: 'i-hardware', name: '计算节点', asset_status: 'active', cloud_status: 'running', region: 'ap-southeast-1', zone: 'ap-southeast-1a',
         instance_type: 'c6a.xlarge', vcpu: 4, memory: 8192,
+        first_seen_at: '2026-09-08T11:22:33', last_seen_at: '2026-09-09T12:34:56', missing_since: null,
         disks: [
           { id: 'vol-root', kind: 'system', type: 'gp3', size_gib: 100, device: '/dev/sda1', encrypted: true },
           { id: 'vol-data-1', kind: 'data', type: 'gp3', size_gib: 200, device: '/dev/sdf', encrypted: true },
           { id: 'vol-data-2', kind: 'data', type: 'gp3', size_gib: 200, device: '/dev/sdg', encrypted: false },
-        ], endpoints: [],
+        ], endpoints: [
+          { kind: 'private', address: '10.0.0.8' }, { kind: 'private', address: '10.0.0.9' }, { kind: 'public', address: '8.8.8.8' },
+        ], raw_attributes: { secret: '不得展示' },
       }], total: 1,
-    } : { items: [], total: 0 }))
+    })
 
     const component = { render: () => h(AssetListPage, { category: 'server' }) }
     const { root, app } = await mount(component, '/assets/servers')
-    expect(text(root)).toContain('实例规格')
-    expect(text(root)).toContain('c6a.xlarge · 4 vCPU · 8 GiB')
+    for (const heading of ['实例类型', 'vCPU', '内存', '磁盘', '地域', '内网 IP', '公网 IP', '云端状态', '资产状态', '最近发现时间']) expect(text(root)).toContain(heading)
+    expect(text(root)).toContain('c6a.xlarge')
+    expect(text(root)).toContain('4 vCPU')
+    expect(text(root)).toContain('8 GiB')
     expect(text(root)).toContain('磁盘')
-    expect(text(root)).toContain('3 块 / 500 GiB')
+    expect(text(root)).toContain('500 GiB')
+    expect(text(root)).not.toContain('3 块 /')
+    expect(text(root)).toContain('ap-southeast-1')
+    expect(text(root)).not.toContain('ap-southeast-1a')
+    expect(text(root)).toContain('10.0.0.8')
+    expect(text(root)).toContain('10.0.0.9')
+    expect(text(root)).toContain('8.8.8.8')
+    expect(text(root)).toContain('2026-09-09 12:34:56')
+
+    await all(root).find(n => n.type === 'button' && text(n) === '计算节点')!.props.onClick()
+    await flush()
+    expect(text(root)).toContain('服务器详情')
+    expect(text(root)).toContain('基本信息')
+    expect(text(root)).toContain('实例配置')
+    expect(text(root)).toContain('网络信息')
+    expect(text(root)).toContain('磁盘明细')
+    expect(text(root)).toContain('状态与时间')
+    expect(text(root)).toContain('ap-southeast-1a')
+    expect(text(root)).toContain('vol-root')
+    expect(text(root)).toContain('/dev/sda1')
+    expect(text(root)).not.toContain('原始属性')
+    expect(text(root)).not.toContain('不得展示')
+    const copyButtons = all(root).filter(n => n.type === 'button' && text(n) === '复制')
+    await copyButtons[0].props.onClick()
+    await copyButtons[1].props.onClick()
+    expect(writeText).toHaveBeenNthCalledWith(1, 'i-hardware')
+    expect(writeText).toHaveBeenNthCalledWith(2, '10.0.0.8')
+    app.unmount()
+  })
+  it('服务器搜索条件交给后端全量匹配，并在变更后回到第一页', async () => {
+    const projectStore = useProjectStore()
+    projectStore.projects = [{ id: 2, code: 'platform', name: '平台项目', description: '', status: 'enabled', ownerUsername: null, createdAt: '', updatedAt: '' }]
+    projectStore.selectProject(2)
+    get.mockResolvedValue({ items: [], total: 0 })
+    const component = { render: () => h(AssetListPage, { category: 'server' }) }
+    const { root, app } = await mount(component, '/assets/servers')
+    const search = all(root).find(n => n.type === 'input' && n.props['aria-label'] === '搜索服务器')!
+    const updateSearch = search.props.onInput ?? search.props['onUpdate:modelValue']
+    if (search.props.onInput) await updateSearch({ target: { value: '10.0.0.8' } })
+    else await updateSearch('10.0.0.8')
+    await all(root).find(n => n.type === 'form' && String(n.props.class).includes('server-search'))!.props.onSubmit({ preventDefault: () => {} })
+    await flush()
+    expect(get).toHaveBeenLastCalledWith('/projects/2/resources', { params: expect.objectContaining({ keyword: '10.0.0.8', page: 1, page_size: 20 }) })
+    expect(text(root)).toContain('搜索范围：资源名称、实例 ID、内网 IP、公网 IP')
+    app.unmount()
+  })
+  it('服务器精确筛选折叠展示，生效条件可单项移除', async () => {
+    const projectStore = useProjectStore()
+    projectStore.projects = [{ id: 2, code: 'platform', name: '平台项目', description: '', status: 'enabled', ownerUsername: null, createdAt: '', updatedAt: '' }]
+    projectStore.selectProject(2)
+    get.mockResolvedValue({ items: [], total: 0 })
+    const component = { render: () => h(AssetListPage, { category: 'server' }) }
+    const { root, app } = await mount(component, '/assets/servers')
+    expect(text(root)).not.toContain('应用筛选')
+    await all(root).find(n => n.type === 'button' && text(n) === '筛选')!.props.onClick()
+    await flush()
+    const provider = all(root).find(n => n.type === 'select' && text(n).includes('阿里云') && text(n).includes('AWS'))!
+    const updateProvider = provider.props.onChange ?? provider.props['onUpdate:modelValue']
+    if (provider.props.onChange) await updateProvider({ target: { value: 'aws' } }); else await updateProvider('aws')
+    await all(root).find(n => n.type === 'button' && text(n) === '应用筛选')!.props.onClick()
+    await flush()
+    expect(get).toHaveBeenLastCalledWith('/projects/2/resources', { params: expect.objectContaining({ provider: 'aws', page: 1 }) })
+    expect(text(root)).toContain('云平台：AWS')
+    await all(root).find(n => n.type === 'button' && n.props['aria-label'] === '移除云平台筛选')!.props.onClick()
+    await flush()
+    expect(get).toHaveBeenLastCalledWith('/projects/2/resources', { params: expect.objectContaining({ provider: '', page: 1 }) })
+    app.unmount()
+  })
+  it('服务器列设置只允许隐藏来源、类型、实例类型和地域', async () => {
+    const projectStore = useProjectStore()
+    projectStore.projects = [{ id: 2, code: 'platform', name: '平台项目', description: '', status: 'enabled', ownerUsername: null, createdAt: '', updatedAt: '' }]
+    projectStore.selectProject(2)
+    get.mockResolvedValue({ items: [{ id: 1, source_name: '生产来源', provider: 'aws', resource_type: 'ec2', external_id: 'i-1', name: '节点', asset_status: 'active', endpoints: [], disks: [] }], total: 1 })
+    const component = { render: () => h(AssetListPage, { category: 'server' }) }
+    const { root, app } = await mount(component, '/assets/servers')
+    await all(root).find(n => n.type === 'button' && text(n) === '列设置')!.props.onClick()
+    await flush()
+    const settings = all(root).find(n => n.props['aria-label'] === '列设置')!
+    const settingsRows = settings.children.filter(n => n.type === 'div')
+    const sourceRow = settingsRows.find(n => text(n).includes('来源'))!
+    const cloudStatusRow = settingsRows.find(n => text(n).includes('云端状态'))!
+    expect(all(sourceRow).find(n => n.type === 'input')!.props.disabled).toBe(false)
+    expect(all(cloudStatusRow).find(n => n.type === 'input')!.props.disabled).toBe(true)
+    await all(sourceRow).find(n => n.type === 'input')!.props.onChange()
+    await all(root).find(n => n.type === 'button' && text(n) === '列设置')!.props.onClick()
+    await flush()
+    expect(text(root)).not.toContain('生产来源')
+    expect(text(root)).toContain('云端状态')
+    app.unmount()
+  })
+  it('服务器接入源筛选从项目完整来源列表加载，不依赖当前资源页', async () => {
+    const projectStore = useProjectStore()
+    projectStore.projects = [{ id: 2, code: 'platform', name: '平台项目', description: '', status: 'enabled', ownerUsername: null, createdAt: '', updatedAt: '' }]
+    projectStore.selectProject(2)
+    get.mockImplementation((url: string) => Promise.resolve(url.endsWith('/sources') ? [{ id: 9, project_id: 2, provider: 'aws', name: '未出现在当前页的来源', enabled: true, sync_interval_minutes: 60 }] : { items: [], total: 0 }))
+    const component = { render: () => h(AssetListPage, { category: 'server' }) }
+    const { root, app } = await mount(component, '/assets/servers')
+    await all(root).find(n => n.type === 'button' && text(n) === '筛选')!.props.onClick()
+    await flush()
+    expect(text(root)).toContain('未出现在当前页的来源')
+    expect(get).toHaveBeenCalledWith('/projects/2/sources', { params: { provider: undefined } })
     app.unmount()
   })
   it('数据库资产页展示实例规格和存储容量', async () => {
@@ -462,13 +571,15 @@ describe('项目控制台页面', () => {
       { id: 3, code: 'payment', name: '支付项目', description: '', status: 'enabled', ownerUsername: null, createdAt: '', updatedAt: '' },
     ]
     projectStore.selectAllProjects()
-    get.mockImplementation((url: string, options?: { params?: { resource_type?: string } }) => Promise.resolve({ items: [{ id: Number(url.split('/')[2]) * 10 + (options?.params?.resource_type === 'ecs' ? 1 : 2), provider: options?.params?.resource_type === 'ecs' ? 'aliyun' : 'aws', resource_type: options?.params?.resource_type, external_id: 'asset', asset_status: 'active', endpoints: [] }], total: 1 }))
+    get.mockResolvedValue({ items: [
+      { id: 21, project_name: '平台项目', provider: 'aliyun', resource_type: 'ecs', external_id: 'asset-1', asset_status: 'active', endpoints: [] },
+      { id: 32, project_name: '支付项目', provider: 'aws', resource_type: 'ec2', external_id: 'asset-2', asset_status: 'active', endpoints: [] },
+    ], total: 2 })
     const component = { render: () => h(AssetListPage, { category: 'server' }) }
     const { root, app } = await mount(component, '/assets/servers')
     expect(text(root)).toContain('平台项目')
     expect(text(root)).toContain('支付项目')
-    expect(get).toHaveBeenCalledWith('/projects/2/resources', { params: expect.objectContaining({ resource_type: 'ecs' }) })
-    expect(get).toHaveBeenCalledWith('/projects/3/resources', { params: expect.objectContaining({ resource_type: 'ec2' }) })
+    expect(get).toHaveBeenCalledWith('/resources', { params: expect.objectContaining({ resource_type: 'ecs,ec2', page: 1, page_size: 20 }) })
     app.unmount()
   })
   it('云同步管理移除平台页签并在创建时选择云平台', async () => {

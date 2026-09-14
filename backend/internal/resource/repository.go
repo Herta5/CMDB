@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -104,38 +105,97 @@ func (r *Repository) ListSources(ctx context.Context, projectID uint64, provider
 	return values, nil
 }
 
-// ListResources 跨三张资产表合并查询，并在项目边界内统一分页。
-func (r *Repository) ListResources(ctx context.Context, projectID uint64, provider, resourceType, lifecycle string, offset, limit int) ([]Resource, int64, error) {
+// ListResources 跨三张资产表合并查询，并在项目边界内统一搜索、排序和分页。
+func (r *Repository) ListResources(ctx context.Context, projectID uint64, filter ResourceListQuery) ([]Resource, int64, error) {
 	tables := []string{"resources_servers", "resources_databases", "resources_load_balancers"}
-	if resourceType != "" {
-		table, err := assetTableForType(resourceType)
-		if err != nil {
-			return nil, 0, err
+	if len(filter.ResourceTypes) > 0 {
+		tableSet := make(map[string]bool)
+		tables = tables[:0]
+		for _, resourceType := range filter.ResourceTypes {
+			table, _ := assetTableForType(resourceType)
+			if !tableSet[table] {
+				tables = append(tables, table)
+				tableSet[table] = true
+			}
 		}
-		tables = []string{table}
+	}
+	sourceQuery := r.db.WithContext(ctx)
+	if projectID > 0 {
+		sourceQuery = sourceQuery.Where("project_id = ?", projectID)
+	}
+	var sources []Source
+	if err := sourceQuery.Find(&sources).Error; err != nil {
+		return nil, 0, err
+	}
+	sourceNames := make(map[uint64]string, len(sources))
+	for _, source := range sources {
+		sourceNames[source.ID] = source.Name
+	}
+	var projectRows []struct {
+		ID   uint64
+		Name string
+	}
+	projectQuery := r.db.WithContext(ctx).Table("projects").Select("id", "name")
+	if projectID > 0 {
+		projectQuery = projectQuery.Where("id = ?", projectID)
+	}
+	if err := projectQuery.Find(&projectRows).Error; err != nil {
+		return nil, 0, err
+	}
+	projectNames := make(map[uint64]string, len(projectRows))
+	for _, project := range projectRows {
+		projectNames[project.ID] = project.Name
 	}
 	values := make([]Resource, 0)
 	for _, table := range tables {
-		query := r.db.WithContext(ctx).Table(table).Where("project_id = ?", projectID)
-		if provider != "" {
-			query = query.Where("provider = ?", provider)
+		query := r.db.WithContext(ctx).Table(table)
+		if projectID > 0 {
+			query = query.Where("project_id = ?", projectID)
 		}
-		if resourceType != "" {
-			query = query.Where("resource_type = ?", resourceType)
+		if len(filter.Providers) > 0 {
+			query = query.Where("provider IN ?", filter.Providers)
 		}
-		if lifecycle != "" {
-			query = query.Where("asset_status = ?", lifecycle)
+		if len(filter.ResourceTypes) > 0 {
+			query = query.Where("resource_type IN ?", filter.ResourceTypes)
+		}
+		if filter.SourceID > 0 {
+			query = query.Where("source_id = ?", filter.SourceID)
+		}
+		if filter.Region != "" {
+			query = query.Where("region = ?", filter.Region)
+		}
+		if filter.CloudStatus != "" {
+			query = query.Where("LOWER(cloud_status) = ?", strings.ToLower(filter.CloudStatus))
+		}
+		if filter.AssetStatus != "" {
+			query = query.Where("asset_status = ?", filter.AssetStatus)
 		}
 		var rows []assetRow
 		if err := query.Find(&rows).Error; err != nil {
 			return nil, 0, err
 		}
 		for _, row := range rows {
-			values = append(values, resourceFromRow(row, table))
+			value := resourceFromRow(row, table)
+			value.SourceName = sourceNames[value.SourceID]
+			value.ProjectName = projectNames[value.ProjectID]
+			if resourceMatchesKeyword(value, filter.Keyword) {
+				values = append(values, value)
+			}
 		}
 	}
-	sort.SliceStable(values, func(i, j int) bool { return values[i].UpdatedAt.After(values[j].UpdatedAt) })
+	sort.SliceStable(values, func(i, j int) bool {
+		comparison := compareResources(values[i], values[j], filter.SortBy)
+		if comparison == 0 {
+			// 次级身份排序固定升序，不随主排序方向翻转，保证分页边界稳定。
+			return strings.Compare(resourceIdentity(values[i]), resourceIdentity(values[j])) < 0
+		}
+		if filter.SortOrder == "desc" {
+			return comparison > 0
+		}
+		return comparison < 0
+	})
 	total := int64(len(values))
+	offset, limit := (filter.Page-1)*filter.PageSize, filter.PageSize
 	if offset >= len(values) {
 		return []Resource{}, total, nil
 	}
@@ -144,6 +204,90 @@ func (r *Repository) ListResources(ctx context.Context, projectID uint64, provid
 		end = len(values)
 	}
 	return values[offset:end], total, nil
+}
+
+// resourceMatchesKeyword 对列表公开字段做不区分大小写的模糊匹配，服务器 IP 直接使用规范化端点视图。
+func resourceMatchesKeyword(value Resource, keyword string) bool {
+	keyword = strings.ToLower(strings.TrimSpace(keyword))
+	if keyword == "" {
+		return true
+	}
+	if strings.Contains(strings.ToLower(value.Name), keyword) || strings.Contains(strings.ToLower(value.ExternalID), keyword) {
+		return true
+	}
+	for _, endpoint := range value.Endpoints {
+		if strings.Contains(strings.ToLower(endpoint.Address), keyword) {
+			return true
+		}
+	}
+	return false
+}
+
+func resourceIdentity(value Resource) string {
+	return strconv.FormatUint(value.SourceID, 10) + "\x00" + value.ResourceType + "\x00" + value.ExternalID
+}
+
+func resourceDiskSize(value Resource) int64 {
+	var total int64
+	for _, disk := range value.Disks {
+		total += disk.SizeGiB
+	}
+	return total
+}
+
+// compareResources 只比较经过服务层白名单验证的展示字段。
+func compareResources(left, right Resource, field string) int {
+	stringValues := func(value Resource) string {
+		switch field {
+		case "project":
+			return value.ProjectName
+		case "source":
+			return value.SourceName
+		case "resource_type":
+			return value.ResourceType
+		case "instance_type":
+			return value.InstanceType
+		case "region":
+			return value.Region
+		case "cloud_status":
+			return value.CloudStatus
+		case "asset_status":
+			return value.AssetStatus
+		default:
+			return value.Name
+		}
+	}
+	switch field {
+	case "vcpu":
+		return left.VCPU - right.VCPU
+	case "memory":
+		if left.Memory < right.Memory {
+			return -1
+		}
+		if left.Memory > right.Memory {
+			return 1
+		}
+		return 0
+	case "disk_size":
+		leftSize, rightSize := resourceDiskSize(left), resourceDiskSize(right)
+		if leftSize < rightSize {
+			return -1
+		}
+		if leftSize > rightSize {
+			return 1
+		}
+		return 0
+	case "last_seen_at":
+		if left.LastSeenAt.Before(right.LastSeenAt) {
+			return -1
+		}
+		if left.LastSeenAt.After(right.LastSeenAt) {
+			return 1
+		}
+		return 0
+	default:
+		return strings.Compare(strings.ToLower(stringValues(left)), strings.ToLower(stringValues(right)))
+	}
 }
 
 // Repository 是统一资源核心的持久化实现。

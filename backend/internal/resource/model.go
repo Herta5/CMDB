@@ -115,6 +115,8 @@ func (LoadBalancer) TableName() string { return "resources_load_balancers" }
 // Resource 是跨三张资产表返回给 API 的统一只读视图，不对应数据库表。
 type Resource struct {
 	AssetBase
+	SourceName     string             `gorm:"-" json:"source_name"`
+	ProjectName    string             `gorm:"-" json:"project_name,omitempty"`
 	InstanceType   string             `gorm:"-" json:"instance_type,omitempty"`
 	VCPU           int                `gorm:"-" json:"vcpu,omitempty"`
 	Memory         int64              `gorm:"-" json:"memory,omitempty"`

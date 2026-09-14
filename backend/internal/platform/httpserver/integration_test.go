@@ -583,10 +583,19 @@ func TestProjectSourceAPINeverReturnsCredentials(t *testing.T) {
 	if !strings.Contains(retried.Body.String(), `"previous_job_id":`+strconv.FormatUint(failedJob.ID, 10)) {
 		t.Fatal("重试任务必须引用原失败任务")
 	}
-	resources := integrationRequest(t, server, member, http.MethodGet, path+"/resources?provider=aws&resource_type=ec2", nil, http.StatusOK)
-	if !strings.Contains(resources.Body.String(), "i-integration") || !strings.Contains(resources.Body.String(), "10.0.0.8") {
-		t.Fatal("同步资源查询必须包含模拟采集器输出及端点")
+	resources := integrationRequest(t, server, member, http.MethodGet, path+"/resources?resource_type=ecs,ec2&keyword=10.0.0&page=1&page_size=20&sort_by=name&sort_order=asc", nil, http.StatusOK)
+	if !strings.Contains(resources.Body.String(), "i-integration") || !strings.Contains(resources.Body.String(), "10.0.0.8") || !strings.Contains(resources.Body.String(), `"source_name":"AWS 更新账号"`) {
+		t.Fatal("同步资源查询必须在分页前搜索全部资源并包含脱敏接入源名称")
 	}
+	invalidResources := integrationRequest(t, server, member, http.MethodGet, path+"/resources?sort_by=raw_attributes", nil, http.StatusBadRequest)
+	if invalidResources.Body.String() != `{"code":"RESOURCE_INVALID_QUERY","message":"资源查询参数无效"}` {
+		t.Fatalf("非法资源查询必须返回稳定中文参数错误：%s", invalidResources.Body.String())
+	}
+	allResources := integrationRequest(t, server, admin, http.MethodGet, "/api/v1/resources?resource_type=ecs,ec2&keyword=i-integration&page=1&page_size=20", nil, http.StatusOK)
+	if !strings.Contains(allResources.Body.String(), `"project_name":"接入项目"`) || !strings.Contains(allResources.Body.String(), "i-integration") {
+		t.Fatal("所有项目资源必须由后端在完整范围搜索并返回项目归属")
+	}
+	integrationRequest(t, server, member, http.MethodGet, "/api/v1/resources?keyword=i-integration", nil, http.StatusForbidden)
 	integrationRequest(t, server, admin, http.MethodDelete, path+"/sources/"+strconv.FormatUint(source.ID, 10), nil, http.StatusConflict)
 	var unsuccessfulDeleteAudit int64
 	if err := db.Model(&audit.Log{}).Where("action = ? AND resource_id = ?", audit.ActionSourceDeleted, strconv.FormatUint(source.ID, 10)).Count(&unsuccessfulDeleteAudit).Error; err != nil || unsuccessfulDeleteAudit != 0 {

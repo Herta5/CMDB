@@ -27,6 +27,9 @@ type Service struct {
 // ErrSyncAlreadyRunning 表示同一接入源已有同步任务正在执行。
 var ErrSyncAlreadyRunning = errors.New("接入源同步任务正在执行")
 
+// ErrInvalidResourceQuery 表示资源筛选或排序参数不在公开白名单中。
+var ErrInvalidResourceQuery = errors.New("资源查询参数无效")
+
 var (
 	// ErrInvalidSourceInput 只标识调用方可纠正的来源基础字段和周期错误，与内部失败分离。
 	ErrInvalidSourceInput = errors.New("接入源参数无效")
@@ -264,18 +267,76 @@ func (s *Service) FindSourceForProject(ctx context.Context, projectID, sourceID 
 	return source, nil
 }
 
+// ResourceListQuery 是资源列表公开查询契约，所有字段都必须经服务层白名单校验。
+type ResourceListQuery struct {
+	Providers     []string
+	ResourceTypes []string
+	SourceID      uint64
+	Keyword       string
+	Region        string
+	CloudStatus   string
+	AssetStatus   string
+	SortBy        string
+	SortOrder     string
+	Page          int
+	PageSize      int
+}
+
 // ListResources 提供受项目边界限制的分页资源查询。
-func (s *Service) ListResources(ctx context.Context, projectID uint64, provider, resourceType, assetStatus string, page, pageSize int) ([]Resource, int64, error) {
+func (s *Service) ListResources(ctx context.Context, projectID uint64, query ResourceListQuery) ([]Resource, int64, error) {
 	if projectID == 0 {
-		return nil, 0, errors.New("项目参数无效")
+		return nil, 0, ErrInvalidResourceQuery
 	}
-	if page < 1 {
-		page = 1
+	query, err := normalizedResourceListQuery(query)
+	if err != nil {
+		return nil, 0, err
 	}
-	if pageSize < 1 || pageSize > 200 {
-		pageSize = 50
+	return s.repository.ListResources(ctx, projectID, query)
+}
+
+// ListAllResources 为系统管理员提供真正的跨项目统一分页；调用权限由 HTTP 装配层强制校验。
+func (s *Service) ListAllResources(ctx context.Context, query ResourceListQuery) ([]Resource, int64, error) {
+	query, err := normalizedResourceListQuery(query)
+	if err != nil {
+		return nil, 0, err
 	}
-	return s.repository.ListResources(ctx, projectID, provider, resourceType, assetStatus, (page-1)*pageSize, pageSize)
+	return s.repository.ListResources(ctx, 0, query)
+}
+
+func normalizedResourceListQuery(query ResourceListQuery) (ResourceListQuery, error) {
+	for _, provider := range query.Providers {
+		if !validProvider(provider) {
+			return query, ErrInvalidResourceQuery
+		}
+	}
+	for _, resourceType := range query.ResourceTypes {
+		if _, err := assetTableForType(resourceType); err != nil {
+			return query, ErrInvalidResourceQuery
+		}
+	}
+	if query.AssetStatus != "" && query.AssetStatus != AssetStatusActive && query.AssetStatus != AssetStatusLost {
+		return query, ErrInvalidResourceQuery
+	}
+	allowedSorts := map[string]bool{"name": true, "project": true, "source": true, "resource_type": true, "instance_type": true, "vcpu": true, "memory": true, "disk_size": true, "region": true, "cloud_status": true, "asset_status": true, "last_seen_at": true}
+	if query.SortBy == "" {
+		query.SortBy = "name"
+	}
+	if !allowedSorts[query.SortBy] {
+		return query, ErrInvalidResourceQuery
+	}
+	if query.SortOrder == "" {
+		query.SortOrder = "asc"
+	}
+	if query.SortOrder != "asc" && query.SortOrder != "desc" {
+		return query, ErrInvalidResourceQuery
+	}
+	if query.Page < 1 {
+		query.Page = 1
+	}
+	if query.PageSize < 1 || query.PageSize > 200 {
+		query.PageSize = 20
+	}
+	return query, nil
 }
 
 // ListJobs 返回当前项目及可选接入源的同步历史。
