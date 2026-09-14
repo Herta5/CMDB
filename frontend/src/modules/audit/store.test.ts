@@ -16,7 +16,7 @@ describe('审计日志状态', () => {
     const store = useAuditStore()
     await store.load(0, { page: 1, pageSize: 20, action: 'user.deleted', actorUsername: 'admin' })
     expect(get).toHaveBeenCalledWith('/audit-logs', { params: { page: 1, page_size: 20, action: 'user.deleted', actor_username: 'admin' } })
-    expect(store.items[0]).toEqual({ id: 5, actorUsername: 'admin', actorDisplayName: '系统管理员', projectId: null, projectName: '', action: 'user.deleted', resourceType: 'user', resourceId: 'removed_user', detail: { target_username: 'removed_user' }, requestIp: '203.0.113.8', createdAt: '2026-09-10T08:00:00Z' })
+    expect(store.items[0]).toEqual({ id: 5, actorUsername: 'admin', actorDisplayName: '系统管理员', projectId: null, projectName: '', action: 'user.deleted', resourceType: 'user', resourceId: 'removed_user', resourceName: '', detail: { target_username: 'removed_user' }, requestIp: '203.0.113.8', createdAt: '2026-09-10T08:00:00Z' })
     expect(store.total).toBe(1)
     expect(store.state).toBe('ready')
   })

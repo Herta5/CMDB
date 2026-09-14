@@ -4,6 +4,7 @@ import { computed, onBeforeUnmount, reactive, ref, watch } from 'vue'
 
 import { useAuditStore } from './store'
 import type { AuditFilter, AuditLog } from './api'
+import { syncChangeSections, syncStatistics, syncStatusLabel, syncTriggerLabel } from './sync-detail'
 import { useProjectStore } from '@/modules/project/store'
 
 const audit = useAuditStore()
@@ -20,6 +21,8 @@ const actionLabels: Record<string, string> = {
   'project_member.added': '添加项目成员', 'project_member.role_changed': '变更成员角色', 'project_member.removed': '移除项目成员',
   'source.created': '创建接入源', 'source.updated': '编辑接入源', 'source.deleted': '删除接入源',
   'source.connection_tested': '测试接入源连接', 'source.synced': '同步云资源',
+}
+const resourceActionLabels: Record<string, string> = {
   'resource.created': '发现资源', 'resource.updated': '更新资源', 'resource.restored': '资源恢复', 'resource.lost': '资源失联', 'resource.deleted': '删除失联资源',
 }
 /** resourceTypeLabels 统一常见对象类型，未知平台类型仍保留原值以便排查。 */
@@ -47,15 +50,19 @@ async function resetFilters() { Object.assign(filters, { action: '', actorUserna
 /** changePage 只允许在真实分页范围内导航。 */
 async function changePage(next: number) { if (next < 1 || next > totalPages.value || next === page.value) return; page.value = next; await load() }
 /** actionLabel 为尚未识别的新动作保留原始契约名称。 */
-function actionLabel(value: string) { return actionLabels[value] ?? value }
+function actionLabel(value: string) { return actionLabels[value] ?? resourceActionLabels[value] ?? value }
 /** objectLabel 为尚未识别的云类型保留原始类型。 */
 function objectLabel(value: string) { return resourceTypeLabels[value] ?? value }
 /** actorLabel 使用公开用户名作为主身份，后台系统任务没有用户名。 */
 function actorLabel(value: AuditLog) { return value.actorUsername || '系统任务' }
+/** objectName 对接入源优先使用审计名称快照，避免向用户暴露无意义的数字主键。 */
+function objectName(item: AuditLog) { return item.resourceType === 'resource_source' ? item.resourceName || '名称未记录' : item.resourceId || '—' }
 /** formatTime 使用当前浏览器时区展示，原始 RFC3339 数据仍由接口保留。 */
 function formatTime(value: string) { return value ? new Date(value).toLocaleString('zh-CN', { hour12: false }) : '—' }
 /** detailEntries 按键排序以保证详情抽屉稳定易读。 */
 function detailEntries(value: AuditLog | null) { return Object.entries(value?.detail ?? {}).sort(([left], [right]) => left.localeCompare(right)) }
+/** isSyncAudit 只改变同步结果的详情展示，其他管理审计仍展示脱敏键值。 */
+function isSyncAudit(item: AuditLog) { return item.action === 'source.synced' }
 
 watch(() => projects.currentProjectId, () => { page.value = 1; void load() }, { immediate: true })
 onBeforeUnmount(() => audit.clear())
@@ -80,11 +87,11 @@ onBeforeUnmount(() => audit.clear())
       <div v-else-if="audit.state === 'error'" class="page-state"><span class="state-symbol" aria-hidden="true">!</span><h3>审计日志加载失败</h3><p>请稍后重试。</p><button class="console-button" @click="load">重新加载</button></div>
       <div v-else-if="audit.state === 'empty'" class="page-state"><span class="state-symbol" aria-hidden="true">◇</span><h3>暂无审计记录</h3><p>当前项目和筛选条件下没有可显示的操作。</p></div>
       <template v-else>
-        <div class="table-scroll"><table class="console-table audit-table"><thead><tr><th>时间</th><th>操作人</th><th>项目</th><th>操作</th><th>对象</th><th>来源 IP</th><th>详情</th></tr></thead><tbody><tr v-for="item in audit.items" :key="item.id"><td>{{ formatTime(item.createdAt) }}</td><td><strong>{{ actorLabel(item) }}</strong><small v-if="item.actorUsername && item.actorDisplayName">{{ item.actorDisplayName }}</small></td><td>{{ item.projectName || (item.projectId ? `项目 ${item.projectId}` : '全局') }}</td><td>{{ actionLabel(item.action) }}</td><td><strong>{{ objectLabel(item.resourceType) }}</strong><small>{{ item.resourceId || '—' }}</small></td><td class="monospace">{{ item.requestIp || '—' }}</td><td><button class="button-link" @click="selected = item">查看详情</button></td></tr></tbody></table></div>
+        <div class="table-scroll"><table class="console-table audit-table"><thead><tr><th>时间</th><th>操作人</th><th>项目</th><th>操作</th><th>对象</th><th>来源 IP</th><th>详情</th></tr></thead><tbody><tr v-for="item in audit.items" :key="item.id"><td>{{ formatTime(item.createdAt) }}</td><td><strong>{{ actorLabel(item) }}</strong><small v-if="item.actorUsername && item.actorDisplayName">{{ item.actorDisplayName }}</small></td><td>{{ item.projectName || (item.projectId ? `项目 ${item.projectId}` : '全局') }}</td><td>{{ actionLabel(item.action) }}</td><td><strong>{{ objectLabel(item.resourceType) }}</strong><small>{{ objectName(item) }}</small></td><td class="monospace">{{ item.requestIp || '—' }}</td><td><button class="button-link" @click="selected = item">查看详情</button></td></tr></tbody></table></div>
         <footer class="audit-pagination"><span>共 {{ audit.total }} 条</span><div><button class="console-button" :disabled="page <= 1" @click="changePage(page - 1)">上一页</button><span>第 {{ page }} / {{ totalPages }} 页</span><button class="console-button" :disabled="page >= totalPages" @click="changePage(page + 1)">下一页</button></div></footer>
       </template>
     </section>
 
-    <div v-if="selected" class="audit-drawer-backdrop" @click.self="selected = null"><aside class="audit-drawer" aria-label="审计详情"><header><div><p class="page-eyebrow">{{ actionLabel(selected.action) }}</p><h2>审计详情</h2></div><button class="dialog-close" aria-label="关闭详情" @click="selected = null">×</button></header><dl><div><dt>时间</dt><dd>{{ formatTime(selected.createdAt) }}</dd></div><div><dt>操作人</dt><dd>{{ actorLabel(selected) }}</dd></div><div><dt>项目</dt><dd>{{ selected.projectName || '全局' }}</dd></div><div><dt>对象</dt><dd>{{ objectLabel(selected.resourceType) }} · {{ selected.resourceId || '—' }}</dd></div><div><dt>来源 IP</dt><dd class="monospace">{{ selected.requestIp || '—' }}</dd></div><div class="detail-wide"><dt>脱敏详情</dt><dd v-if="!detailEntries(selected).length" class="muted">无附加详情</dd><dd v-else class="audit-detail-list"><span v-for="[key, value] in detailEntries(selected)" :key="key"><b>{{ key }}</b><code>{{ typeof value === 'string' ? value : JSON.stringify(value) }}</code></span></dd></div></dl></aside></div>
+    <div v-if="selected" class="audit-drawer-backdrop" @click.self="selected = null"><aside class="audit-drawer" aria-label="审计详情"><header><div><p class="page-eyebrow">{{ actionLabel(selected.action) }}</p><h2>审计详情</h2></div><button class="dialog-close" aria-label="关闭详情" @click="selected = null">×</button></header><dl><div><dt>时间</dt><dd>{{ formatTime(selected.createdAt) }}</dd></div><div><dt>操作人</dt><dd>{{ actorLabel(selected) }}</dd></div><div><dt>项目</dt><dd>{{ selected.projectName || '全局' }}</dd></div><div><dt>对象</dt><dd>{{ objectLabel(selected.resourceType) }} · {{ objectName(selected) }}</dd></div><div><dt>来源 IP</dt><dd class="monospace">{{ selected.requestIp || '—' }}</dd></div><template v-if="isSyncAudit(selected)"><div class="detail-wide"><dt>同步详情</dt><dd class="audit-sync-detail"><div class="audit-sync-summary"><span><b>状态</b>{{ syncStatusLabel(selected.detail.status) }}</span><span><b>触发方式</b>{{ syncTriggerLabel(selected.detail.trigger) }}</span></div><div v-if="syncStatistics(selected.detail).length" class="audit-sync-statistics"><span v-for="statistic in syncStatistics(selected.detail)" :key="statistic.resourceType"><b>{{ objectLabel(statistic.resourceType) }}</b>新增 {{ statistic.added }} · 更新 {{ statistic.updated }} · 恢复 {{ statistic.restored }} · 失联 {{ statistic.lost }} · 删除 {{ statistic.deleted }} · 失败 {{ statistic.failed }}</span></div><div v-if="syncChangeSections(selected.detail).length" class="audit-change-sections"><section v-for="section in syncChangeSections(selected.detail)" :key="section.action" class="audit-change-section"><h3>{{ section.label }}</h3><div v-for="resource in section.resources" :key="resource.resourceType" class="audit-change-resource"><b>{{ objectLabel(resource.resourceType) }}</b><span class="audit-resource-ids">{{ resource.ids.join('、') }}</span></div></section></div><p v-else class="muted">本次同步未产生资源变化</p></dd></div></template><div v-else class="detail-wide"><dt>脱敏详情</dt><dd v-if="!detailEntries(selected).length" class="muted">无附加详情</dd><dd v-else class="audit-detail-list"><span v-for="[key, value] in detailEntries(selected)" :key="key"><b>{{ key }}</b><code>{{ typeof value === 'string' ? value : JSON.stringify(value) }}</code></span></dd></div></dl></aside></div>
   </section>
 </template>

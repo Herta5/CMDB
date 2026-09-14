@@ -55,20 +55,32 @@ describe('审计日志页面', () => {
     vi.stubGlobal('ShadowRoot', class {})
     pinia = createPinia(); setActivePinia(pinia)
     useAuthStore().acceptSession('审计会话', { username: 'admin', displayName: '系统管理员', globalRole: 'system_admin' })
-    get.mockReset().mockResolvedValue({ items: [{ id: 5, actor_username: 'audit_admin', actor_display_name: '审计管理员', project_id: 7, project_name: '云项目', action: 'resource.lost', resource_type: 'ec2', resource_id: 'i-lost', detail: { provider: 'aws' }, request_ip: '', created_at: '2026-09-10T08:00:00Z' }], total: 1, page: 1, page_size: 20 })
+    get.mockReset().mockResolvedValue({ items: [{ id: 5, actor_username: 'audit_admin', actor_display_name: '审计管理员', project_id: 7, project_name: '云项目', action: 'source.synced', resource_type: 'resource_source', resource_id: '1', resource_name: '生产环境阿里云', detail: { status: 'success', trigger: 'manual', statistics: { alb: { added: 1 } }, changes: { created: { alb: ['lb-production'] }, updated: {}, restored: {}, lost: {}, deleted: {} } }, request_ip: '', created_at: '2026-09-10T08:00:00Z' }], total: 1, page: 1, page_size: 20 })
   })
 
-  it('显示中文审计记录并可打开详情抽屉', async () => {
+  it('显示接入源名称并在抽屉中展示聚合同步详情', async () => {
     const { app, root } = await mountAuditPage()
     expect(text(root)).toContain('审计日志')
-    expect(text(root)).toContain('资源失联')
+    expect(text(root)).toContain('同步云资源')
     expect(text(root)).toContain('audit_admin')
     expect(text(root)).toContain('审计管理员')
     await all(root).find(value => value.type === 'button' && text(value).includes('查看详情'))!.props.onClick()
     await flush()
     expect(text(root)).toContain('审计详情')
-    expect(text(root)).toContain('provider')
-    expect(text(root)).toContain('aws')
+    expect(text(root)).toContain('生产环境阿里云')
+    expect(text(root)).not.toContain(' · 1')
+    expect(text(root)).toContain('新增')
+    expect(text(root)).toContain('ALB')
+    expect(text(root)).toContain('lb-production')
+    app.unmount()
+  })
+
+  it('在同步审计没有有效变化时提示空变化状态', async () => {
+    get.mockResolvedValue({ items: [{ id: 6, actor_username: 'audit_admin', actor_display_name: '审计管理员', project_id: 7, project_name: '云项目', action: 'source.synced', resource_type: 'resource_source', resource_id: '1', resource_name: '生产环境阿里云', detail: { status: 'success', trigger: 'automatic', statistics: {}, changes: { created: null, updated: { ec2: [] } } }, request_ip: '', created_at: '2026-09-10T08:00:00Z' }], total: 1, page: 1, page_size: 20 })
+    const { app, root } = await mountAuditPage()
+    await all(root).find(value => value.type === 'button' && text(value).includes('查看详情'))!.props.onClick()
+    await flush()
+    expect(text(root)).toContain('本次同步未产生资源变化')
     app.unmount()
   })
 

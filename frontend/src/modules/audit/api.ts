@@ -11,6 +11,7 @@ export interface AuditLog {
   action: string
   resourceType: string
   resourceId: string
+  resourceName: string
   detail: Record<string, unknown>
   requestIp: string
   createdAt: string
@@ -36,7 +37,7 @@ export interface AuditPage { items: AuditLog[]; total: number; page: number; pag
 interface AuditLogDTO {
   id: number; actor_username: string; actor_display_name: string
   project_id: number | null; project_name: string; action: string; resource_type: string
-  resource_id: string; detail: Record<string, unknown> | null; request_ip: string; created_at: string
+  resource_id: string; resource_name?: string; detail: Record<string, unknown> | null; request_ip: string; created_at: string
 }
 interface AuditPageDTO { items: AuditLogDTO[]; total: number; page: number; page_size: number; snapshot_id: number }
 
@@ -58,7 +59,7 @@ function toAuditLog(value: AuditLogDTO): AuditLog {
   return {
     id: value.id, actorUsername: value.actor_username ?? '', actorDisplayName: value.actor_display_name ?? '',
     projectId: value.project_id, projectName: value.project_name ?? '', action: value.action,
-    resourceType: value.resource_type, resourceId: value.resource_id, detail: value.detail ?? {}, requestIp: value.request_ip ?? '', createdAt: value.created_at,
+    resourceType: value.resource_type, resourceId: value.resource_id, resourceName: value.resource_name ?? '', detail: value.detail ?? {}, requestIp: value.request_ip ?? '', createdAt: value.created_at,
   }
 }
 
