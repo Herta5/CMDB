@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { syncChangeSections, syncStatistics } from './sync-detail'
+import { syncChangeSections, syncStatistics, syncTriggerLabel } from './sync-detail'
 
 describe('同步审计详情', () => {
   it('按固定动作顺序整理资源类型和云端标识', () => {
@@ -22,5 +22,10 @@ describe('同步审计详情', () => {
     expect(syncStatistics({ statistics: { ec2: { added: 2, updated: 1, secret: 9 } } })).toEqual([
       { resourceType: 'ec2', added: 2, updated: 1, restored: 0, lost: 0, deleted: 0, failed: 0 },
     ])
+  })
+
+  it('将后端定时触发值显示为自动', () => {
+    expect(syncTriggerLabel('scheduled')).toBe('自动')
+    expect(syncTriggerLabel('automatic')).toBe('automatic')
   })
 })

@@ -55,7 +55,7 @@ describe('审计日志页面', () => {
     vi.stubGlobal('ShadowRoot', class {})
     pinia = createPinia(); setActivePinia(pinia)
     useAuthStore().acceptSession('审计会话', { username: 'admin', displayName: '系统管理员', globalRole: 'system_admin' })
-    get.mockReset().mockResolvedValue({ items: [{ id: 5, actor_username: 'audit_admin', actor_display_name: '审计管理员', project_id: 7, project_name: '云项目', action: 'source.synced', resource_type: 'resource_source', resource_id: '1', resource_name: '生产环境阿里云', detail: { status: 'success', trigger: 'manual', statistics: { alb: { added: 1 } }, changes: { created: { alb: ['lb-production'] }, updated: {}, restored: {}, lost: {}, deleted: {} } }, request_ip: '', created_at: '2026-09-10T08:00:00Z' }], total: 1, page: 1, page_size: 20 })
+    get.mockReset().mockResolvedValue({ items: [{ id: 5, actor_username: 'audit_admin', actor_display_name: '审计管理员', project_id: 7, project_name: '云项目', action: 'source.synced', resource_type: 'resource_source', resource_id: '1', resource_name: '生产环境阿里云', detail: { status: 'success', trigger: 'scheduled', statistics: { alb: { added: 2 } }, changes: { created: { alb: ['lb-production-z', 'lb-production-a'] }, updated: {}, restored: {}, lost: {}, deleted: {} } }, request_ip: '', created_at: '2026-09-10T08:00:00Z' }], total: 1, page: 1, page_size: 20 })
   })
 
   it('显示接入源名称并在抽屉中展示聚合同步详情', async () => {
@@ -71,16 +71,41 @@ describe('审计日志页面', () => {
     expect(text(root)).not.toContain(' · 1')
     expect(text(root)).toContain('新增')
     expect(text(root)).toContain('ALB')
-    expect(text(root)).toContain('lb-production')
+    expect(text(root)).toContain('lb-production-a')
+    expect(text(root)).toContain('lb-production-z')
+    expect(text(root)).toContain('2 个')
+    expect(text(root)).toContain('自动')
     app.unmount()
   })
 
   it('在同步审计没有有效变化时提示空变化状态', async () => {
-    get.mockResolvedValue({ items: [{ id: 6, actor_username: 'audit_admin', actor_display_name: '审计管理员', project_id: 7, project_name: '云项目', action: 'source.synced', resource_type: 'resource_source', resource_id: '1', resource_name: '生产环境阿里云', detail: { status: 'success', trigger: 'automatic', statistics: {}, changes: { created: null, updated: { ec2: [] } } }, request_ip: '', created_at: '2026-09-10T08:00:00Z' }], total: 1, page: 1, page_size: 20 })
+    get.mockResolvedValue({ items: [{ id: 6, actor_username: 'audit_admin', actor_display_name: '审计管理员', project_id: 7, project_name: '云项目', action: 'source.synced', resource_type: 'resource_source', resource_id: '1', resource_name: '生产环境阿里云', detail: { status: 'success', trigger: 'scheduled', statistics: {}, changes: { created: null, updated: { ec2: [] } } }, request_ip: '', created_at: '2026-09-10T08:00:00Z' }], total: 1, page: 1, page_size: 20 })
     const { app, root } = await mountAuditPage()
     await all(root).find(value => value.type === 'button' && text(value).includes('查看详情'))!.props.onClick()
     await flush()
     expect(text(root)).toContain('本次同步未产生资源变化')
+    app.unmount()
+  })
+
+  it('展示部分成功的安全摘要和阿里云平台标签', async () => {
+    get.mockResolvedValue({ items: [{ id: 7, actor_username: 'audit_admin', actor_display_name: '审计管理员', project_id: 7, project_name: '云项目', action: 'source.synced', resource_type: 'resource_source', resource_id: '1', resource_name: '生产环境阿里云', detail: { status: 'partial_success', trigger: 'scheduled', provider: 'aliyun', error_summary: 'ALB：云账号权限不足，请授予资源只读权限', statistics: {}, changes: {} }, request_ip: '', created_at: '2026-09-10T08:00:00Z' }], total: 1, page: 1, page_size: 20 })
+    const { app, root } = await mountAuditPage()
+    await all(root).find(value => value.type === 'button' && text(value).includes('查看详情'))!.props.onClick()
+    await flush()
+    expect(text(root)).toContain('部分成功')
+    expect(text(root)).toContain('阿里云')
+    expect(text(root)).toContain('ALB：云账号权限不足，请授予资源只读权限')
+    app.unmount()
+  })
+
+  it('失败同步保留未知平台的安全原值', async () => {
+    get.mockResolvedValue({ items: [{ id: 8, actor_username: 'audit_admin', actor_display_name: '审计管理员', project_id: 7, project_name: '云项目', action: 'source.synced', resource_type: 'resource_source', resource_id: '1', resource_name: '生产环境阿里云', detail: { status: 'failed', trigger: 'scheduled', provider: 'future_cloud', error_summary: '资源采集失败', statistics: {}, changes: {} }, request_ip: '', created_at: '2026-09-10T08:00:00Z' }], total: 1, page: 1, page_size: 20 })
+    const { app, root } = await mountAuditPage()
+    await all(root).find(value => value.type === 'button' && text(value).includes('查看详情'))!.props.onClick()
+    await flush()
+    expect(text(root)).toContain('失败')
+    expect(text(root)).toContain('future_cloud')
+    expect(text(root)).toContain('资源采集失败')
     app.unmount()
   })
 
@@ -103,20 +128,16 @@ describe('审计日志页面', () => {
     app.unmount()
   })
 
-  it('以官方大写缩写展示各类负载均衡审计对象并原样保留未知类型', async () => {
-    get.mockResolvedValue({
-      items: ['clb', 'alb', 'nlb', 'gwlb', 'elb', 'future_lb'].map((resource_type, id) => ({
-        id, actor_username: 'audit_admin', actor_display_name: '审计管理员', project_id: 7, project_name: '云项目',
-        action: 'resource.updated', resource_type, resource_id: `lb-${id}`, detail: {}, request_ip: '', created_at: '2026-09-10T08:00:00Z',
-      })),
-      total: 6, page: 1, page_size: 20,
-    })
+  it('在聚合同步统计中展示官方大写缩写并保留未知资源类型', async () => {
+    get.mockResolvedValue({ items: [{ id: 9, actor_username: 'audit_admin', actor_display_name: '审计管理员', project_id: 7, project_name: '云项目', action: 'source.synced', resource_type: 'resource_source', resource_id: '1', resource_name: '生产环境阿里云', detail: { status: 'success', trigger: 'scheduled', statistics: { clb: {}, alb: {}, nlb: {}, gwlb: {}, elb: {}, future_lb: {} }, changes: {} }, request_ip: '', created_at: '2026-09-10T08:00:00Z' }], total: 1, page: 1, page_size: 20 })
     const { app, root } = await mountAuditPage()
+    await all(root).find(value => value.type === 'button' && text(value).includes('查看详情'))!.props.onClick()
+    await flush()
     const objectLabels = all(root)
-      .filter(value => value.type === 'strong')
+      .filter(value => value.type === 'b')
       .map(text)
       .filter(value => ['CLB', 'ALB', 'NLB', 'GWLB', 'elb', 'future_lb'].includes(value))
-    expect(objectLabels).toEqual(['CLB', 'ALB', 'NLB', 'GWLB', 'elb', 'future_lb'])
+    expect(objectLabels).toEqual(['ALB', 'CLB', 'elb', 'future_lb', 'GWLB', 'NLB'])
     expect(objectLabels).not.toContain('ELB')
     app.unmount()
   })

@@ -64,6 +64,18 @@ export function syncStatusLabel(value: unknown): string {
 /** syncTriggerLabel 将已知触发方式转为中文，未知安全字符串保留以兼容后端新增枚举。 */
 export function syncTriggerLabel(value: unknown): string {
   if (value === 'manual') return '手工'
-  if (value === 'automatic') return '自动'
+  if (value === 'scheduled') return '自动'
   return typeof value === 'string' && value ? value : '—'
+}
+
+/** syncProviderLabel 复用控制台既有云平台名称，未知的已脱敏值保留以兼容后端枚举扩展。 */
+export function syncProviderLabel(value: unknown): string {
+  if (value === 'aliyun') return '阿里云'
+  if (value === 'aws') return 'AWS'
+  return typeof value === 'string' && value ? value : '—'
+}
+
+/** syncErrorSummary 只显示审计详情中的安全字符串摘要，错误形态不会被展开到页面。 */
+export function syncErrorSummary(detail: Record<string, unknown>): string {
+  return typeof detail.error_summary === 'string' && detail.error_summary ? detail.error_summary : '—'
 }

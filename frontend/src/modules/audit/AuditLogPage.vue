@@ -4,7 +4,7 @@ import { computed, onBeforeUnmount, reactive, ref, watch } from 'vue'
 
 import { useAuditStore } from './store'
 import type { AuditFilter, AuditLog } from './api'
-import { syncChangeSections, syncStatistics, syncStatusLabel, syncTriggerLabel } from './sync-detail'
+import { syncChangeSections, syncErrorSummary, syncProviderLabel, syncStatistics, syncStatusLabel, syncTriggerLabel } from './sync-detail'
 import { useProjectStore } from '@/modules/project/store'
 
 const audit = useAuditStore()
@@ -21,9 +21,6 @@ const actionLabels: Record<string, string> = {
   'project_member.added': '添加项目成员', 'project_member.role_changed': '变更成员角色', 'project_member.removed': '移除项目成员',
   'source.created': '创建接入源', 'source.updated': '编辑接入源', 'source.deleted': '删除接入源',
   'source.connection_tested': '测试接入源连接', 'source.synced': '同步云资源',
-}
-const resourceActionLabels: Record<string, string> = {
-  'resource.created': '发现资源', 'resource.updated': '更新资源', 'resource.restored': '资源恢复', 'resource.lost': '资源失联', 'resource.deleted': '删除失联资源',
 }
 /** resourceTypeLabels 统一常见对象类型，未知平台类型仍保留原值以便排查。 */
 const resourceTypeLabels: Record<string, string> = { user: '用户', project: '项目', project_member: '项目成员', resource_source: '接入源', ecs: 'ECS', ec2: 'EC2', rds: 'RDS', slb: 'SLB', clb: 'CLB', alb: 'ALB', nlb: 'NLB', gwlb: 'GWLB' }
@@ -50,7 +47,7 @@ async function resetFilters() { Object.assign(filters, { action: '', actorUserna
 /** changePage 只允许在真实分页范围内导航。 */
 async function changePage(next: number) { if (next < 1 || next > totalPages.value || next === page.value) return; page.value = next; await load() }
 /** actionLabel 为尚未识别的新动作保留原始契约名称。 */
-function actionLabel(value: string) { return actionLabels[value] ?? resourceActionLabels[value] ?? value }
+function actionLabel(value: string) { return actionLabels[value] ?? value }
 /** objectLabel 为尚未识别的云类型保留原始类型。 */
 function objectLabel(value: string) { return resourceTypeLabels[value] ?? value }
 /** actorLabel 使用公开用户名作为主身份，后台系统任务没有用户名。 */
@@ -92,6 +89,6 @@ onBeforeUnmount(() => audit.clear())
       </template>
     </section>
 
-    <div v-if="selected" class="audit-drawer-backdrop" @click.self="selected = null"><aside class="audit-drawer" aria-label="审计详情"><header><div><p class="page-eyebrow">{{ actionLabel(selected.action) }}</p><h2>审计详情</h2></div><button class="dialog-close" aria-label="关闭详情" @click="selected = null">×</button></header><dl><div><dt>时间</dt><dd>{{ formatTime(selected.createdAt) }}</dd></div><div><dt>操作人</dt><dd>{{ actorLabel(selected) }}</dd></div><div><dt>项目</dt><dd>{{ selected.projectName || '全局' }}</dd></div><div><dt>对象</dt><dd>{{ objectLabel(selected.resourceType) }} · {{ objectName(selected) }}</dd></div><div><dt>来源 IP</dt><dd class="monospace">{{ selected.requestIp || '—' }}</dd></div><template v-if="isSyncAudit(selected)"><div class="detail-wide"><dt>同步详情</dt><dd class="audit-sync-detail"><div class="audit-sync-summary"><span><b>状态</b>{{ syncStatusLabel(selected.detail.status) }}</span><span><b>触发方式</b>{{ syncTriggerLabel(selected.detail.trigger) }}</span></div><div v-if="syncStatistics(selected.detail).length" class="audit-sync-statistics"><span v-for="statistic in syncStatistics(selected.detail)" :key="statistic.resourceType"><b>{{ objectLabel(statistic.resourceType) }}</b>新增 {{ statistic.added }} · 更新 {{ statistic.updated }} · 恢复 {{ statistic.restored }} · 失联 {{ statistic.lost }} · 删除 {{ statistic.deleted }} · 失败 {{ statistic.failed }}</span></div><div v-if="syncChangeSections(selected.detail).length" class="audit-change-sections"><section v-for="section in syncChangeSections(selected.detail)" :key="section.action" class="audit-change-section"><h3>{{ section.label }}</h3><div v-for="resource in section.resources" :key="resource.resourceType" class="audit-change-resource"><b>{{ objectLabel(resource.resourceType) }}</b><span class="audit-resource-ids">{{ resource.ids.join('、') }}</span></div></section></div><p v-else class="muted">本次同步未产生资源变化</p></dd></div></template><div v-else class="detail-wide"><dt>脱敏详情</dt><dd v-if="!detailEntries(selected).length" class="muted">无附加详情</dd><dd v-else class="audit-detail-list"><span v-for="[key, value] in detailEntries(selected)" :key="key"><b>{{ key }}</b><code>{{ typeof value === 'string' ? value : JSON.stringify(value) }}</code></span></dd></div></dl></aside></div>
+    <div v-if="selected" class="audit-drawer-backdrop" @click.self="selected = null"><aside class="audit-drawer" aria-label="审计详情"><header><div><p class="page-eyebrow">{{ actionLabel(selected.action) }}</p><h2>审计详情</h2></div><button class="dialog-close" aria-label="关闭详情" @click="selected = null">×</button></header><dl><div><dt>时间</dt><dd>{{ formatTime(selected.createdAt) }}</dd></div><div><dt>操作人</dt><dd>{{ actorLabel(selected) }}</dd></div><div><dt>项目</dt><dd>{{ selected.projectName || '全局' }}</dd></div><div><dt>对象</dt><dd>{{ objectLabel(selected.resourceType) }} · {{ objectName(selected) }}</dd></div><div><dt>来源 IP</dt><dd class="monospace">{{ selected.requestIp || '—' }}</dd></div><template v-if="isSyncAudit(selected)"><div class="detail-wide"><dt>同步详情</dt><dd class="audit-sync-detail"><div class="audit-sync-summary"><span><b>状态</b>{{ syncStatusLabel(selected.detail.status) }}</span><span><b>触发方式</b>{{ syncTriggerLabel(selected.detail.trigger) }}</span><span><b>云平台</b>{{ syncProviderLabel(selected.detail.provider) }}</span><span v-if="syncErrorSummary(selected.detail) !== '—'"><b>错误摘要</b>{{ syncErrorSummary(selected.detail) }}</span></div><div v-if="syncStatistics(selected.detail).length" class="audit-sync-statistics"><span v-for="statistic in syncStatistics(selected.detail)" :key="statistic.resourceType"><b>{{ objectLabel(statistic.resourceType) }}</b>新增 {{ statistic.added }} · 更新 {{ statistic.updated }} · 恢复 {{ statistic.restored }} · 失联 {{ statistic.lost }} · 删除 {{ statistic.deleted }} · 失败 {{ statistic.failed }}</span></div><div v-if="syncChangeSections(selected.detail).length" class="audit-change-sections"><section v-for="section in syncChangeSections(selected.detail)" :key="section.action" class="audit-change-section"><h3>{{ section.label }}</h3><div v-for="resource in section.resources" :key="resource.resourceType" class="audit-change-resource"><b>{{ objectLabel(resource.resourceType) }}（{{ resource.ids.length }} 个）</b><span class="audit-resource-ids">{{ resource.ids.join('、') }}</span></div></section></div><p v-else class="muted">本次同步未产生资源变化</p></dd></div></template><div v-else class="detail-wide"><dt>脱敏详情</dt><dd v-if="!detailEntries(selected).length" class="muted">无附加详情</dd><dd v-else class="audit-detail-list"><span v-for="[key, value] in detailEntries(selected)" :key="key"><b>{{ key }}</b><code>{{ typeof value === 'string' ? value : JSON.stringify(value) }}</code></span></dd></div></dl></aside></div>
   </section>
 </template>
