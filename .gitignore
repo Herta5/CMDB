@@ -46,3 +46,7 @@ docs/project/*
 
 # Isolated development worktrees
 .worktrees/
+
+# Local code index and integration test environments
+.codegraph/
+backend/test/
