@@ -97,6 +97,98 @@ func (s *slbCollectStub) DescribeLoadBalancerAttribute(r *slb.DescribeLoadBalanc
 	return slb.CreateDescribeLoadBalancerAttributeResponse(), nil
 }
 
+// TestCollectSLBReadsAllPagesAndListeners 防止 TotalCount 尚未收齐时漏读后续页或监听器。
+func TestCollectSLBReadsAllPagesAndListeners(t *testing.T) {
+	attributeIDs := []string{}
+	client := &slbCollectStub{
+		list: func(r *slb.DescribeLoadBalancersRequest) (*slb.DescribeLoadBalancersResponse, error) {
+			if r.PageSize != "100" {
+				t.Fatalf("SLB 列表页大小错误：%s", r.PageSize)
+			}
+			response := slb.CreateDescribeLoadBalancersResponse()
+			response.TotalCount = 2
+			switch r.PageNumber {
+			case "1":
+				response.LoadBalancers.LoadBalancer = []slb.LoadBalancer{{LoadBalancerId: "lb-1"}}
+			case "2":
+				response.LoadBalancers.LoadBalancer = []slb.LoadBalancer{{LoadBalancerId: "lb-2"}}
+			default:
+				t.Fatalf("SLB 不应读取第 %s 页", r.PageNumber)
+			}
+			return response, nil
+		},
+		attribute: func(r *slb.DescribeLoadBalancerAttributeRequest) (*slb.DescribeLoadBalancerAttributeResponse, error) {
+			attributeIDs = append(attributeIDs, r.LoadBalancerId)
+			response := slb.CreateDescribeLoadBalancerAttributeResponse()
+			response.ListenerPortsAndProtocol.ListenerPortAndProtocol = []slb.ListenerPortAndProtocol{{ListenerPort: 443, ListenerProtocol: "HTTPS"}}
+			return response, nil
+		},
+	}
+	items, listeners, err := collectSLB(client, "cn-hangzhou")
+	if err != nil {
+		t.Fatalf("SLB 完整分页不应失败：%v", err)
+	}
+	if len(items) != 2 || items[0].LoadBalancerId != "lb-1" || items[1].LoadBalancerId != "lb-2" {
+		t.Fatalf("SLB 必须收齐两页资源：%v", items)
+	}
+	if !reflect.DeepEqual(attributeIDs, []string{"lb-1", "lb-2"}) || len(listeners["lb-1"]) != 1 || len(listeners["lb-2"]) != 1 {
+		t.Fatalf("SLB 必须读取两个资源的监听器：标识=%v 监听器=%v", attributeIDs, listeners)
+	}
+}
+
+// TestCollectSLBRejectsIncompleteEmptyPage 防止不完整空页输出局部资源并推进生命周期。
+func TestCollectSLBRejectsIncompleteEmptyPage(t *testing.T) {
+	attributeCalls := 0
+	client := &slbCollectStub{
+		list: func(r *slb.DescribeLoadBalancersRequest) (*slb.DescribeLoadBalancersResponse, error) {
+			response := slb.CreateDescribeLoadBalancersResponse()
+			response.TotalCount = 2
+			switch r.PageNumber {
+			case "1":
+				response.LoadBalancers.LoadBalancer = []slb.LoadBalancer{{LoadBalancerId: "lb-partial"}}
+			case "2":
+				response.LoadBalancers.LoadBalancer = nil
+			default:
+				t.Fatalf("SLB 不完整空页应在第 2 页安全失败，不应读取第 %s 页", r.PageNumber)
+			}
+			return response, nil
+		},
+		attribute: func(*slb.DescribeLoadBalancerAttributeRequest) (*slb.DescribeLoadBalancerAttributeResponse, error) {
+			attributeCalls++
+			return slb.CreateDescribeLoadBalancerAttributeResponse(), nil
+		},
+	}
+	items, listeners, err := collectSLB(client, "cn-hangzhou")
+	if err == nil {
+		t.Fatal("累计数量不足 TotalCount 的空页必须使 SLB 类型失败")
+	}
+	if len(items) != 0 || len(listeners) != 0 {
+		t.Fatalf("SLB 分页失败不得输出局部结果：资源=%v 监听器=%v", items, listeners)
+	}
+	if attributeCalls != 0 {
+		t.Fatalf("SLB 列表未收齐前不得读取局部资源监听器：调用次数=%d", attributeCalls)
+	}
+}
+
+// TestCollectSLBAllowsDeclaredEmptyList 防止安全分页校验把 TotalCount 为零的合法空列表误判为失败。
+func TestCollectSLBAllowsDeclaredEmptyList(t *testing.T) {
+	listCalls := 0
+	client := &slbCollectStub{
+		list: func(*slb.DescribeLoadBalancersRequest) (*slb.DescribeLoadBalancersResponse, error) {
+			listCalls++
+			return slb.CreateDescribeLoadBalancersResponse(), nil
+		},
+		attribute: func(*slb.DescribeLoadBalancerAttributeRequest) (*slb.DescribeLoadBalancerAttributeResponse, error) {
+			t.Fatal("SLB 合法空列表不得读取监听器")
+			return nil, nil
+		},
+	}
+	items, listeners, err := collectSLB(client, "cn-hangzhou")
+	if err != nil || len(items) != 0 || len(listeners) != 0 || listCalls != 1 {
+		t.Fatalf("SLB TotalCount 为零必须作为合法空列表成功：资源=%v 监听器=%v 调用=%d 错误=%v", items, listeners, listCalls, err)
+	}
+}
+
 // TestCollectALBReadsAllPagesAndListeners 防止列表或单实例监听器漏页，保留相同端口的不同协议。
 func TestCollectALBReadsAllPagesAndListeners(t *testing.T) {
 	client := &albCollectStub{
@@ -236,6 +328,38 @@ func TestAliyunLoadBalancerSnapshotsUseOfficialTypes(t *testing.T) {
 	}
 	if values[1].Endpoints[0].Port != 0 || values[1].Endpoints[0].Protocol != "" || values[2].Endpoints[0].Port != 0 {
 		t.Fatal("没有监听器时不得虚构端口或协议")
+	}
+}
+
+// TestAliyunLoadBalancerSnapshotsUseFirstZoneAndPreserveRawAttributes 防止结构化可用区遗漏或改写原始列表项。
+func TestAliyunLoadBalancerSnapshotsUseFirstZoneAndPreserveRawAttributes(t *testing.T) {
+	n := nlb.LoadbalancerInfo{LoadBalancerId: "nlb-zone", ZoneMappings: []nlb.ZoneMapping{{ZoneId: "cn-hangzhou-a"}, {ZoneId: "cn-hangzhou-b"}}}
+	gTop := gwlb.Data{LoadBalancerId: "gwlb-top-zone", ZoneId: "cn-hangzhou-c", ZoneMappings: []gwlb.ZoneEniModel{{ZoneId: "cn-hangzhou-d"}}}
+	gFallback := gwlb.Data{LoadBalancerId: "gwlb-mapping-zone", ZoneMappings: []gwlb.ZoneEniModel{{ZoneId: "cn-hangzhou-e"}, {ZoneId: "cn-hangzhou-f"}}}
+
+	values := []struct {
+		name     string
+		original any
+		snapshot resource.Snapshot
+		wantZone string
+	}{
+		{name: "NLB 使用首个 mapping", original: n, snapshot: nlbSnapshots([]nlb.LoadbalancerInfo{n}, nil, "cn-hangzhou")[0], wantZone: "cn-hangzhou-a"},
+		{name: "GWLB 优先顶层可用区", original: gTop, snapshot: gwlbSnapshots([]gwlb.Data{gTop}, "cn-hangzhou")[0], wantZone: "cn-hangzhou-c"},
+		{name: "GWLB 回退首个 mapping", original: gFallback, snapshot: gwlbSnapshots([]gwlb.Data{gFallback}, "cn-hangzhou")[0], wantZone: "cn-hangzhou-e"},
+	}
+	for _, value := range values {
+		t.Run(value.name, func(t *testing.T) {
+			if value.snapshot.Zone != value.wantZone {
+				t.Fatalf("结构化可用区错误：得到 %q，期望 %q", value.snapshot.Zone, value.wantZone)
+			}
+			raw, err := json.Marshal(value.original)
+			if err != nil {
+				t.Fatalf("构造原始列表项失败：%v", err)
+			}
+			if !reflect.DeepEqual(value.snapshot.RawAttributes, raw) {
+				t.Fatalf("结构化可用区不得改写原始列表项：得到 %s，期望 %s", value.snapshot.RawAttributes, raw)
+			}
+		})
 	}
 }
 

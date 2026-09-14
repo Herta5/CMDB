@@ -76,6 +76,7 @@ func readLoadBalancerPages[T any](read func(string) ([]T, string, error)) ([]T, 
 func collectSLB(client slbCollectAPI, region string) ([]slb.LoadBalancer, map[string][]slb.ListenerPortAndProtocol, error) {
 	values := []slb.LoadBalancer{}
 	ports := map[string][]slb.ListenerPortAndProtocol{}
+	totalCount := 0
 	for page := 1; ; page++ {
 		request := slb.CreateDescribeLoadBalancersRequest()
 		request.RegionId = region
@@ -88,9 +89,17 @@ func collectSLB(client slbCollectAPI, region string) ([]slb.LoadBalancer, map[st
 		if response == nil {
 			return nil, nil, errors.New("SLB 列表响应为空")
 		}
-		values = append(values, response.LoadBalancers.LoadBalancer...)
-		if len(values) >= response.TotalCount || len(response.LoadBalancers.LoadBalancer) == 0 {
+		items := response.LoadBalancers.LoadBalancer
+		values = append(values, items...)
+		if response.TotalCount > totalCount {
+			totalCount = response.TotalCount
+		}
+		if len(values) >= totalCount {
 			break
+		}
+		// 云端声明仍有资源却提前返回空页时，必须丢弃局部列表，避免错误推进该类型生命周期。
+		if len(items) == 0 {
+			return nil, nil, errors.New("SLB 列表分页未完整返回")
 		}
 	}
 	for _, item := range values {
@@ -298,6 +307,9 @@ func nlbSnapshots(items []nlb.LoadbalancerInfo, listeners map[string][]nlb.Liste
 	for _, item := range items {
 		raw, _ := json.Marshal(item)
 		value := resource.Snapshot{ResourceType: "nlb", ExternalID: item.LoadBalancerId, Name: item.LoadBalancerName, Region: item.RegionId, CloudStatus: item.LoadBalancerStatus, NetworkType: item.AddressType, RawAttributes: raw}
+		if len(item.ZoneMappings) > 0 {
+			value.Zone = item.ZoneMappings[0].ZoneId
+		}
 		if value.Region == "" {
 			value.Region = region
 		}
@@ -319,6 +331,9 @@ func gwlbSnapshots(items []gwlb.Data, region string) []resource.Snapshot {
 	for _, item := range items {
 		raw, _ := json.Marshal(item)
 		value := resource.Snapshot{ResourceType: "gwlb", ExternalID: item.LoadBalancerId, Name: item.LoadBalancerName, Region: item.RegionId, Zone: item.ZoneId, CloudStatus: item.LoadBalancerStatus, NetworkType: "intranet", RawAttributes: raw}
+		if value.Zone == "" && len(item.ZoneMappings) > 0 {
+			value.Zone = item.ZoneMappings[0].ZoneId
+		}
 		if value.Region == "" {
 			value.Region = region
 		}
