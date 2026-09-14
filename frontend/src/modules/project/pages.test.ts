@@ -343,6 +343,7 @@ describe('项目控制台页面', () => {
   it('首页只汇总当前项目的正常服务器、数据库和负载均衡', async () => {
     const projectStore = useProjectStore()
     projectStore.projects = [{ id: 2, code: 'platform', name: '平台项目', description: '', status: 'enabled', ownerUsername: null, createdAt: '', updatedAt: '' }]
+    projectStore.listState = 'ready'
     projectStore.selectProject(2)
     const totals: Record<string, number> = { ecs: 2, ec2: 3, rds: 4, slb: 1, clb: 2, alb: 3, nlb: 4, gwlb: 5 }
     get.mockImplementation((_url: string, options?: { params?: { resource_type?: string } }) => Promise.resolve({ items: [], total: totals[options?.params?.resource_type ?? ''] ?? 0 }))
@@ -367,6 +368,7 @@ describe('项目控制台页面', () => {
       { id: 2, code: 'platform', name: '平台项目', description: '', status: 'enabled', ownerUsername: null, createdAt: '', updatedAt: '' },
       { id: 3, code: 'payment', name: '支付项目', description: '', status: 'enabled', ownerUsername: null, createdAt: '', updatedAt: '' },
     ]
+    projectStore.listState = 'ready'
     projectStore.selectAllProjects()
     get.mockImplementation((url: string) => Promise.resolve({ items: [], total: Number(url.split('/')[2]) }))
 
@@ -380,6 +382,24 @@ describe('项目控制台页面', () => {
     ])
     expect(get.mock.calls.filter(([url]) => url === '/projects/2/resources')).toHaveLength(8)
     expect(get.mock.calls.filter(([url]) => url === '/projects/3/resources')).toHaveLength(8)
+    app.unmount()
+  })
+  it('首页区分项目列表加载、失败和空状态，并可重试项目列表', async () => {
+    const projectStore = useProjectStore()
+    projectStore.listState = 'loading'
+    const { root, app } = await mount(HomePage, '/dashboard')
+    expect(text(root)).toContain('正在加载项目…')
+    expect(get.mock.calls.some(([url]) => String(url).includes('/resources'))).toBe(false)
+
+    projectStore.listState = 'error'
+    await flush()
+    expect(text(root)).toContain('项目加载失败')
+    get.mockResolvedValue([])
+    await all(root).find(n => n.type === 'button' && text(n) === '重试')!.props.onClick()
+    await flush()
+
+    expect(get).toHaveBeenCalledWith('/projects')
+    expect(text(root)).toContain('暂无可访问的项目')
     app.unmount()
   })
   it('服务器资产页展示实例规格和云盘汇总', async () => {

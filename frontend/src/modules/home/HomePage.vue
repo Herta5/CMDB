@@ -29,10 +29,15 @@ function targetProjectIds(): number[] {
 /** 首页只汇总正常资产；每类请求只读取分页总数，不加载无须展示的资源明细。 */
 async function loadSummary() {
   const version = ++requestVersion
-  const projectIds = targetProjectIds()
   counts.server = 0
   counts.database = 0
   counts.loadBalancer = 0
+  // 项目列表未建立授权事实时不得发起资源查询，也不能把加载失败伪装成未选择项目。
+  if (projects.listState !== 'ready') {
+    state.value = 'idle'
+    return
+  }
+  const projectIds = targetProjectIds()
   if (!projectIds.length) {
     state.value = 'idle'
     return
@@ -52,7 +57,7 @@ async function loadSummary() {
 }
 
 // 项目列表加载和顶部选择变化都要重新建立统计，旧项目响应由版本号隔离。
-watch(() => [projects.currentProjectId, projects.projects.map(project => project.id).join(',')], () => { void loadSummary() }, { immediate: true })
+watch(() => [projects.listState, projects.currentProjectId, projects.projects.map(project => project.id).join(',')], () => { void loadSummary() }, { immediate: true })
 </script>
 
 <template>
@@ -63,9 +68,31 @@ watch(() => [projects.currentProjectId, projects.projects.map(project => project
         <h1 id="home-title">资源概览</h1>
         <p class="page-description">查看当前项目范围内的正常资产，不包含已失联资产。</p>
       </div>
-      <button class="console-button" :disabled="!hasAssetScope || state === 'loading'" @click="loadSummary">刷新统计</button>
+      <button class="console-button" :disabled="projects.listState !== 'ready' || !hasAssetScope || state === 'loading'" @click="loadSummary">刷新统计</button>
     </header>
-    <div v-if="!hasAssetScope" class="console-panel page-state">
+    <div v-if="projects.listState === 'idle' || projects.listState === 'loading'" class="console-panel page-state" role="status">
+      <span class="loading-spinner" aria-hidden="true" />
+      <h3>正在加载项目…</h3>
+      <p>正在确认当前身份可访问的项目。</p>
+    </div>
+    <div v-else-if="projects.listState === 'error'" class="console-panel page-state" role="alert">
+      <span class="state-symbol" aria-hidden="true">!</span>
+      <h3>项目加载失败</h3>
+      <p>暂时无法获取项目，请稍后重试。</p>
+      <button class="console-button" @click="projects.loadProjects()">重试</button>
+    </div>
+    <div v-else-if="projects.listState === 'forbidden'" class="console-panel page-state" role="alert">
+      <span class="state-symbol" aria-hidden="true">⊘</span>
+      <h3>无权访问项目</h3>
+      <p>请联系管理员确认当前账号的访问权限。</p>
+      <button class="console-button" @click="projects.loadProjects()">重新检查权限</button>
+    </div>
+    <div v-else-if="projects.listState === 'empty'" class="console-panel page-state">
+      <span class="state-symbol" aria-hidden="true">▦</span>
+      <h3>暂无可访问的项目</h3>
+      <p>请联系管理员创建项目或添加项目成员关系。</p>
+    </div>
+    <div v-else-if="!hasAssetScope" class="console-panel page-state">
       <span class="state-symbol" aria-hidden="true">▦</span>
       <h3>请先选择项目</h3>
       <p>选择一个项目后即可查看资源总数。</p>
