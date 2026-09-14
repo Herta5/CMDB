@@ -244,18 +244,58 @@ func newResourceServiceTest(t *testing.T) (*Service, *gorm.DB, *Source, *time.Ti
 
 // TestSyncAuditContainsChangesButNeverCredential 验证资源变化可追溯且审计内容不含凭证。
 func TestSyncAuditContainsChangesButNeverCredential(t *testing.T) {
-	service, db, source, _ := newResourceServiceTest(t)
-	_, err := service.Sync(context.Background(), source.ID, "manual", collectorStub{results: []CollectionResult{{ResourceType: "ec2", Snapshots: []Snapshot{{ExternalID: "i-audit", Name: "审计实例"}}}}})
+	service, db, source, now := newResourceServiceTest(t)
+	old := now.Add(-24 * time.Hour)
+	recent := now.Add(-time.Hour)
+	resources := []Server{
+		{AssetBase: AssetBase{ProjectID: source.ProjectID, SourceID: source.ID, Provider: source.Provider, ResourceType: "ec2", ExternalID: "i-updated", Name: "更新前", AssetStatus: AssetStatusActive, FirstSeenAt: recent, LastSeenAt: recent}, PrivateIPs: json.RawMessage(`[]`), PublicIPs: json.RawMessage(`[]`)},
+		{AssetBase: AssetBase{ProjectID: source.ProjectID, SourceID: source.ID, Provider: source.Provider, ResourceType: "ec2", ExternalID: "i-restored", Name: "恢复实例", AssetStatus: AssetStatusLost, MissingSince: &recent, FirstSeenAt: old, LastSeenAt: old}, PrivateIPs: json.RawMessage(`[]`), PublicIPs: json.RawMessage(`[]`)},
+		{AssetBase: AssetBase{ProjectID: source.ProjectID, SourceID: source.ID, Provider: source.Provider, ResourceType: "ec2", ExternalID: "i-lost", Name: "失联实例", AssetStatus: AssetStatusActive, FirstSeenAt: old, LastSeenAt: old}, PrivateIPs: json.RawMessage(`[]`), PublicIPs: json.RawMessage(`[]`)},
+		{AssetBase: AssetBase{ProjectID: source.ProjectID, SourceID: source.ID, Provider: source.Provider, ResourceType: "ec2", ExternalID: "i-deleted", Name: "删除实例", AssetStatus: AssetStatusLost, MissingSince: &old, FirstSeenAt: old, LastSeenAt: old}, PrivateIPs: json.RawMessage(`[]`), PublicIPs: json.RawMessage(`[]`)},
+	}
+	if err := db.Create(&resources).Error; err != nil {
+		t.Fatalf("准备同步审计资源失败：%v", err)
+	}
+	snapshots := []Snapshot{
+		{ExternalID: "i-created-z", Name: "第二个新增实例"},
+		{ExternalID: "i-restored", Name: "恢复实例"},
+		{ExternalID: "i-updated", Name: "更新后"},
+		{ExternalID: "i-created", Name: "新增实例"},
+	}
+	_, err := service.Sync(context.Background(), source.ID, "manual", collectorStub{results: []CollectionResult{{ResourceType: "ec2", Snapshots: snapshots}}})
 	if err != nil {
 		t.Fatalf("同步审计准备失败：%v", err)
 	}
-	var audits []audit.Log
-	_ = db.Order("id ASC").Find(&audits).Error
-	encoded, _ := json.Marshal(audits)
-	if !strings.Contains(string(encoded), "resource.created") || strings.Contains(string(encoded), "example") || strings.Contains(string(encoded), "token") {
-		t.Fatal("审计必须记录资源变化且不得包含凭证内容或字段")
+	var logs []audit.Log
+	if err := db.Order("id ASC").Find(&logs).Error; err != nil {
+		t.Fatalf("读取同步审计失败：%v", err)
 	}
-	assertSourceAuditName(t, audits, audit.ActionSourceSynced, source.Name)
+	if len(logs) != 1 || logs[0].Action != audit.ActionSourceSynced {
+		t.Fatalf("一次同步只能写入一条汇总审计：%+v", logs)
+	}
+	var detail struct {
+		JobID      uint64                         `json:"job_id"`
+		SourceName string                         `json:"source_name"`
+		Provider   string                         `json:"provider"`
+		Changes    map[string]map[string][]string `json:"changes"`
+	}
+	if err := json.Unmarshal(logs[0].Detail, &detail); err != nil {
+		t.Fatalf("解析聚合同步审计失败：%v", err)
+	}
+	wantChanges := map[string]map[string][]string{
+		"created":  {"ec2": {"i-created", "i-created-z"}},
+		"updated":  {"ec2": {"i-updated"}},
+		"restored": {"ec2": {"i-restored"}},
+		"lost":     {"ec2": {"i-lost"}},
+		"deleted":  {"ec2": {"i-deleted"}},
+	}
+	if detail.JobID == 0 || detail.SourceName != source.Name || detail.Provider != source.Provider || !reflect.DeepEqual(detail.Changes, wantChanges) {
+		t.Fatalf("聚合详情必须完整且使用稳定分组：%+v", detail)
+	}
+	encoded, _ := json.Marshal(logs)
+	if strings.Contains(string(encoded), "example") || strings.Contains(string(encoded), "token") {
+		t.Fatal("同步审计不得包含凭证内容或字段")
+	}
 }
 
 // TestSyncPersistsDatabaseSpecification 验证统一同步链路把 RDS 规格写入数据库资产表并保持容量单位。
@@ -333,11 +373,23 @@ func TestSyncIsIdempotentMarksMissingAndRestores(t *testing.T) {
 	if !strings.Contains(string(resources[0].PrivateIPs), "10.0.0.8") {
 		t.Fatal("资源访问端点必须随资源快照写入同一行")
 	}
+	idempotentDetail := latestSyncAuditDetail(t, db, source.ID)
+	if !reflect.DeepEqual(idempotentDetail.Changes, map[string]map[string][]string{
+		"created": {}, "updated": {}, "restored": {}, "lost": {}, "deleted": {},
+	}) {
+		t.Fatalf("幂等刷新不得产生资源变化分组：%+v", idempotentDetail.Changes)
+	}
 	*now = now.Add(time.Hour)
 	service.Sync(context.Background(), source.ID, "manual", collectorStub{results: []CollectionResult{{ResourceType: "ec2"}}})
 	_ = db.First(&resources[0], resources[0].ID).Error
 	if resources[0].AssetStatus != AssetStatusLost || resources[0].MissingSince == nil {
 		t.Fatal("成功采集中的缺失资源必须标记失联")
+	}
+	lostDetail := latestSyncAuditDetail(t, db, source.ID)
+	if !reflect.DeepEqual(lostDetail.Changes, map[string]map[string][]string{
+		"created": {}, "updated": {}, "restored": {}, "lost": {"ec2": {"i-1"}}, "deleted": {},
+	}) {
+		t.Fatalf("失联资源必须进入当前同步汇总：%+v", lostDetail.Changes)
 	}
 	*now = now.Add(time.Hour)
 	service.Sync(context.Background(), source.ID, "manual", collector)
@@ -345,6 +397,12 @@ func TestSyncIsIdempotentMarksMissingAndRestores(t *testing.T) {
 	_ = db.First(&restored, resources[0].ID).Error
 	if restored.AssetStatus != AssetStatusActive || restored.MissingSince != nil {
 		t.Fatal("重新出现的资源必须恢复原记录")
+	}
+	restoredDetail := latestSyncAuditDetail(t, db, source.ID)
+	if !reflect.DeepEqual(restoredDetail.Changes, map[string]map[string][]string{
+		"created": {}, "updated": {}, "restored": {"ec2": {"i-1"}}, "lost": {}, "deleted": {},
+	}) {
+		t.Fatalf("恢复资源必须进入当前同步汇总：%+v", restoredDetail.Changes)
 	}
 }
 
@@ -397,12 +455,11 @@ func TestSyncUnchangedResourceOnlyRefreshesLastSeen(t *testing.T) {
 	if !persisted.UpdatedAt.Equal(before.UpdatedAt) {
 		t.Fatalf("相同快照不得改变业务更新时间：before=%s after=%s", before.UpdatedAt, persisted.UpdatedAt)
 	}
-	var updatedAudits int64
-	if err := db.Model(&audit.Log{}).Where("action = ? AND resource_id = ?", audit.ActionResourceUpdated, firstSnapshot.ExternalID).Count(&updatedAudits).Error; err != nil {
-		t.Fatalf("查询资源更新审计失败：%v", err)
-	}
-	if updatedAudits != 0 {
-		t.Fatalf("相同快照不得产生资源更新审计：count=%d", updatedAudits)
+	detail := latestSyncAuditDetail(t, db, source.ID)
+	if !reflect.DeepEqual(detail.Changes, map[string]map[string][]string{
+		"created": {}, "updated": {}, "restored": {}, "lost": {}, "deleted": {},
+	}) {
+		t.Fatalf("相同快照不得产生资源变化审计：%+v", detail.Changes)
 	}
 }
 
@@ -444,9 +501,11 @@ func TestSyncVolatileRawAttributeOnlyRefreshesSnapshot(t *testing.T) {
 	if !persisted.LastSeenAt.Equal(*now) || !persisted.UpdatedAt.Equal(before.UpdatedAt) {
 		t.Fatalf("易变属性只能刷新快照和最近发现时间：before=%s updated=%s last_seen=%s", before.UpdatedAt, persisted.UpdatedAt, persisted.LastSeenAt)
 	}
-	var updatedAudits int64
-	if err := db.Model(&audit.Log{}).Where("action = ? AND resource_id = ?", audit.ActionResourceUpdated, firstSnapshot.ExternalID).Count(&updatedAudits).Error; err != nil || updatedAudits != 0 {
-		t.Fatalf("仅易变属性变化不得产生更新审计：count=%d err=%v", updatedAudits, err)
+	detail := latestSyncAuditDetail(t, db, source.ID)
+	if !reflect.DeepEqual(detail.Changes, map[string]map[string][]string{
+		"created": {}, "updated": {}, "restored": {}, "lost": {}, "deleted": {},
+	}) {
+		t.Fatalf("仅易变属性变化不得产生资源变化审计：%+v", detail.Changes)
 	}
 }
 
@@ -528,9 +587,11 @@ func TestSyncChangedResourceRecordsOneUpdate(t *testing.T) {
 	if err := db.Where("external_id = ?", snapshot.ExternalID).First(&persisted).Error; err != nil || persisted.Name != "变更后" || !persisted.LastSeenAt.Equal(*now) {
 		t.Fatalf("真实业务变化未正确持久化：resource=%+v err=%v", persisted, err)
 	}
-	var updatedAudits int64
-	if err := db.Model(&audit.Log{}).Where("action = ? AND resource_id = ?", audit.ActionResourceUpdated, snapshot.ExternalID).Count(&updatedAudits).Error; err != nil || updatedAudits != 1 {
-		t.Fatalf("真实业务变化必须产生一次更新审计：count=%d err=%v", updatedAudits, err)
+	detail := latestSyncAuditDetail(t, db, source.ID)
+	if !reflect.DeepEqual(detail.Changes, map[string]map[string][]string{
+		"created": {}, "updated": {"ec2": {"i-changed"}}, "restored": {}, "lost": {}, "deleted": {},
+	}) {
+		t.Fatalf("真实业务变化必须进入当前同步更新分组：%+v", detail.Changes)
 	}
 }
 
@@ -819,16 +880,27 @@ func TestSyncFailureDoesNotMarkResourcesMissing(t *testing.T) {
 	if active.AssetStatus != AssetStatusActive {
 		t.Fatal("单类采集失败不得标记失联")
 	}
+	partialDetail := latestSyncAuditDetail(t, db, source.ID)
+	if !reflect.DeepEqual(partialDetail.Changes, map[string]map[string][]string{
+		"created": {}, "updated": {}, "restored": {}, "lost": {}, "deleted": {},
+	}) {
+		t.Fatalf("单类失败同步不得记录资源变化：%+v", partialDetail.Changes)
+	}
 	service.Sync(context.Background(), source.ID, "manual", collectorStub{err: ErrAuthenticationFailed})
 	_ = db.First(&active, active.ID).Error
 	if active.AssetStatus != AssetStatusActive {
 		t.Fatal("认证失败不得标记失联")
 	}
-	var remaining, deletedAudits int64
+	failedDetail := latestSyncAuditDetail(t, db, source.ID)
+	if !reflect.DeepEqual(failedDetail.Changes, map[string]map[string][]string{
+		"created": {}, "updated": {}, "restored": {}, "lost": {}, "deleted": {},
+	}) {
+		t.Fatalf("认证失败同步的五个变化分组必须为空：%+v", failedDetail.Changes)
+	}
+	var remaining int64
 	_ = db.Model(&Server{}).Where("external_id = ?", expiredLost.ExternalID).Count(&remaining).Error
-	_ = db.Model(&audit.Log{}).Where("action = ? AND resource_id = ?", audit.ActionResourceDeleted, expiredLost.ExternalID).Count(&deletedAudits).Error
-	if remaining != 1 || deletedAudits != 0 {
-		t.Fatalf("类型失败和认证失败都不得清理过期失联资源：remaining=%d audits=%d", remaining, deletedAudits)
+	if remaining != 1 {
+		t.Fatalf("类型失败和认证失败都不得清理过期失联资源：remaining=%d", remaining)
 	}
 }
 
@@ -986,9 +1058,11 @@ func TestSyncDeletesExpiredLostResourcesAfterRestoringSeenResources(t *testing.T
 	if err := db.Where("external_id = ?", "c").First(&restoredResource).Error; err != nil || restoredResource.AssetStatus != AssetStatusActive {
 		t.Fatalf("本次重新出现的资源必须先恢复而不能误删：resource=%+v err=%v", restoredResource, err)
 	}
-	var auditEntry audit.Log
-	if err := db.Where("action = ? AND resource_id = ?", audit.ActionResourceDeleted, "a").First(&auditEntry).Error; err != nil {
-		t.Fatal("物理删除资源前必须保留独立审计记录")
+	detail := latestSyncAuditDetail(t, db, source.ID)
+	if !reflect.DeepEqual(detail.Changes, map[string]map[string][]string{
+		"created": {}, "updated": {}, "restored": {"ec2": {"c"}}, "lost": {}, "deleted": {"ec2": {"a"}},
+	}) {
+		t.Fatalf("同一次同步的恢复和删除必须进入唯一汇总记录：%+v", detail.Changes)
 	}
 }
 
@@ -1014,9 +1088,11 @@ func TestSyncRollsBackEarlierTypeDeletionWhenLaterTypeWriteFails(t *testing.T) {
 	if err := db.Model(&Server{}).Where("external_id = ?", resource.ExternalID).Count(&remaining).Error; err != nil || remaining != 1 {
 		t.Fatalf("后续类型失败必须回滚先前类型的删除：count=%d err=%v", remaining, err)
 	}
-	var deletedAudits int64
-	if err := db.Model(&audit.Log{}).Where("action = ? AND resource_id = ?", audit.ActionResourceDeleted, resource.ExternalID).Count(&deletedAudits).Error; err != nil || deletedAudits != 0 {
-		t.Fatalf("回滚的删除不得遗留审计：count=%d err=%v", deletedAudits, err)
+	detail := latestSyncAuditDetail(t, db, source.ID)
+	if !reflect.DeepEqual(detail.Changes, map[string]map[string][]string{
+		"created": {}, "updated": {}, "restored": {}, "lost": {}, "deleted": {},
+	}) {
+		t.Fatalf("失败审计不得包含已回滚事务的删除 ID：%+v", detail.Changes)
 	}
 }
 
@@ -1099,6 +1175,28 @@ func assertSourceAuditName(t *testing.T, entries []audit.Log, action, want strin
 		return
 	}
 	t.Fatalf("未找到 %s 接入源审计", action)
+}
+
+// persistedSyncAuditDetail 表示测试从数据库解码的同步汇总详情。
+type persistedSyncAuditDetail struct {
+	JobID      uint64                         `json:"job_id"`
+	SourceName string                         `json:"source_name"`
+	Provider   string                         `json:"provider"`
+	Changes    map[string]map[string][]string `json:"changes"`
+}
+
+// latestSyncAuditDetail 读取指定接入源最新一次同步审计，供生命周期测试直接验证持久化结果。
+func latestSyncAuditDetail(t *testing.T, db *gorm.DB, sourceID uint64) persistedSyncAuditDetail {
+	t.Helper()
+	var entry audit.Log
+	if err := db.Where("action = ? AND resource_id = ?", audit.ActionSourceSynced, sourceID).Order("id DESC").First(&entry).Error; err != nil {
+		t.Fatalf("读取最新同步审计失败：%v", err)
+	}
+	var detail persistedSyncAuditDetail
+	if err := json.Unmarshal(entry.Detail, &detail); err != nil {
+		t.Fatalf("解析最新同步审计详情失败：%v", err)
+	}
+	return detail
 }
 
 // TestConnectionKeepsConcreteLoadBalancerTypes 验证连接探测只报告具体类型并保持各结果集合的输入顺序。

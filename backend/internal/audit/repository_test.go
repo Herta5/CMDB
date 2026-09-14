@@ -152,7 +152,7 @@ func TestListFiltersProjectActionActorObjectAndTime(t *testing.T) {
 	logs := []audit.Log{
 		{ID: 1, ActorID: &actor, ProjectID: &projectA, Action: audit.ActionProjectUpdated, ResourceType: "project", ResourceID: "9", Detail: json.RawMessage(`{"name":"平台项目"}`), CreatedAt: now.Add(-time.Hour)},
 		{ID: 2, ActorID: &actor, ProjectID: &projectA, Action: audit.ActionUserUpdated, ResourceType: "user", ResourceID: "12", Detail: json.RawMessage(`{"target_username":"cloud_user"}`), CreatedAt: now},
-		{ID: 3, ProjectID: &projectB, Action: audit.ActionResourceCreated, ResourceType: "ec2", ResourceID: "i-other", Detail: json.RawMessage(`{}`), CreatedAt: now.Add(time.Hour)},
+		{ID: 3, ProjectID: &projectB, Action: audit.ActionSourceSynced, ResourceType: "resource_source", ResourceID: "10", Detail: json.RawMessage(`{}`), CreatedAt: now.Add(time.Hour)},
 	}
 	if err := db.Create(&logs).Error; err != nil {
 		t.Fatalf("准备审计数据失败：%v", err)
@@ -256,7 +256,7 @@ func TestListUsesStableNewestFirstPagination(t *testing.T) {
 	repository := audit.NewRepository(db)
 	createdAt := time.Date(2026, 9, 10, 8, 0, 0, 0, time.UTC)
 	for id := uint64(1); id <= 3; id++ {
-		if err := db.Create(&audit.Log{ID: id, Action: audit.ActionResourceUpdated, ResourceType: "ec2", ResourceID: "i-page", Detail: json.RawMessage(`{}`), CreatedAt: createdAt}).Error; err != nil {
+		if err := db.Create(&audit.Log{ID: id, Action: audit.ActionSourceSynced, ResourceType: "resource_source", ResourceID: "7", Detail: json.RawMessage(`{}`), CreatedAt: createdAt}).Error; err != nil {
 			t.Fatalf("准备分页数据失败：%v", err)
 		}
 	}

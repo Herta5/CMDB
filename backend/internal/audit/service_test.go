@@ -90,7 +90,7 @@ func TestServiceKeepsPaginationSnapshotWhenNewAuditArrives(t *testing.T) {
 	repository := audit.NewRepository(db)
 	createdAt := time.Date(2026, 9, 11, 8, 0, 0, 0, time.UTC)
 	for id := uint64(1); id <= 3; id++ {
-		if err := db.Create(&audit.Log{ID: id, Action: audit.ActionResourceUpdated, ResourceType: "ec2", ResourceID: "i-page", Detail: json.RawMessage(`{}`), CreatedAt: createdAt}).Error; err != nil {
+		if err := db.Create(&audit.Log{ID: id, Action: audit.ActionSourceSynced, ResourceType: "resource_source", ResourceID: "7", Detail: json.RawMessage(`{}`), CreatedAt: createdAt}).Error; err != nil {
 			t.Fatalf("准备审计分页数据失败：%v", err)
 		}
 	}
@@ -102,7 +102,7 @@ func TestServiceKeepsPaginationSnapshotWhenNewAuditArrives(t *testing.T) {
 	if first.SnapshotID != 3 || first.Total != 3 || len(first.Items) != 2 || first.Items[0].ID != 3 || first.Items[1].ID != 2 {
 		t.Fatalf("第一页必须建立最新审计快照：%+v", first)
 	}
-	if err := db.Create(&audit.Log{ID: 4, Action: audit.ActionResourceCreated, ResourceType: "ec2", ResourceID: "i-new", Detail: json.RawMessage(`{}`), CreatedAt: createdAt.Add(time.Minute)}).Error; err != nil {
+	if err := db.Create(&audit.Log{ID: 4, Action: audit.ActionProjectUpdated, ResourceType: "project", ResourceID: "9", Detail: json.RawMessage(`{}`), CreatedAt: createdAt.Add(time.Minute)}).Error; err != nil {
 		t.Fatalf("准备翻页期间的新审计失败：%v", err)
 	}
 	second, err := service.List(context.Background(), audit.Filter{Page: 2, PageSize: 2, SnapshotID: first.SnapshotID})

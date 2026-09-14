@@ -471,6 +471,7 @@ func (s *Service) executeSync(ctx context.Context, sourceID uint64, trigger stri
 		return job, nil
 	}
 	statistics := decision.Statistics
+	changes := newSyncAuditChanges()
 	// 所有成功类型的资源变化、删除、任务统计和调度时间使用同一事务，后续类型失败时不会留下无统计归属的部分写入。
 	applyErr := s.repository.Transaction(ctx, func(tx *gorm.DB) error {
 		// 资产新增与父删除共用项目→来源锁顺序；既有任务不因父对象随后停用而取消。
@@ -479,7 +480,7 @@ func (s *Service) executeSync(ctx context.Context, sourceID uint64, trigger stri
 			return err
 		}
 		for _, result := range decision.Successful {
-			counts, typeErr := s.applyType(ctx, tx, *source, result.ResourceType, result.Snapshots, now)
+			counts, typeErr := s.applyType(ctx, tx, *source, result.ResourceType, result.Snapshots, now, changes)
 			if typeErr != nil {
 				return typeErr
 			}
@@ -500,7 +501,7 @@ func (s *Service) executeSync(ctx context.Context, sourceID uint64, trigger stri
 			return err
 		}
 		projectID := source.ProjectID
-		return audit.RecordInTransaction(ctx, tx, audit.Entry{ProjectID: &projectID, Action: audit.ActionSourceSynced, ResourceType: "resource_source", ResourceID: strconv.FormatUint(source.ID, 10), Detail: map[string]any{"source_name": source.Name, "trigger": trigger, "status": job.Status, "statistics": statistics, "error_summary": job.ErrorSummary}})
+		return audit.RecordInTransaction(ctx, tx, audit.Entry{ProjectID: &projectID, Action: audit.ActionSourceSynced, ResourceType: "resource_source", ResourceID: strconv.FormatUint(source.ID, 10), Detail: map[string]any{"job_id": job.ID, "source_name": source.Name, "provider": source.Provider, "trigger": trigger, "status": job.Status, "statistics": statistics, "changes": changes.snapshot(), "error_summary": job.ErrorSummary}})
 	})
 	if applyErr != nil {
 		// 外层事务已经回滚全部资源变化，失败任务不得保留尚未生效的统计。
@@ -545,7 +546,7 @@ func (s *Service) convergeFailedJob(ctx context.Context, job *SyncJob, source *S
 				return err
 			}
 		}
-		return recordAuditWith(ctx, recorder, audit.Entry{ProjectID: &failed.ProjectID, Action: audit.ActionSourceSynced, ResourceType: "resource_source", ResourceID: strconv.FormatUint(failed.SourceID, 10), Detail: map[string]any{"source_name": source.Name, "trigger": failed.Trigger, "status": failed.Status, "statistics": statistics, "error_summary": summary}})
+		return recordAuditWith(ctx, recorder, audit.Entry{ProjectID: &failed.ProjectID, Action: audit.ActionSourceSynced, ResourceType: "resource_source", ResourceID: strconv.FormatUint(failed.SourceID, 10), Detail: map[string]any{"job_id": failed.ID, "source_name": source.Name, "provider": source.Provider, "trigger": failed.Trigger, "status": failed.Status, "statistics": statistics, "changes": newSyncAuditChanges().snapshot(), "error_summary": summary}})
 	})
 	if err == nil {
 		*job = failed
@@ -554,7 +555,7 @@ func (s *Service) convergeFailedJob(ctx context.Context, job *SyncJob, source *S
 }
 
 // applyType 在任务事务内写入一个成功资源类型，并只对该类型执行失联和删除判断。
-func (s *Service) applyType(ctx context.Context, tx *gorm.DB, source Source, resourceType string, snapshots []Snapshot, now time.Time) (map[string]int, error) {
+func (s *Service) applyType(ctx context.Context, tx *gorm.DB, source Source, resourceType string, snapshots []Snapshot, now time.Time, changes syncAuditChanges) (map[string]int, error) {
 	counts := map[string]int{"added": 0, "updated": 0, "restored": 0, "lost": 0, "deleted": 0, "failed": 0}
 	table, err := assetTableForType(resourceType)
 	if err != nil {
@@ -566,16 +567,16 @@ func (s *Service) applyType(ctx context.Context, tx *gorm.DB, source Source, res
 		seen = append(seen, snapshot.ExternalID)
 		var existing assetRow
 		lookupErr := tx.Table(table).Where("source_id = ? AND resource_type = ? AND external_id = ?", source.ID, resourceType, snapshot.ExternalID).First(&existing).Error
-		action := ""
+		change := ""
 		var businessChanges map[string]any
 		if errors.Is(lookupErr, gorm.ErrRecordNotFound) {
 			counts["added"]++
-			action = audit.ActionResourceCreated
+			change = syncChangeCreated
 		} else if lookupErr != nil {
 			return counts, lookupErr
 		} else if existing.AssetStatus == AssetStatusLost {
 			counts["restored"]++
-			action = audit.ActionResourceRestored
+			change = syncChangeRestored
 		} else {
 			businessChanges = changedBusinessColumns(existing, table, snapshot)
 			if len(businessChanges) == 0 {
@@ -587,10 +588,10 @@ func (s *Service) applyType(ctx context.Context, tx *gorm.DB, source Source, res
 				continue
 			}
 			counts["updated"]++
-			action = audit.ActionResourceUpdated
+			change = syncChangeUpdated
 		}
 		updates := snapshotBusinessColumns(table, snapshot)
-		if action == audit.ActionResourceUpdated {
+		if change == syncChangeUpdated {
 			updates = businessChanges
 			// 其他业务字段触发更新时，也要带上仅易变键变化的最新原始快照。
 			if !jsonValuesEqual(existing.RawAttributes, snapshot.RawAttributes) {
@@ -614,10 +615,7 @@ func (s *Service) applyType(ctx context.Context, tx *gorm.DB, source Source, res
 		} else if err := tx.Table(table).Where("id = ?", existing.ID).Updates(updates).Error; err != nil {
 			return counts, err
 		}
-		projectID := source.ProjectID
-		if err := audit.RecordInTransaction(ctx, tx, audit.Entry{ProjectID: &projectID, Action: action, ResourceType: resourceType, ResourceID: snapshot.ExternalID, Detail: map[string]any{"source_id": source.ID, "provider": source.Provider, "resource_type": resourceType, "external_id": snapshot.ExternalID}}); err != nil {
-			return counts, err
-		}
+		changes.add(change, resourceType, snapshot.ExternalID)
 	}
 	// 未变化资源只批量刷新最近发现时间，不改变业务更新时间，也不制造配置变更审计。
 	if len(unchangedIDs) > 0 {
@@ -645,10 +643,7 @@ func (s *Service) applyType(ctx context.Context, tx *gorm.DB, source Source, res
 		}
 	}
 	for _, value := range missing {
-		projectID := source.ProjectID
-		if err := audit.RecordInTransaction(ctx, tx, audit.Entry{ProjectID: &projectID, Action: audit.ActionResourceLost, ResourceType: resourceType, ResourceID: value.ExternalID, Detail: map[string]any{"source_id": source.ID, "provider": source.Provider, "resource_type": resourceType}}); err != nil {
-			return counts, err
-		}
+		changes.add(syncChangeLost, resourceType, value.ExternalID)
 	}
 
 	// 仅成功采集的当前类型允许清理；重新出现的资源已在上方恢复，不会被这里误删。
@@ -659,16 +654,15 @@ func (s *Service) applyType(ctx context.Context, tx *gorm.DB, source Source, res
 	expiredIDs := make([]uint64, 0, len(expired))
 	for _, value := range expired {
 		expiredIDs = append(expiredIDs, value.ID)
-		projectID := source.ProjectID
-		if err := audit.RecordInTransaction(ctx, tx, audit.Entry{ProjectID: &projectID, Action: audit.ActionResourceDeleted, ResourceType: resourceType, ResourceID: value.ExternalID, Detail: map[string]any{"source_id": source.ID, "provider": source.Provider, "resource_type": resourceType}}); err != nil {
-			return counts, err
-		}
 	}
 	if len(expiredIDs) > 0 {
 		result := tx.Table(table).Where("id IN ?", expiredIDs).Delete(&assetRow{})
 		counts["deleted"] = int(result.RowsAffected)
 		if result.Error != nil {
 			return counts, result.Error
+		}
+		for _, value := range expired {
+			changes.add(syncChangeDeleted, resourceType, value.ExternalID)
 		}
 	}
 	return counts, nil

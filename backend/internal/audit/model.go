@@ -37,16 +37,6 @@ const (
 	ActionSourceConnectionTested = "source.connection_tested"
 	// ActionSourceSynced 表示完成一次云资源同步。
 	ActionSourceSynced = "source.synced"
-	// ActionResourceCreated 表示首次发现云资源。
-	ActionResourceCreated = "resource.created"
-	// ActionResourceUpdated 表示刷新已有云资源属性。
-	ActionResourceUpdated = "resource.updated"
-	// ActionResourceRestored 表示失联资源重新出现。
-	ActionResourceRestored = "resource.restored"
-	// ActionResourceLost 表示完整成功采集后未发现原资源。
-	ActionResourceLost = "resource.lost"
-	// ActionResourceDeleted 表示资源连续失联满 24 小时后被物理删除。
-	ActionResourceDeleted = "resource.deleted"
 )
 
 // Log 映射长期保留的 audit_logs 表，并附带查询时得到的公开显示名称。
