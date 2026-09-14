@@ -245,7 +245,7 @@ func TestAliyunAccessErrorClassification(t *testing.T) {
 	}
 }
 
-// TestAliyunConnectionProbeRequestsOnlyOneItemPerType 验证连接测试只探测三类 API，不遍历资源详情或域名。
+// TestAliyunConnectionProbeRequestsOnlyOneItemPerType 验证连接测试只探测六类 API，不遍历资源详情或域名。
 func TestAliyunConnectionProbeRequestsOnlyOneItemPerType(t *testing.T) {
 	ecsClient, rdsClient, slbClient := &ecsProbeStub{}, &rdsProbeStub{}, &slbProbeStub{}
 	results, err := probeAliyunAccess(context.Background(), ecsClient, rdsClient, slbClient, &albCollectStub{}, &nlbCollectStub{}, &gwlbCollectStub{}, "cn-hangzhou")

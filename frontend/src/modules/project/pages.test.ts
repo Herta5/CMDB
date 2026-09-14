@@ -429,13 +429,17 @@ describe('项目控制台页面', () => {
     get.mockImplementation((url: string) => Promise.resolve(url.endsWith('/sources') ? [] : { items: [], total: 0 }))
 
     const aliyun = await mount({ render: () => h(CloudPlatformPage, { provider: 'aliyun' }) }, '/aliyun')
-    const aliyunTypes = all(aliyun.root).find(node => node.type === 'select' && node.props['aria-label'] === '资源类型')!.options.map(node => text(node))
+    const aliyunOptions = all(aliyun.root).find(node => node.type === 'select' && node.props['aria-label'] === '资源类型')!.options
+    const aliyunTypes = aliyunOptions.map(node => text(node))
     expect(aliyunTypes).toEqual(['全部类型', 'ECS', 'RDS', 'SLB', 'ALB', 'NLB', 'GWLB'])
+    expect(aliyunOptions.map(node => node.props.value)).toEqual(['', 'ecs', 'rds', 'slb', 'alb', 'nlb', 'gwlb'])
     aliyun.app.unmount()
 
     const aws = await mount({ render: () => h(CloudPlatformPage, { provider: 'aws' }) }, '/aws')
-    const awsTypes = all(aws.root).find(node => node.type === 'select' && node.props['aria-label'] === '资源类型')!.options.map(node => text(node))
+    const awsOptions = all(aws.root).find(node => node.type === 'select' && node.props['aria-label'] === '资源类型')!.options
+    const awsTypes = awsOptions.map(node => text(node))
     expect(awsTypes).toEqual(['全部类型', 'EC2', 'RDS', 'CLB', 'ALB', 'NLB', 'GWLB'])
+    expect(awsOptions.map(node => node.props.value)).toEqual(['', 'ec2', 'rds', 'clb', 'alb', 'nlb', 'gwlb'])
     aws.app.unmount()
   })
   it('同步成功任务在结果列展示资源统计', async () => {
