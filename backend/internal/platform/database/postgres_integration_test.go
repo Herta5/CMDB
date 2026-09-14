@@ -32,6 +32,24 @@ const (
 
 var postgresTestDatabaseSequence atomic.Uint64
 
+// TestPostgreSQLServerDiskSizeSort 验证生产 JSONB 云盘数组可在数据库内汇总排序后分页。
+func TestPostgreSQLServerDiskSizeSort(t *testing.T) {
+	fixture := newPostgresTestDatabase(t)
+	installCurrentSchema(t, fixture)
+	projectID := insertCurrentProject(t, fixture.db, "服务器磁盘排序")
+	sourceID := insertCurrentSource(t, fixture.db, projectID, "排序来源", "排序账号")
+	requireExec(t, fixture.db, `INSERT INTO resources_servers
+		(project_id, source_id, provider, resource_type, external_id, name, disks, first_seen_at, last_seen_at)
+		VALUES (?, ?, 'aws', 'ec2', 'i-small', '小磁盘', '[{"id":"small","size_gib":40}]'::jsonb, NOW(), NOW()),
+		       (?, ?, 'aws', 'ec2', 'i-large', '大磁盘', '[{"id":"root","size_gib":100},{"id":"data","size_gib":200}]'::jsonb, NOW(), NOW())`,
+		"准备 JSONB 磁盘排序资源失败", projectID, sourceID, projectID, sourceID)
+	service := resource.NewService(resource.NewRepository(fixture.db), nil, nil)
+	values, total, err := service.ListResources(context.Background(), uint64(projectID), resource.ResourceListQuery{ResourceTypes: []string{"ec2"}, SortBy: "disk_size", SortOrder: "desc", Page: 1, PageSize: 1})
+	if err != nil || total != 2 || len(values) != 1 || values[0].ExternalID != "i-large" {
+		t.Fatalf("PostgreSQL 必须按 JSONB 磁盘总容量排序后分页：total=%d values=%+v err=%v", total, values, err)
+	}
+}
+
 // TestPostgreSQLDeletionDependencyRace 用两条真实事务验证先提交的依赖不能被父删除级联清理。
 func TestPostgreSQLDeletionDependencyRace(t *testing.T) {
 	for _, parent := range []string{"项目", "接入源"} {

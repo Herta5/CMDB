@@ -330,7 +330,7 @@ describe('项目控制台页面', () => {
     expect(get).toHaveBeenCalledWith('/projects/2/resources', { params: expect.objectContaining({ resource_type: 'ecs,ec2', page: 1, page_size: 20, sort_by: 'name', sort_order: 'asc' }) })
     app.unmount()
   })
-  it('负载均衡资产页按官方类型集合查询且不查询 ELB', async () => {
+  it('负载均衡资产页按官方类型分别查询且不查询 ELB', async () => {
     const projectStore = useProjectStore()
     projectStore.projects = [{ id: 2, code: 'platform', name: '平台项目', description: '', status: 'enabled', ownerUsername: null, createdAt: '', updatedAt: '' }]
     projectStore.selectProject(2)
@@ -340,9 +340,10 @@ describe('项目控制台页面', () => {
     const requestedTypes = get.mock.calls
       .filter(([url]) => url === '/projects/2/resources')
       .map(([, options]) => options.params.resource_type)
-    expect(requestedTypes).toEqual(['slb,clb,alb,nlb,gwlb'])
+    expect(requestedTypes).toEqual(['slb', 'clb', 'alb', 'nlb', 'gwlb'])
     expect(requestedTypes).not.toContain('elb')
-    expect(get).toHaveBeenCalledWith('/projects/2/resources', { params: expect.objectContaining({ page: 1, page_size: 200 }) })
+    expect(get).toHaveBeenCalledTimes(5)
+    expect(get.mock.calls.every(([, options]) => options.params.page === 1 && options.params.page_size === 200)).toBe(true)
     app.unmount()
   })
   it('首页只汇总当前项目的正常服务器、数据库和负载均衡', async () => {

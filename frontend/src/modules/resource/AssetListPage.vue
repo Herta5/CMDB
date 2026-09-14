@@ -100,6 +100,18 @@ async function loadAssets() {
       keyword: keyword.value, region: region.value, cloud_status: cloudStatus.value, asset_status: assetStatus.value,
       sort_by: sortBy.value, sort_order: sortOrder.value, page: props.category === 'server' ? page.value : 1, page_size: props.category === 'server' ? pageSize.value : 200,
     }
+    // 尚未完成新版分页交互的两类页面维持既有“每项目、每类型最多 200 条”读取，不能因类型集合查询缩小可见范围。
+    if (props.category !== 'server') {
+      const result = await Promise.all(targets.flatMap(project => category.value.types.map(async type => ({
+        project,
+        result: await listResources(project.id, { ...params, resource_type: type, page: 1, page_size: 200 }),
+      }))))
+      if (version === requestVersion) {
+        resources.value = result.flatMap(({ project, result }) => result.items.map(item => ({ ...item, projectName: project.name })))
+        total.value = result.reduce((sum, entry) => sum + entry.result.total, 0)
+      }
+      return
+    }
     if (viewingAllProjects.value) {
       const result = await listAllResources(params)
       if (version === requestVersion) {

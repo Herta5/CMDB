@@ -251,7 +251,7 @@ func (r *Repository) listServerResources(ctx context.Context, projectID uint64, 
 	}[filter.SortBy]
 	if filter.SortBy == "disk_size" {
 		if r.db.Dialector.Name() == "postgres" {
-			orderColumn = "COALESCE((SELECT SUM(CAST(disk.value->>'size_gib' AS BIGINT)) FROM json_array_elements(assets.disks) AS disk(value)), 0)"
+			orderColumn = "COALESCE((SELECT SUM(CAST(disk.value->>'size_gib' AS BIGINT)) FROM jsonb_array_elements(assets.disks) AS disk(value)), 0)"
 		} else {
 			orderColumn = "COALESCE((SELECT SUM(CAST(json_extract(disk.value, '$.size_gib') AS INTEGER)) FROM json_each(assets.disks) AS disk), 0)"
 		}
