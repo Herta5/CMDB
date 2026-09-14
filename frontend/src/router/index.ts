@@ -10,9 +10,10 @@ const routes: RouteRecordRaw[] = [
     name: 'Console',
     component: () => import('@/layouts/ConsoleLayout.vue'),
     meta: { requiresAuth: true, title: 'CMDB' },
-    // 首页进入服务器资产，管理页面使用独立地址和权限标记。
+    // 首页展示当前项目上下文中的资源概览，管理页面使用独立地址和权限标记。
     children: [
-      { path: '', name: 'AuthenticatedHome', redirect: '/assets/servers' },
+      { path: '', name: 'AuthenticatedHome', redirect: '/dashboard' },
+      { path: 'dashboard', name: 'Home', component: () => import('@/modules/home/HomePage.vue'), meta: { title: '首页' } },
       { path: 'assets/servers', name: 'ServerAssets', component: () => import('@/modules/resource/AssetListPage.vue'), props: { category: 'server' }, meta: { title: '服务器' } },
       { path: 'assets/databases', name: 'DatabaseAssets', component: () => import('@/modules/resource/AssetListPage.vue'), props: { category: 'database' }, meta: { title: '数据库' } },
       { path: 'assets/load-balancers', name: 'LoadBalancerAssets', component: () => import('@/modules/resource/AssetListPage.vue'), props: { category: 'load_balancer' }, meta: { title: '负载均衡' } },

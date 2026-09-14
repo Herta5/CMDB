@@ -59,11 +59,12 @@ async function logout() {
   <div class="cmdb-console">
     <a class="skip-link" href="#console-content">跳至主要内容</a>
     <aside class="console-sidebar">
-      <router-link class="console-brand" to="/assets/servers" aria-label="CMDB 资产首页">
+      <router-link class="console-brand" to="/dashboard" aria-label="CMDB 首页">
         <span class="brand-mark" aria-hidden="true">C</span><strong>CMDB</strong>
         <span class="brand-caption">资源管理</span>
       </router-link>
       <nav aria-label="主导航" class="console-nav">
+        <router-link to="/dashboard" class="nav-item" :class="{ 'is-active': route.path === '/dashboard' }"><ConsoleIcon name="home"/>首页</router-link>
         <p class="nav-parent"><ConsoleIcon name="assets"/>资产列表</p>
         <router-link to="/assets/servers" class="nav-item nav-child" :class="{ 'is-active': route.path === '/assets/servers' }"><ConsoleIcon name="server"/>服务器</router-link>
         <router-link to="/assets/databases" class="nav-item nav-child" :class="{ 'is-active': route.path === '/assets/databases' }"><ConsoleIcon name="database"/>数据库</router-link>

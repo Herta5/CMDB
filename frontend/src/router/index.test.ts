@@ -48,17 +48,20 @@ describe('认证路由守卫', () => {
     expect(router.resolve('/kubernetes').name).not.toBe('KubernetesResources')
   })
 
+  it('首页使用控制台布局并作为受保护默认入口', async () => {
+    expect(router.resolve('/dashboard').name).toBe('Home')
+    expect(router.resolve('/dashboard').matched[0].name).toBe('Console')
+
+    await router.push('/')
+
+    expect(router.currentRoute.value.path).toBe('/login')
+    expect(router.currentRoute.value.query.redirect).toBe('/dashboard')
+  })
+
   it('未登录访问项目详情时保留完整项目目标供登录后恢复', async () => {
     await router.push('/projects/2')
     expect(router.currentRoute.value.path).toBe('/login')
     expect(router.currentRoute.value.query.redirect).toBe('/projects/2')
-  })
-
-  it('未登录访问受保护入口时回到登录页并保留目标地址', async () => {
-    await router.push('/')
-
-    expect(router.currentRoute.value.path).toBe('/login')
-    expect(router.currentRoute.value.query.redirect).toBe('/assets/servers')
   })
 
   it('已登录用户访问登录页时回到受保护入口', async () => {
@@ -66,7 +69,7 @@ describe('认证路由守卫', () => {
 
     await router.push('/login')
 
-    expect(router.currentRoute.value.path).toBe('/assets/servers')
+    expect(router.currentRoute.value.path).toBe('/dashboard')
   })
 
   it('项目管理员可进入项目管理、云同步和审计日志，项目成员会返回资产列表', async () => {

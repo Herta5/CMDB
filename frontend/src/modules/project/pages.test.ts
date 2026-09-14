@@ -14,6 +14,7 @@ import UserManagementPage from '@/modules/user/UserManagementPage.vue'
 import AssetListPage from '@/modules/resource/AssetListPage.vue'
 import CloudPlatformPage from '@/modules/resource/CloudPlatformPage.vue'
 import CloudSyncManagementPage from '@/modules/resource/CloudSyncManagementPage.vue'
+import HomePage from '@/modules/home/HomePage.vue'
 import { useResourceStore } from '@/modules/resource/store'
 
 // 节点模型只承担宿主操作，页面逻辑、路由和项目状态均执行生产代码。
@@ -68,6 +69,7 @@ beforeEach(() => {
 async function flush() { for (let index = 0; index < 8; index++) await nextTick() }
 async function mount(component: Component, path = '/projects') {
   const router = createRouter({ history: createMemoryHistory(), routes: [
+    { path: '/dashboard', component: HomePage },
     { path: '/projects', component: ProjectListPage },
     { path: '/projects/:projectId', component: ProjectDetailPage },
     { path: '/assets/servers', component: { render: () => null } },
@@ -244,6 +246,9 @@ describe('项目控制台页面', () => {
     expect(text(root)).toContain('管理')
     const navigationParents = all(root).filter(n => n.props.class === 'nav-parent').map(text)
     expect(navigationParents).toEqual(['资产列表', '管理'])
+    const navigationLinks = all(root).filter(n => n.type === 'a' && String(n.props.class).includes('nav-item'))
+    expect(navigationLinks[0]?.props.href).toBe('/dashboard')
+    expect(text(navigationLinks[0]!)).toBe('首页')
     expect(text(root)).toContain('项目管理')
     expect(text(root)).toContain('云同步管理')
     expect(text(root)).not.toContain('权限管理')
@@ -252,7 +257,7 @@ describe('项目控制台页面', () => {
     expect(text(root)).not.toContain('项目隔离 · 统一管理')
     expect(text(root)).not.toContain('CMDB · 公有云资源配置管理')
     const navigationIcons = all(root).filter(n => n.type === 'svg').map(n => n.props['data-icon'])
-    expect(navigationIcons).toEqual(expect.arrayContaining(['assets', 'server', 'database', 'load-balancer', 'management', 'project', 'cloud-sync', 'user']))
+    expect(navigationIcons).toEqual(expect.arrayContaining(['home', 'assets', 'server', 'database', 'load-balancer', 'management', 'project', 'cloud-sync', 'user']))
     expect(text(root)).not.toContain('云平台')
     expect(text(root)).not.toContain('阿里云AWS')
     expect(all(root).some(n => n.type === 'a' && n.props.href === '/users')).toBe(true)
@@ -333,6 +338,48 @@ describe('项目控制台页面', () => {
       .map(([, options]) => options.params.resource_type)
     expect(requestedTypes).toEqual(['slb', 'clb', 'alb', 'nlb', 'gwlb'])
     expect(requestedTypes).not.toContain('elb')
+    app.unmount()
+  })
+  it('首页只汇总当前项目的正常服务器、数据库和负载均衡', async () => {
+    const projectStore = useProjectStore()
+    projectStore.projects = [{ id: 2, code: 'platform', name: '平台项目', description: '', status: 'enabled', ownerUsername: null, createdAt: '', updatedAt: '' }]
+    projectStore.selectProject(2)
+    const totals: Record<string, number> = { ecs: 2, ec2: 3, rds: 4, slb: 1, clb: 2, alb: 3, nlb: 4, gwlb: 5 }
+    get.mockImplementation((_url: string, options?: { params?: { resource_type?: string } }) => Promise.resolve({ items: [], total: totals[options?.params?.resource_type ?? ''] ?? 0 }))
+
+    const { root, app } = await mount(HomePage, '/dashboard')
+
+    const cards = all(root).filter(n => n.type === 'a' && String(n.props.class).includes('home-stat-card'))
+    expect(cards.map(card => [card.props.href, text(card)])).toEqual([
+      ['/assets/servers', expect.stringContaining('服务器5台')],
+      ['/assets/databases', expect.stringContaining('数据库4个')],
+      ['/assets/load-balancers', expect.stringContaining('负载均衡15个')],
+    ])
+    const resourceCalls = get.mock.calls.filter(([url]) => url === '/projects/2/resources')
+    expect(resourceCalls).toHaveLength(8)
+    expect(resourceCalls.every(([, options]) => options.params.asset_status === 'active' && options.params.page === 1 && options.params.page_size === 1)).toBe(true)
+    app.unmount()
+  })
+  it('系统管理员在所有项目上下文汇总各项目正常资产', async () => {
+    useAuthStore().acceptSession('管理员会话', { username: 'admin', globalRole: 'system_admin' })
+    const projectStore = useProjectStore()
+    projectStore.projects = [
+      { id: 2, code: 'platform', name: '平台项目', description: '', status: 'enabled', ownerUsername: null, createdAt: '', updatedAt: '' },
+      { id: 3, code: 'payment', name: '支付项目', description: '', status: 'enabled', ownerUsername: null, createdAt: '', updatedAt: '' },
+    ]
+    projectStore.selectAllProjects()
+    get.mockImplementation((url: string) => Promise.resolve({ items: [], total: Number(url.split('/')[2]) }))
+
+    const { root, app } = await mount(HomePage, '/dashboard')
+
+    const cards = all(root).filter(n => n.type === 'a' && String(n.props.class).includes('home-stat-card'))
+    expect(cards.map(text)).toEqual([
+      expect.stringContaining('服务器10台'),
+      expect.stringContaining('数据库5个'),
+      expect.stringContaining('负载均衡25个'),
+    ])
+    expect(get.mock.calls.filter(([url]) => url === '/projects/2/resources')).toHaveLength(8)
+    expect(get.mock.calls.filter(([url]) => url === '/projects/3/resources')).toHaveLength(8)
     app.unmount()
   })
   it('服务器资产页展示实例规格和云盘汇总', async () => {
