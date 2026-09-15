@@ -366,6 +366,53 @@ describe('项目控制台页面', () => {
     expect(all(searchForm).filter(n => n.type === 'button').map(text)).toEqual(['搜索', '筛选', '列设置', '刷新列表'])
     app.unmount()
   })
+  it('服务器刷新列表重新查询当前条件且在请求期间禁用', async () => {
+    const projectStore = useProjectStore()
+    projectStore.projects = [{ id: 2, code: 'platform', name: '平台项目', description: '', status: 'enabled', ownerUsername: null, createdAt: '', updatedAt: '' }]
+    projectStore.selectProject(2)
+    let resourceRequests = 0
+    let finishRefresh!: (value: { items: never[]; total: number }) => void
+    get.mockImplementation((url: string) => {
+      if (url === '/projects/2/sources') return Promise.resolve([])
+      resourceRequests += 1
+      if (resourceRequests === 1) return Promise.resolve({ items: [], total: 0 })
+      return new Promise(resolve => { finishRefresh = resolve })
+    })
+
+    const component = { render: () => h(AssetListPage, { category: 'server' }) }
+    const { root, app } = await mount(component, '/assets/servers')
+    const refresh = all(root).find(n => n.type === 'button' && text(n) === '刷新列表')!
+
+    refresh.props.onClick()
+    await nextTick()
+    expect(resourceRequests).toBe(2)
+    expect(refresh.props.disabled).toBe(true)
+    finishRefresh({ items: [], total: 0 })
+    await flush()
+    expect(refresh.props.disabled).toBe(false)
+    app.unmount()
+  })
+  it.each([
+    ['database', '/assets/databases'],
+    ['load_balancer', '/assets/load-balancers'],
+  ] as const)('%s 页面继续在标题区提供刷新列表', async (category, path) => {
+    const projectStore = useProjectStore()
+    projectStore.projects = [{ id: 2, code: 'platform', name: '平台项目', description: '', status: 'enabled', ownerUsername: null, createdAt: '', updatedAt: '' }]
+    projectStore.selectProject(2)
+    get.mockResolvedValue({ items: [], total: 0 })
+
+    const component = { render: () => h(AssetListPage, { category }) }
+    const { root, app } = await mount(component, path)
+    const heading = all(root).find(n => n.type === 'header' && String(n.props.class).includes('page-heading'))!
+
+    expect(all(heading).some(n => n.type === 'button' && text(n) === '刷新列表')).toBe(true)
+    app.unmount()
+  })
+  it('服务器搜索操作行允许搜索框收缩以避免平板宽度裁切按钮', () => {
+    const searchRule = baseStyles.match(/\.server-search\s*\{([^}]*)\}/)?.[1] ?? ''
+
+    expect(searchRule).toMatch(/grid-template-columns:\s*minmax\(0,\s*1fr\)/)
+  })
   it('服务器列表 IP 保持分行且不覆盖表格默认字体', () => {
     expect(baseStyles).toContain('.ip-line')
     const ipRule = baseStyles.match(/\.ip-line\s*\{([^}]*)\}/)?.[1] ?? ''
