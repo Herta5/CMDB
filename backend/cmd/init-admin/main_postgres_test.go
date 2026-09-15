@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"os/exec"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -94,7 +95,7 @@ func newInitAdminPostgresDatabase(t *testing.T) *gorm.DB {
 	t.Helper()
 	baseDSN := os.Getenv(initAdminPostgresDSNEnvironment)
 	if baseDSN == "" {
-		t.Skip("未设置 CMDB_POSTGRES_TEST_DSN，跳过 PostgreSQL 17 集成测试")
+		t.Fatal("未设置 CMDB_POSTGRES_TEST_DSN，请使用 scripts/test-backend.sh 执行 PostgreSQL 17 集成测试")
 	}
 	adminConfiguration, err := pgx.ParseConfig(baseDSN)
 	if err != nil {
@@ -175,4 +176,14 @@ func openInitAdminPostgres(t *testing.T, configuration *pgx.ConnConfig, simplePr
 		t.Fatal("探测 PostgreSQL 集成测试数据库失败")
 	}
 	return db
+}
+
+// TestPostgreSQLInitializeAdminRequiresDSN 验证显式选择 PostgreSQL 测试时缺少环境配置必须失败，不能跳过后虚假通过。
+func TestPostgreSQLInitializeAdminRequiresDSN(t *testing.T) {
+	command := exec.Command(os.Args[0], "-test.run=^TestPostgreSQLInitializeAdminAllowsFirstManagedUser$", "-test.count=1")
+	command.Env = append(os.Environ(), "CMDB_POSTGRES_TEST_DSN=")
+	output, err := command.CombinedOutput()
+	if err == nil || !strings.Contains(string(output), "未设置 CMDB_POSTGRES_TEST_DSN") {
+		t.Fatalf("缺少 PostgreSQL 测试连接必须明确失败，实际错误：%v，输出：%s", err, output)
+	}
 }

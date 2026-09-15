@@ -64,13 +64,28 @@ func TestPostgreSQLIntegrationComposeUsesEphemeralPostgreSQL17(t *testing.T) {
 		"postgresql-test:\n    image: postgres:17",
 		"POSTGRES_PASSWORD: cmdb-integration-only",
 		"DB_PASSWORD: cmdb-app-integration-only",
-		`- "127.0.0.1:55432:5432"`,
-		"- /var/lib/postgresql/data",
+		`- "127.0.0.1::5432"`,
+		"tmpfs:\n      - /var/lib/postgresql/data",
 		"001_create_app_role.sh:/docker-entrypoint-initdb.d/001_create_app_role.sh:ro",
 	} {
 		if !strings.Contains(compose, fragment) {
 			t.Errorf("PostgreSQL 集成测试 Compose 缺少隔离约束：%s", fragment)
 		}
+	}
+	for _, forbidden := range []string{"002_schema.sql", "cmdb-postgresql-data", "container_name:"} {
+		if strings.Contains(compose, forbidden) {
+			t.Errorf("集成测试不得复用生产状态或固定容器：%s", forbidden)
+		}
+	}
+}
+
+// TestPostgreSQLIntegrationComposeIsTracked 防止干净检出时缺失数据库集成测试配置。
+func TestPostgreSQLIntegrationComposeIsTracked(t *testing.T) {
+	command := exec.Command("git", "check-ignore", "--no-index", postgresIntegrationComposePath)
+	if output, err := command.CombinedOutput(); err == nil {
+		t.Fatalf("PostgreSQL 集成测试配置不得被忽略：%s", output)
+	} else if exit, ok := err.(*exec.ExitError); !ok || exit.ExitCode() != 1 {
+		t.Fatalf("检查集成测试配置跟踪规则失败：%v", err)
 	}
 }
 

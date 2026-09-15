@@ -1,0 +1,22 @@
+# PostgreSQL 集成测试专用环境：每次空库启动，不连接任何生产卷。
+services:
+  postgresql-test:
+    image: postgres:17
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: cmdb-integration-only
+      POSTGRES_DB: postgres
+      DB_PASSWORD: cmdb-app-integration-only
+    ports:
+      - "127.0.0.1::5432"
+    tmpfs:
+      - /var/lib/postgresql/data
+    volumes:
+      # 只创建共享受限角色；每个测试自行创建独立数据库并安装结构。
+      - ../../database/init/001_create_app_role.sh:/docker-entrypoint-initdb.d/001_create_app_role.sh:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U postgres -d postgres"]
+      interval: 1s
+      timeout: 5s
+      retries: 60
+      start_period: 5s

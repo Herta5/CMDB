@@ -49,4 +49,7 @@ docs/project/*
 
 # Local code index and integration test environments
 .codegraph/
-backend/test/
+backend/test/*
+!backend/test/postgres/
+backend/test/postgres/*
+!backend/test/postgres/docker-compose.yml
