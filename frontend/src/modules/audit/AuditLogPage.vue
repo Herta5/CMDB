@@ -27,6 +27,22 @@ const resourceTypeLabels: Record<string, string> = { user: '用户', project: '�
 const actionOptions = Object.entries(actionLabels).map(([value, label]) => ({ value, label }))
 const totalPages = computed(() => Math.max(1, Math.ceil(audit.total / pageSize)))
 
+type AuditResult = { label: string; symbol: string; tone: 'is-success' | 'is-partial' | 'is-failed' | 'is-unknown' }
+const auditResults: Record<string, AuditResult> = {
+  success: { label: '成功', symbol: '✓', tone: 'is-success' },
+  partial_success: { label: '部分成功', symbol: '!', tone: 'is-partial' },
+  failed: { label: '失败', symbol: '×', tone: 'is-failed' },
+}
+const unknownAuditResult: AuditResult = { label: '状态未知', symbol: '?', tone: 'is-unknown' }
+/** ownValue 仅读取映射自有键，历史字符串不得命中 Object 原型属性。 */
+function ownValue<T>(mapping: Record<string, T>, key: string): T | undefined {
+  return Object.prototype.hasOwnProperty.call(mapping, key) ? mapping[key] : undefined
+}
+/** resourceTypes 仅接受非空字符串数组，格式错误的历史摘要不参与结果推导。 */
+function resourceTypes(value: unknown): string[] | null {
+  return Array.isArray(value) && value.every(item => typeof item === 'string' && item.trim()) ? value : null
+}
+
 /** toRFC3339 将本地时间控件转换为带时区的服务端时间边界。 */
 function toRFC3339(value: string) { return value ? new Date(value).toISOString() : undefined }
 /** currentFilter 生成不包含空操作人用户名的查询条件。 */
@@ -52,6 +68,8 @@ function actionLabel(value: string) { return actionLabels[value] ?? value }
 function objectLabel(value: string) { return resourceTypeLabels[value] ?? value }
 /** actorLabel 使用公开用户名作为主身份，后台系统任务没有用户名。 */
 function actorLabel(value: AuditLog) { return value.actorUsername || '系统任务' }
+/** actorDisplayLabel 在列表中优先展示人可读名称，缺失快照时才回退到用户名。 */
+function actorDisplayLabel(value: AuditLog) { return value.actorDisplayName || actorLabel(value) }
 /** objectName 对接入源优先使用审计名称快照，避免向用户暴露无意义的数字主键。 */
 function objectName(item: AuditLog) { return item.resourceType === 'resource_source' ? item.resourceName || '名称未记录' : item.resourceId || '—' }
 /** formatTime 使用当前浏览器时区展示，原始 RFC3339 数据仍由接口保留。 */
@@ -60,6 +78,24 @@ function formatTime(value: string) { return value ? new Date(value).toLocaleStri
 function detailEntries(value: AuditLog | null) { return Object.entries(value?.detail ?? {}).sort(([left], [right]) => left.localeCompare(right)) }
 /** isSyncAudit 只改变同步结果的详情展示，其他管理审计仍展示脱敏键值。 */
 function isSyncAudit(item: AuditLog) { return item.action === 'source.synced' }
+/** auditResult 使用服务端事实展示结果；连接测试兼容早期未写状态的可达类型列表。 */
+function auditResult(item: AuditLog): AuditResult {
+  const status = typeof item.detail.status === 'string' ? item.detail.status : ''
+  const explicitResult = ownValue(auditResults, status)
+  if (item.action === 'source.synced') return explicitResult ?? unknownAuditResult
+  if (item.action === 'source.connection_tested') {
+    if (explicitResult) return explicitResult
+    const reachable = resourceTypes(item.detail.reachable_types)
+    const failed = resourceTypes(item.detail.failed_types)
+    if (!reachable || !failed || (!reachable.length && !failed.length)) return unknownAuditResult
+    const reachableTypes = new Set(reachable)
+    if (failed.some(resourceType => reachableTypes.has(resourceType))) return unknownAuditResult
+    if (!failed.length) return auditResults.success
+    if (!reachable.length) return auditResults.failed
+    return auditResults.partial_success
+  }
+  return ownValue(actionLabels, item.action) ? auditResults.success : unknownAuditResult
+}
 
 watch(() => projects.currentProjectId, () => { page.value = 1; void load() }, { immediate: true })
 onBeforeUnmount(() => audit.clear())
@@ -84,7 +120,7 @@ onBeforeUnmount(() => audit.clear())
       <div v-else-if="audit.state === 'error'" class="page-state"><span class="state-symbol" aria-hidden="true">!</span><h3>审计日志加载失败</h3><p>请稍后重试。</p><button class="console-button" @click="load">重新加载</button></div>
       <div v-else-if="audit.state === 'empty'" class="page-state"><span class="state-symbol" aria-hidden="true">◇</span><h3>暂无审计记录</h3><p>当前项目和筛选条件下没有可显示的操作。</p></div>
       <template v-else>
-        <div class="table-scroll"><table class="console-table audit-table"><thead><tr><th>时间</th><th>操作人</th><th>项目</th><th>操作</th><th>对象</th><th>来源 IP</th><th>详情</th></tr></thead><tbody><tr v-for="item in audit.items" :key="item.id"><td>{{ formatTime(item.createdAt) }}</td><td><strong>{{ actorLabel(item) }}</strong><small v-if="item.actorUsername && item.actorDisplayName">{{ item.actorDisplayName }}</small></td><td>{{ item.projectName || (item.projectId ? `项目 ${item.projectId}` : '全局') }}</td><td>{{ actionLabel(item.action) }}</td><td><strong>{{ objectLabel(item.resourceType) }}</strong><small>{{ objectName(item) }}</small></td><td class="monospace">{{ item.requestIp || '—' }}</td><td><button class="button-link" @click="selected = item">查看详情</button></td></tr></tbody></table></div>
+        <div class="table-scroll"><table class="console-table audit-table"><thead><tr><th>时间</th><th>操作人</th><th>项目</th><th>操作</th><th>结果</th><th>对象</th><th>来源 IP</th><th>详情</th></tr></thead><tbody><tr v-for="item in audit.items" :key="item.id"><td>{{ formatTime(item.createdAt) }}</td><td><strong>{{ actorDisplayLabel(item) }}</strong><small v-if="item.actorUsername && item.actorDisplayName">{{ item.actorUsername }}</small></td><td>{{ item.projectName || (item.projectId ? `项目 ${item.projectId}` : '全局') }}</td><td>{{ actionLabel(item.action) }}</td><td><span class="audit-result" :class="auditResult(item).tone">{{ auditResult(item).symbol }} {{ auditResult(item).label }}</span></td><td><strong>{{ objectLabel(item.resourceType) }}</strong><small>{{ objectName(item) }}</small></td><td class="monospace">{{ item.requestIp || '—' }}</td><td><button class="button-link" @click="selected = item">查看详情</button></td></tr></tbody></table></div>
         <footer class="audit-pagination"><span>共 {{ audit.total }} 条</span><div><button class="console-button" :disabled="page <= 1" @click="changePage(page - 1)">上一页</button><span>第 {{ page }} / {{ totalPages }} 页</span><button class="console-button" :disabled="page >= totalPages" @click="changePage(page + 1)">下一页</button></div></footer>
       </template>
     </section>
