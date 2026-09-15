@@ -39,6 +39,10 @@ func requestValidation(swagger *openapi3.T, lookup func(*gin.Context) *openapi3.
 				reject(invalidRequest(name, false))
 				return
 			}
+			if (name == "updateMyProfile" || name == "changeMyPassword") && !uniqueObjectKeys(raw) {
+				reject(invalidRequest(name, false))
+				return
+			}
 			if name == "createSource" || name == "updateSource" {
 				// RawMessage 保留凭证对象字节；先扫描重复键，之后的 Schema 解码不能抹掉证据。
 				if !uniqueObjectKeys(raw) {
@@ -141,7 +145,7 @@ func invalidRequest(op string, semantic bool) *errorResponse {
 			return sourceMutationError(resource.ErrInvalidSourceInput)
 		}
 		return failure(400, "SOURCE_INVALID_REQUEST", "请求格式错误")
-	case strings.Contains(op, "User"):
+	case strings.Contains(op, "User") || op == "updateMyProfile" || op == "changeMyPassword":
 		if semantic {
 			return failure(400, "USER_INVALID_INPUT", "用户参数无效")
 		}

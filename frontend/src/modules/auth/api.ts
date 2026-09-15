@@ -1,5 +1,5 @@
 // 本文件封装新版身份接口，页面与状态层不直接依赖 HTTP 路径或 Axios 实现。
-import { login as loginRequest, getMe } from '@/api/generated/cmdb'
+import { login as loginRequest, getMe, updateMyProfile, changeMyPassword } from '@/api/generated/cmdb'
 import type { PublicUser } from '@/api/generated/models'
 
 /** 当前登录用户可安全显示的身份资料，敏感凭证不属于此类型。 */
@@ -38,4 +38,14 @@ export async function login(username: string, password: string): Promise<LoginSe
 export async function getCurrentUser(): Promise<CurrentUser> {
   const user = await getMe()
   return toCurrentUser(user)
+}
+
+/** 个人设置只提交显示名称，目标用户由后端当前身份决定。 */
+export async function updatePersonalProfile(displayName: string): Promise<CurrentUser> {
+  return toCurrentUser(await updateMyProfile({ display_name: displayName }))
+}
+
+/** 旧密码和新密码只用于本次请求，不进入公开用户资料或状态。 */
+export async function changePersonalPassword(currentPassword: string, newPassword: string): Promise<void> {
+  await changeMyPassword({ current_password: currentPassword, new_password: newPassword })
 }

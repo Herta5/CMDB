@@ -1,10 +1,19 @@
 <script setup lang="ts">
 // 控制台统一维护项目上下文与身份入口，平台模块只通过内容出口接入。
-import { computed, watch } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useAuthStore } from '@/modules/auth/store'
 import { useProjectStore } from '@/modules/project/store'
 import ConsoleIcon from '@/components/ConsoleIcon.vue'
+import PersonalSettingsDialog from '@/modules/auth/PersonalSettingsDialog.vue'
+
+const showPersonalSettings = ref(false)
+const userMenu = ref<HTMLDetailsElement | null>(null)
+/** 打开个人设置时收起菜单，避免两个浮层同时占用键盘焦点。 */
+function openPersonalSettings() {
+  if (userMenu.value) userMenu.value.open = false
+  showPersonalSettings.value = true
+}
 
 const auth = useAuthStore()
 const projects = useProjectStore()
@@ -89,10 +98,11 @@ async function logout() {
             <option v-for="project in projects.projects" :key="project.id" :value="project.id">{{ project.name }}</option>
           </select>
         </div>
-        <details class="user-menu">
+        <details ref="userMenu" class="user-menu">
           <summary><span class="user-avatar" aria-hidden="true">{{ userName.slice(0, 1) }}</span><span>{{ userName }}</span><span class="menu-chevron" aria-hidden="true">⌄</span></summary>
           <div class="user-menu-panel">
             <p>{{ auth.currentUser?.globalRole === 'system_admin' ? '系统管理员' : '普通用户' }}</p>
+            <button class="menu-action" @click="openPersonalSettings">个人设置</button>
             <button class="menu-action" @click="logout">退出登录</button>
           </div>
         </details>
@@ -100,5 +110,6 @@ async function logout() {
       <!-- 各平台页面共享顶部项目上下文，资源接口始终以该项目作为最高边界。 -->
       <main id="console-content" class="console-content" tabindex="-1"><router-view /></main>
     </div>
+    <PersonalSettingsDialog v-if="showPersonalSettings" @close="showPersonalSettings = false" />
   </div>
 </template>

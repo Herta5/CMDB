@@ -10,7 +10,7 @@ import (
 // TestIsSensitiveKeyNormalizesSupportedSpellings 防止大小写、蛇形或短横线写法绕过统一分类。
 func TestIsSensitiveKeyNormalizesSupportedSpellings(t *testing.T) {
 	for _, key := range []string{
-		"Password", "session_token", "access-key", "client_secret", "Authorization", "cipher-text",
+		"Password", "current_password", "newPassword", "confirm-password", "session_token", "access-key", "client_secret", "Authorization", "cipher-text",
 		"raw-error-body", "原始错误正文", "ActorID", "previous_owner_user_id",
 	} {
 		if !IsSensitiveKey(key) {

@@ -264,7 +264,7 @@ func TestCurrentUserRejectsTokenWithoutExpiration(t *testing.T) {
 	server := newAuthenticationServer(t, user)
 	token, err := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
 		"username": user.Username, "global_role": user.GlobalRole,
-	}).SignedString(authenticationTestKey(user.ID, "identity-test-signing-key"))
+	}).SignedString(authenticationTestKey(user, "identity-test-signing-key"))
 	if err != nil {
 		t.Fatal("准备缺少过期时间的令牌失败")
 	}
@@ -280,7 +280,7 @@ func TestCurrentUserRejectsUnsupportedSigningMethods(t *testing.T) {
 		method jwt.SigningMethod
 		key    any
 	}{
-		{"其他 HMAC 算法", jwt.SigningMethodHS384, authenticationTestKey(user.ID, "identity-test-signing-key")},
+		{"其他 HMAC 算法", jwt.SigningMethodHS384, authenticationTestKey(user, "identity-test-signing-key")},
 		{"未签名令牌", jwt.SigningMethodNone, jwt.UnsafeAllowNoneSignatureType},
 	} {
 		t.Run(scenario.name, func(t *testing.T) {
@@ -431,7 +431,7 @@ func signedTestToken(t *testing.T, user *identity.User, expiresAt time.Time, sig
 		"username":    user.Username,
 		"global_role": user.GlobalRole,
 		"exp":         expiresAt.Unix(),
-	}).SignedString(authenticationTestKey(user.ID, signingKey))
+	}).SignedString(authenticationTestKey(user, signingKey))
 	if err != nil {
 		t.Fatal("构造认证测试令牌失败")
 	}
@@ -439,9 +439,9 @@ func signedTestToken(t *testing.T, user *identity.User, expiresAt time.Time, sig
 }
 
 // authenticationTestKey 独立构造账号签名夹具，让过期与算法测试不因错误密钥而假通过。
-func authenticationTestKey(userID uint64, secret string) []byte {
+func authenticationTestKey(user *identity.User, secret string) []byte {
 	mac := hmac.New(sha256.New, []byte(secret))
-	mac.Write([]byte("cmdb.jwt.account.v1:" + strconv.FormatUint(userID, 10)))
+	mac.Write([]byte("cmdb.jwt.account.v2:" + strconv.FormatUint(user.ID, 10) + ":" + user.PasswordHash))
 	return mac.Sum(nil)
 }
 
@@ -487,7 +487,7 @@ func (inMemoryUserRepository) Update(context.Context, *identity.User) error {
 }
 
 // UpdateWithPermissions 不属于认证测试范围，返回明确的未实现错误。
-func (inMemoryUserRepository) UpdateWithPermissions(context.Context, *identity.User, []identity.ProjectPermission) error {
+func (inMemoryUserRepository) UpdateWithPermissions(context.Context, *identity.User, []identity.ProjectPermission, *string) error {
 	return gorm.ErrInvalidDB
 }
 
@@ -522,5 +522,10 @@ func (r inMemoryUserRepository) List(context.Context) ([]identity.User, error) {
 
 // UpdateStatus 不属于认证接口测试范围，返回明确的未实现错误。
 func (inMemoryUserRepository) UpdateStatus(context.Context, uint64, string) error {
+	return gorm.ErrInvalidDB
+}
+
+// UpdatePersonal 不属于认证只读夹具的职责，个人设置使用真实数据库验收。
+func (inMemoryUserRepository) UpdatePersonal(context.Context, *identity.User, *string, *string) error {
 	return gorm.ErrInvalidDB
 }

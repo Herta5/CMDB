@@ -25,8 +25,32 @@ type UserRepository interface {
 	FindByUsername(ctx context.Context, username string) (*User, error)
 	List(ctx context.Context) ([]User, error)
 	Update(ctx context.Context, user *User) error
-	UpdateWithPermissions(ctx context.Context, user *User, permissions []ProjectPermission) error
+	UpdateWithPermissions(ctx context.Context, user *User, permissions []ProjectPermission, passwordHash *string) error
 	UpdateStatus(ctx context.Context, id uint64, status string) error
+	UpdatePersonal(ctx context.Context, previous *User, displayName, passwordHash *string) error
+}
+
+// UpdatePersonal 只写本人允许维护的字段，并以密码快照保护并发轮换和停用边界。
+// 不复用管理员全量更新，避免把并发修改的角色、状态或项目权限写回旧值。
+func (r *gormUserRepository) UpdatePersonal(ctx context.Context, previous *User, displayName, passwordHash *string) error {
+	fields := map[string]any{}
+	if displayName != nil {
+		fields["display_name"] = *displayName
+	}
+	if passwordHash != nil {
+		fields["password_hash"] = *passwordHash
+	}
+	if len(fields) == 0 {
+		return nil
+	}
+	result := r.db.WithContext(ctx).Model(&User{}).Where("id = ? AND status = ? AND password_hash = ?", previous.ID, "active", previous.PasswordHash).Updates(fields)
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected != 1 {
+		return ErrInvalidSession
+	}
+	return nil
 }
 
 // auditTransactionUserRepository 是启用审计时仓储必须实现的原子写入能力。
@@ -37,18 +61,22 @@ type auditTransactionUserRepository interface {
 
 // Update 只写入系统管理员允许维护的资料、角色、状态和密码哈希，用户名保持不可变。
 func (r *gormUserRepository) Update(ctx context.Context, user *User) error {
-	return updateUser(r.db.WithContext(ctx), user)
+	return updateUser(r.db.WithContext(ctx), user, &user.PasswordHash)
 }
 
 // updateUser 在指定数据库会话中更新用户，便于复用同一事务边界。
-func updateUser(db *gorm.DB, user *User) error {
-	result := db.Model(&User{}).Where("id = ?", user.ID).Updates(map[string]any{
-		"display_name":  user.DisplayName,
-		"email":         user.Email,
-		"global_role":   user.GlobalRole,
-		"status":        user.Status,
-		"password_hash": user.PasswordHash,
-	})
+func updateUser(db *gorm.DB, user *User, passwordHash *string) error {
+	fields := map[string]any{
+		"display_name": user.DisplayName,
+		"email":        user.Email,
+		"global_role":  user.GlobalRole,
+		"status":       user.Status,
+	}
+	// 管理员未提交密码时不写密码列，防止旧资料快照恢复已撤销的会话。
+	if passwordHash != nil {
+		fields["password_hash"] = *passwordHash
+	}
+	result := db.Model(&User{}).Where("id = ?", user.ID).Updates(fields)
 	if result.Error != nil {
 		return result.Error
 	}
@@ -150,9 +178,9 @@ func (r *gormUserRepository) Delete(ctx context.Context, id uint64) error {
 }
 
 // UpdateWithPermissions 使用全量替换语义原子保存用户和项目权限。
-func (r *gormUserRepository) UpdateWithPermissions(ctx context.Context, user *User, permissions []ProjectPermission) error {
+func (r *gormUserRepository) UpdateWithPermissions(ctx context.Context, user *User, permissions []ProjectPermission, passwordHash *string) error {
 	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		if err := updateUser(tx, user); err != nil {
+		if err := updateUser(tx, user, passwordHash); err != nil {
 			return err
 		}
 		return replacePermissions(tx, user.ID, permissions)

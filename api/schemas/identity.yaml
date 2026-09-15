@@ -170,3 +170,29 @@ UpdateUserStatusRequest:
       $ref: ../openapi.yaml#/components/schemas/UserStatus
   required:
   - status
+UpdateMyProfileRequest:
+  type: object
+  additionalProperties: false
+  properties:
+    display_name:
+      type: string
+      minLength: 1
+      maxLength: 128
+      description: 去除首尾空白后不能为空，仅用于辅助展示
+  required:
+  - display_name
+ChangeMyPasswordRequest:
+  type: object
+  additionalProperties: false
+  properties:
+    current_password:
+      type: string
+      writeOnly: true
+      description: 本人当前密码，仅用于本次验证
+    new_password:
+      type: string
+      writeOnly: true
+      description: 按UTF-8字节计算，必须为12至72字节；成功后全部旧会话失效
+  required:
+  - current_password
+  - new_password

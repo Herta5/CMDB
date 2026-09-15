@@ -119,6 +119,76 @@ paths:
               schema:
                 $ref: '#/components/schemas/PublicUser'
       parameters: []
+  /api/v1/me/profile:
+    put:
+      operationId: updateMyProfile
+      summary: 修改本人的显示名称
+      tags:
+      - 身份
+      responses:
+        '400': &personal001
+          description: 请求格式或业务参数无效
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestID'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401': &personal002
+          description: 身份认证失败或失效
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestID'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500': &personal003
+          description: 服务暂不可用
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestID'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '200':
+          description: 操作成功
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestID'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PublicUser'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateMyProfileRequest'
+  /api/v1/me/password:
+    put:
+      operationId: changeMyPassword
+      summary: 校验当前密码并修改本人密码，使所有旧会话失效
+      tags:
+      - 身份
+      responses:
+        '400': *personal001
+        '401': *personal002
+        '500': *personal003
+        '204':
+          description: 操作成功
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestID'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ChangeMyPasswordRequest'
   /api/v1/users:
     get:
       operationId: listUsers
@@ -2112,6 +2182,10 @@ components:
       description: 服务端生成的可信请求关联标识
       schema: *id003
   schemas:
+    UpdateMyProfileRequest:
+      $ref: schemas/identity.yaml#/UpdateMyProfileRequest
+    ChangeMyPasswordRequest:
+      $ref: schemas/identity.yaml#/ChangeMyPasswordRequest
     Identifier:
       $ref: schemas/common.yaml#/Identifier
     Username:

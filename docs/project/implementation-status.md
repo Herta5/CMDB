@@ -64,7 +64,7 @@
 
 | 能力 | 状态 | 实现与验证证据 | 边界 |
 | --- | --- | --- | --- |
-| 全量公开接口契约 | 已实现 | `api/openapi.yaml`、`api/schemas/`、`backend/internal/api/generated/contract_test.go` | 覆盖 30 个操作；引用、操作集合、凭证语义和原始 operationId 保留检查通过，双端生成结果一致。 |
+| 全量公开接口契约 | 已实现 | `api/openapi.yaml`、`api/schemas/`、`backend/internal/api/generated/contract_test.go` | 覆盖 32 个操作；引用、操作集合、凭证语义和原始 operationId 保留检查通过，双端生成结果一致。 |
 | Go 生成接口与授权 | 已实现 | `backend/internal/api/`、`backend/internal/platform/httpserver/contract_test.go`、`source_contract_test.go`、`binding_contract_test.go` | 生成路由为唯一生产入口；真实成功与失败响应、全部匿名操作拒绝、输入严格解析和安全错误兜底通过回归，完整 PostgreSQL 17 后端验收通过。 |
 | 前端生成调用与会话 | 已实现 | `frontend/orval.config.ts`、`frontend/src/api/`、`frontend/src/modules/*/api.ts` | 全部业务模块使用生成调用，保持显示模型及共享会话保护；15 个测试文件、195 个测试、类型检查与生产构建通过。 |
 | 生成与兼容门禁 | 已实现 | `scripts/generate-api.sh`、`scripts/check-api.sh`、`.github/workflows/api.yml` | 固定版本；统一生成与历史契约兼容入口通过，删除操作负向测试按预期拒绝；首次引入明确建立基线。CI 配置已纳入，本地执行了相同入口，未声明远端工作流已运行。 |
@@ -96,3 +96,9 @@
 
 
 以 `2b4079c` 为基线补齐编辑弹窗的全局角色展示：系统管理员隐藏逐项目授权控件及普通用户角色说明，仅提示拥有所有项目权限；普通用户仍可逐项目授权。仅改变展示，不清空原有成员关系或表单选择。`frontend/src/modules/project/pages.test.ts` 新增创建和编辑的角色切换回归，验证管理员控件隐藏及切回普通用户后的项目、角色恢复；前端全量 212 项测试和生产 Docker 镜像构建通过，AC-050 与前端规范已同步。
+
+## 个人设置
+
+按 AC-051 增加右上角“个人设置”，全部已登录角色均可单独维护本人显示名称与密码；用户名、权限和项目归属不可编辑。新增两个 OpenAPI 操作及双端生成类型，名称更新仅写对应列，密码变更验证当前密码并通过密码快照条件更新防止并发覆盖，审计同事务提交。会话签名派生绑定密码哈希，密码修改后旧会话失效；本次上线需要已有用户重新登录，不涉及数据库结构变化。
+
+实现证据：`backend/internal/identity/personal_settings.go`、`backend/internal/api/personal_settings_http.go`、`frontend/src/modules/auth/PersonalSettingsDialog.vue`；验收证据为 `backend/internal/platform/httpserver/personal_settings_test.go`、`backend/internal/identity/personal_settings_test.go`、`backend/internal/platform/database/personal_settings_postgres_test.go` 和 `frontend/src/modules/project/pages.test.ts`。覆盖本人边界、匿名和非法输入、审计回滚、密码轮换、并发保护、密码清理及跨会话响应隔离。前端全量 220 项测试、TypeScript 类型检查、生产构建、Docker 应用镜像构建、`scripts/test-backend.sh` 的后端全量与隔离 PostgreSQL 17 验收，以及 `scripts/check-api.sh main` 的生成一致性和接口兼容检查通过。新增交错测试还覆盖管理员旧资料不得恢复旧密码、名称并发回改必须审计，以及跨标签页存储事件延迟的身份保护。其他页面的已记录差距不在本次个人设置范围内。

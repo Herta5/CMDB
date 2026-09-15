@@ -19,7 +19,7 @@ func Test公开契约完整且可解析(t *testing.T) {
 		t.Fatalf("契约无效：%v", err)
 	}
 	want := map[string]bool{}
-	for _, id := range []string{"health", "login", "getMe", "listUsers", "createUser", "updateUser", "deleteUser", "updateUserStatus", "listProjects", "createProject", "getProject", "updateProject", "deleteProject", "listProjectMembers", "addProjectMember", "updateProjectMemberRole", "removeProjectMember", "listProjectMemberCandidates", "listGlobalAuditLogs", "listProjectAuditLogs", "listAllResources", "listProjectResources", "listSources", "createSource", "updateSource", "deleteSource", "syncSource", "testSourceConnection", "listSyncJobs", "retrySyncJob"} {
+	for _, id := range []string{"health", "login", "getMe", "updateMyProfile", "changeMyPassword", "listUsers", "createUser", "updateUser", "deleteUser", "updateUserStatus", "listProjects", "createProject", "getProject", "updateProject", "deleteProject", "listProjectMembers", "addProjectMember", "updateProjectMemberRole", "removeProjectMember", "listProjectMemberCandidates", "listGlobalAuditLogs", "listProjectAuditLogs", "listAllResources", "listProjectResources", "listSources", "createSource", "updateSource", "deleteSource", "syncSource", "testSourceConnection", "listSyncJobs", "retrySyncJob"} {
 		want[id] = true
 	}
 	for path, item := range spec.Paths.Map() {

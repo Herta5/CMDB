@@ -120,6 +120,76 @@ paths:
               schema:
                 $ref: '#/components/schemas/PublicUser'
       parameters: []
+  /api/v1/me/profile:
+    put:
+      operationId: updateMyProfile
+      summary: 修改本人的显示名称
+      tags:
+      - 身份
+      responses:
+        '400': &id001
+          description: 请求格式或业务参数无效
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestID'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401': &id002
+          description: 身份认证失败或失效
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestID'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500': &id003
+          description: 服务暂不可用
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestID'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '200':
+          description: 操作成功
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestID'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PublicUser'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateMyProfileRequest'
+  /api/v1/me/password:
+    put:
+      operationId: changeMyPassword
+      summary: 校验当前密码并修改本人密码，使所有旧会话失效
+      tags:
+      - 身份
+      responses:
+        '400': *id001
+        '401': *id002
+        '500': *id003
+        '204':
+          description: 操作成功
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestID'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ChangeMyPasswordRequest'
   /api/v1/users:
     get:
       operationId: listUsers
@@ -307,7 +377,7 @@ paths:
       - name: username
         in: path
         required: true
-        schema: &id001
+        schema: &id004
           type: string
           minLength: 1
           maxLength: 64
@@ -388,7 +458,7 @@ paths:
       - name: username
         in: path
         required: true
-        schema: *id001
+        schema: *id004
         description: 用户名
   /api/v1/users/{username}/status:
     put:
@@ -464,7 +534,7 @@ paths:
       - name: username
         in: path
         required: true
-        schema: *id001
+        schema: *id004
         description: 用户名
       requestBody:
         required: true
@@ -632,7 +702,7 @@ paths:
       - name: id
         in: path
         required: true
-        schema: &id002
+        schema: &id005
           type: integer
           format: int64
           minimum: 1
@@ -693,7 +763,7 @@ paths:
       - name: id
         in: path
         required: true
-        schema: *id002
+        schema: *id005
         description: 项目或资源公开标识
       requestBody:
         required: true
@@ -761,7 +831,7 @@ paths:
       - name: id
         in: path
         required: true
-        schema: *id002
+        schema: *id005
         description: 项目或资源公开标识
   /api/v1/projects/{id}/members:
     get:
@@ -821,7 +891,7 @@ paths:
       - name: id
         in: path
         required: true
-        schema: *id002
+        schema: *id005
         description: 项目或资源公开标识
     post:
       operationId: addProjectMember
@@ -887,7 +957,7 @@ paths:
       - name: id
         in: path
         required: true
-        schema: *id002
+        schema: *id005
         description: 项目或资源公开标识
       requestBody:
         required: true
@@ -951,12 +1021,12 @@ paths:
       - name: username
         in: path
         required: true
-        schema: *id001
+        schema: *id004
         description: 用户名
       - name: id
         in: path
         required: true
-        schema: *id002
+        schema: *id005
         description: 项目或资源公开标识
       requestBody:
         required: true
@@ -1024,12 +1094,12 @@ paths:
       - name: username
         in: path
         required: true
-        schema: *id001
+        schema: *id004
         description: 用户名
       - name: id
         in: path
         required: true
-        schema: *id002
+        schema: *id005
         description: 项目或资源公开标识
   /api/v1/projects/{id}/member-candidates:
     get:
@@ -1089,7 +1159,7 @@ paths:
       - name: id
         in: path
         required: true
-        schema: *id002
+        schema: *id005
         description: 项目或资源公开标识
   /api/v1/audit-logs:
     get:
@@ -1144,58 +1214,58 @@ paths:
               schema:
                 $ref: '#/components/schemas/AuditLogPage'
       parameters:
-      - &id005
+      - &id008
         name: page
         in: query
         required: false
         schema:
           type: integer
           default: 1
-      - &id006
+      - &id009
         name: page_size
         in: query
         required: false
         schema:
           type: integer
           default: 20
-      - &id007
+      - &id010
         name: action
         in: query
         required: false
-        schema: &id003
+        schema: &id006
           type: string
-      - &id008
+      - &id011
         name: actor_username
         in: query
         required: false
-        schema: *id003
-      - &id009
+        schema: *id006
+      - &id012
         name: resource_type
         in: query
         required: false
-        schema: *id003
-      - &id010
+        schema: *id006
+      - &id013
         name: resource_id
         in: query
         required: false
-        schema: *id003
-      - &id011
+        schema: *id006
+      - &id014
         name: snapshot_id
         in: query
         required: false
-        schema: *id002
-      - &id012
+        schema: *id005
+      - &id015
         name: start_at
         in: query
         required: false
-        schema: &id004
+        schema: &id007
           type: string
           format: date-time
-      - &id013
+      - &id016
         name: end_at
         in: query
         required: false
-        schema: *id004
+        schema: *id007
   /api/v1/projects/{id}/audit-logs:
     get:
       operationId: listProjectAuditLogs
@@ -1252,17 +1322,17 @@ paths:
       - name: id
         in: path
         required: true
-        schema: *id002
+        schema: *id005
         description: 项目或资源公开标识
-      - *id005
-      - *id006
-      - *id007
       - *id008
       - *id009
       - *id010
       - *id011
       - *id012
       - *id013
+      - *id014
+      - *id015
+      - *id016
   /api/v1/resources:
     get:
       operationId: listAllResources
@@ -1316,9 +1386,9 @@ paths:
               schema:
                 $ref: '#/components/schemas/ResourcePage'
       parameters:
-      - *id005
-      - *id006
-      - &id014
+      - *id008
+      - *id009
+      - &id017
         name: source_id
         in: query
         required: false
@@ -1327,58 +1397,58 @@ paths:
           format: int64
           minimum: 0
           x-go-type: uint64
-      - &id015
+      - &id018
         name: provider
         in: query
         required: false
-        schema: *id003
+        schema: *id006
         description: 以逗号分隔的可组合筛选值；去除空白并忽略空项
-      - &id016
+      - &id019
         name: resource_type
         in: query
         required: false
-        schema: *id003
+        schema: *id006
         description: 以逗号分隔的可组合筛选值；去除空白并忽略空项
-      - &id017
+      - &id020
         name: keyword
         in: query
         required: false
-        schema: *id003
-      - &id018
+        schema: *id006
+      - &id021
         name: engine
         in: query
         required: false
-        schema: *id003
-      - &id019
+        schema: *id006
+      - &id022
         name: network_type
         in: query
         required: false
-        schema: *id003
-      - &id020
+        schema: *id006
+      - &id023
         name: region
         in: query
         required: false
-        schema: *id003
-      - &id021
+        schema: *id006
+      - &id024
         name: cloud_status
         in: query
         required: false
-        schema: *id003
-      - &id022
+        schema: *id006
+      - &id025
         name: asset_status
         in: query
         required: false
-        schema: *id003
-      - &id023
+        schema: *id006
+      - &id026
         name: sort_by
         in: query
         required: false
-        schema: *id003
-      - &id024
+        schema: *id006
+      - &id027
         name: sort_order
         in: query
         required: false
-        schema: *id003
+        schema: *id006
   /api/v1/projects/{id}/resources:
     get:
       operationId: listProjectResources
@@ -1435,13 +1505,10 @@ paths:
       - name: id
         in: path
         required: true
-        schema: *id002
+        schema: *id005
         description: 项目或资源公开标识
-      - *id005
-      - *id006
-      - *id014
-      - *id015
-      - *id016
+      - *id008
+      - *id009
       - *id017
       - *id018
       - *id019
@@ -1450,6 +1517,9 @@ paths:
       - *id022
       - *id023
       - *id024
+      - *id025
+      - *id026
+      - *id027
   /api/v1/projects/{id}/sources:
     get:
       operationId: listSources
@@ -1509,12 +1579,12 @@ paths:
       - name: id
         in: path
         required: true
-        schema: *id002
+        schema: *id005
         description: 项目或资源公开标识
       - name: provider
         in: query
         required: false
-        schema: *id003
+        schema: *id006
     post:
       operationId: createSource
       summary: 验证云账号并创建接入源
@@ -1588,7 +1658,7 @@ paths:
       - name: id
         in: path
         required: true
-        schema: *id002
+        schema: *id005
         description: 项目或资源公开标识
       requestBody:
         required: true
@@ -1670,12 +1740,12 @@ paths:
       - name: sourceId
         in: path
         required: true
-        schema: *id002
+        schema: *id005
         description: 项目或资源公开标识
       - name: id
         in: path
         required: true
-        schema: *id002
+        schema: *id005
         description: 项目或资源公开标识
       requestBody:
         required: true
@@ -1752,12 +1822,12 @@ paths:
       - name: sourceId
         in: path
         required: true
-        schema: *id002
+        schema: *id005
         description: 项目或资源公开标识
       - name: id
         in: path
         required: true
-        schema: *id002
+        schema: *id005
         description: 项目或资源公开标识
   /api/v1/projects/{id}/sources/{sourceId}/sync:
     post:
@@ -1842,12 +1912,12 @@ paths:
       - name: sourceId
         in: path
         required: true
-        schema: *id002
+        schema: *id005
         description: 项目或资源公开标识
       - name: id
         in: path
         required: true
-        schema: *id002
+        schema: *id005
         description: 项目或资源公开标识
   /api/v1/projects/{id}/sources/{sourceId}/test:
     post:
@@ -1941,12 +2011,12 @@ paths:
       - name: sourceId
         in: path
         required: true
-        schema: *id002
+        schema: *id005
         description: 项目或资源公开标识
       - name: id
         in: path
         required: true
-        schema: *id002
+        schema: *id005
         description: 项目或资源公开标识
   /api/v1/projects/{id}/sync-jobs:
     get:
@@ -2004,10 +2074,10 @@ paths:
       - name: id
         in: path
         required: true
-        schema: *id002
+        schema: *id005
         description: 项目或资源公开标识
-      - *id005
-      - *id006
+      - *id008
+      - *id009
       - name: source_id
         in: query
         required: false
@@ -2019,7 +2089,7 @@ paths:
       - name: provider
         in: query
         required: false
-        schema: *id003
+        schema: *id006
   /api/v1/projects/{id}/sync-jobs/{jobId}/retry:
     post:
       operationId: retrySyncJob
@@ -2094,12 +2164,12 @@ paths:
       - name: jobId
         in: path
         required: true
-        schema: *id002
+        schema: *id005
         description: 项目或资源公开标识
       - name: id
         in: path
         required: true
-        schema: *id002
+        schema: *id005
         description: 项目或资源公开标识
 components:
   securitySchemes:
@@ -2111,8 +2181,34 @@ components:
   headers:
     RequestID:
       description: 服务端生成的可信请求关联标识
-      schema: *id003
+      schema: *id006
   schemas:
+    UpdateMyProfileRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        display_name:
+          type: string
+          minLength: 1
+          maxLength: 128
+          description: 去除首尾空白后不能为空，仅用于辅助展示
+      required:
+      - display_name
+    ChangeMyPasswordRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        current_password:
+          type: string
+          writeOnly: true
+          description: 本人当前密码，仅用于本次验证
+        new_password:
+          type: string
+          writeOnly: true
+          description: 按UTF-8字节计算，必须为12至72字节；成功后全部旧会话失效
+      required:
+      - current_password
+      - new_password
     Identifier:
       type: integer
       format: int64
@@ -2129,7 +2225,7 @@ components:
       properties:
         code:
           type: string
-          description: 稳定业务错误码。当前已定义：AUDIT_INVALID_REQUEST、AUDIT_SERVICE_UNAVAILABLE、AUTH_INVALID_CREDENTIALS、AUTH_INVALID_REQUEST、AUTH_SERVICE_UNAVAILABLE、AUTH_UNAUTHORIZED、CLOUD_ACCOUNT_CONFLICT、CLOUD_IDENTITY_UNAVAILABLE、INTERNAL_ERROR、PROJECT_DELETE_CONFLICT、PROJECT_DUPLICATE_CODE、PROJECT_FORBIDDEN、PROJECT_INVALID_INPUT、PROJECT_INVALID_REQUEST、PROJECT_MEMBER_EXISTS、PROJECT_MEMBER_INVALID_INPUT、PROJECT_MEMBER_NOT_FOUND、PROJECT_MEMBER_SELF_REMOVE、PROJECT_NOT_FOUND、PROJECT_OWNER_NOT_FOUND、PROJECT_SERVICE_UNAVAILABLE、RESOURCE_INVALID_QUERY、RESOURCE_INVALID_REQUEST、RESOURCE_SERVICE_UNAVAILABLE、SOURCE_AUTHENTICATION_FAILED、SOURCE_COLLECTOR_UNAVAILABLE、SOURCE_CONNECTION_FAILED、SOURCE_DELETE_CONFLICT、SOURCE_DELETE_FAILED、SOURCE_IDENTITY_MISMATCH、SOURCE_INVALID_INPUT、SOURCE_INVALID_REQUEST、SOURCE_NOT_FOUND、SOURCE_PERMISSION_DENIED、SOURCE_SERVICE_UNAVAILABLE、SOURCE_SYNC_FAILED、SOURCE_SYNC_RUNNING、SYNC_JOB_INVALID_REQUEST、SYNC_JOB_NOT_FOUND、SYNC_JOB_NOT_RETRYABLE、SYNC_JOB_SERVICE_UNAVAILABLE、USER_DUPLICATE_USERNAME、USER_FORBIDDEN、USER_INVALID_INPUT、USER_INVALID_REQUEST、USER_NOT_FOUND、USER_SELF_PROTECTED、USER_SERVICE_UNAVAILABLE。各操作只返回对应领域与认证恢复中间件允许的类别。
+          description: 稳定业务错误码。当前已定义：AUDIT_INVALID_REQUEST、AUDIT_SERVICE_UNAVAILABLE、AUTH_INVALID_CREDENTIALS、AUTH_INVALID_REQUEST、AUTH_SERVICE_UNAVAILABLE、AUTH_UNAUTHORIZED、CLOUD_ACCOUNT_CONFLICT、CLOUD_IDENTITY_UNAVAILABLE、INTERNAL_ERROR、PROJECT_DELETE_CONFLICT、PROJECT_DUPLICATE_CODE、PROJECT_FORBIDDEN、PROJECT_INVALID_INPUT、PROJECT_INVALID_REQUEST、PROJECT_MEMBER_EXISTS、PROJECT_MEMBER_INVALID_INPUT、PROJECT_MEMBER_NOT_FOUND、PROJECT_MEMBER_SELF_REMOVE、PROJECT_NOT_FOUND、PROJECT_OWNER_NOT_FOUND、PROJECT_SERVICE_UNAVAILABLE、RESOURCE_INVALID_QUERY、RESOURCE_INVALID_REQUEST、RESOURCE_SERVICE_UNAVAILABLE、SOURCE_AUTHENTICATION_FAILED、SOURCE_COLLECTOR_UNAVAILABLE、SOURCE_CONNECTION_FAILED、SOURCE_DELETE_CONFLICT、SOURCE_DELETE_FAILED、SOURCE_IDENTITY_MISMATCH、SOURCE_INVALID_INPUT、SOURCE_INVALID_REQUEST、SOURCE_NOT_FOUND、SOURCE_PERMISSION_DENIED、SOURCE_SERVICE_UNAVAILABLE、SOURCE_SYNC_FAILED、SOURCE_SYNC_RUNNING、SYNC_JOB_INVALID_REQUEST、SYNC_JOB_NOT_FOUND、SYNC_JOB_NOT_RETRYABLE、SYNC_JOB_SERVICE_UNAVAILABLE、USER_DUPLICATE_USERNAME、USER_FORBIDDEN、PERSONAL_CURRENT_PASSWORD_INVALID、USER_INVALID_INPUT、USER_INVALID_REQUEST、USER_NOT_FOUND、USER_SELF_PROTECTED、USER_SERVICE_UNAVAILABLE。各操作只返回对应领域与认证恢复中间件允许的类别。
         message:
           type: string
           description: 不含原始输入或内部错误的中文安全说明

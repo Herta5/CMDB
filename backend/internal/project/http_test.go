@@ -292,7 +292,7 @@ func newProjectHTTPServerWithDatabase(t *testing.T) (http.Handler, *gorm.DB) {
 		t.Fatalf("创建项目 HTTP 测试表失败：%v", err)
 	}
 	// 所有项目接口必须验证当前账户，测试管理员也必须是真实持久化的有效身份。
-	if err := db.Create(&identity.User{ID: 1, Username: "project_admin", DisplayName: "系统管理员", GlobalRole: identity.GlobalRoleSystemAdmin, Status: "active"}).Error; err != nil {
+	if err := db.Create(&identity.User{ID: 1, Username: "project_admin", PasswordHash: "test-hash", DisplayName: "系统管理员", GlobalRole: identity.GlobalRoleSystemAdmin, Status: "active"}).Error; err != nil {
 		t.Fatal("准备项目管理员失败")
 	}
 	return httpserver.New(httpserver.Dependencies{Database: db, JWTSecret: "project-http-test-key"}), db
@@ -318,9 +318,9 @@ func projectTestToken(t *testing.T, userID uint64, globalRole string) string {
 	return token
 }
 
-// projectTestSigningKey 将项目 HTTP 夹具绑定到数据库实际账号，保持真实认证中间件参与权限验收。
+// projectTestSigningKey 将项目 HTTP 夹具绑定到数据库实际账号；管理员与成员均使用固定虚构密码哈希。
 func projectTestSigningKey(userID uint64) []byte {
 	mac := hmac.New(sha256.New, []byte("project-http-test-key"))
-	mac.Write([]byte("cmdb.jwt.account.v1:" + strconv.FormatUint(userID, 10)))
+	mac.Write([]byte("cmdb.jwt.account.v2:" + strconv.FormatUint(userID, 10) + ":test-hash"))
 	return mac.Sum(nil)
 }

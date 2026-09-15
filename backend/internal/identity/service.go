@@ -134,7 +134,7 @@ func (s *Service) Authenticate(ctx context.Context, tokenString string) (*User, 
 		if err != nil || user == nil || user.ID == 0 || user.Status != "active" {
 			return nil, ErrInvalidSession
 		}
-		return s.accountSigningKey(user.ID), nil
+		return s.accountSigningKey(user), nil
 	}, jwt.WithValidMethods([]string{jwt.SigningMethodHS256.Alg()}), jwt.WithExpirationRequired(), jwt.WithTimeFunc(s.now))
 	if err != nil || token == nil || !token.Valid {
 		return nil, ErrInvalidSession
@@ -328,16 +328,18 @@ func (s *Service) UpdateUser(ctx context.Context, actorUsername, targetUsername 
 	user.Email = input.Email
 	user.GlobalRole = input.GlobalRole
 	user.Status = input.Status
+	var changedPasswordHash *string
 	if input.Password != "" {
 		hash, hashErr := HashPassword(input.Password)
 		if hashErr != nil {
 			return nil, hashErr
 		}
 		user.PasswordHash = hash
+		changedPasswordHash = &hash
 	}
 	changedFields := changedUserFields(previous, previousPermissions, input)
 	if err := s.withAuditTransaction(ctx, func(repository UserRepository, recorder audit.Recorder) error {
-		if err := repository.UpdateWithPermissions(ctx, user, input.ProjectPermissions); err != nil {
+		if err := repository.UpdateWithPermissions(ctx, user, input.ProjectPermissions, changedPasswordHash); err != nil {
 			return err
 		}
 		if err := recordAuditWith(ctx, recorder, audit.Entry{Action: audit.ActionUserUpdated, ResourceType: "user", ResourceID: previous.Username, Detail: map[string]any{
@@ -493,13 +495,13 @@ func (s *Service) sign(user *User) (string, error) {
 			ExpiresAt: jwt.NewNumericDate(s.now().Add(defaultTokenLifetime)),
 		},
 	}
-	return jwt.NewWithClaims(jwt.SigningMethodHS256, claims).SignedString(s.accountSigningKey(user.ID))
+	return jwt.NewWithClaims(jwt.SigningMethodHS256, claims).SignedString(s.accountSigningKey(user))
 }
 
-// accountSigningKey 将不可复用的数据库主键绑定到签名，用户名重建不会恢复旧账号令牌。
-// 域前缀隔离此派生用途；内部主键只参与服务端 HMAC，绝不进入 JWT 载荷或公开输出。
-func (s *Service) accountSigningKey(userID uint64) []byte {
+// accountSigningKey 将账号代际和当前密码哈希绑定到签名，重建账号或轮换密码都使旧会话失效。
+// 域前缀隔离派生用途；主键与哈希只参与服务端 HMAC，绝不进入 JWT 载荷或公开输出。
+func (s *Service) accountSigningKey(user *User) []byte {
 	mac := hmac.New(sha256.New, s.jwtSecret)
-	mac.Write([]byte("cmdb.jwt.account.v1:" + strconv.FormatUint(userID, 10)))
+	mac.Write([]byte("cmdb.jwt.account.v2:" + strconv.FormatUint(user.ID, 10) + ":" + user.PasswordHash))
 	return mac.Sum(nil)
 }

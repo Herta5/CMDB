@@ -7,6 +7,7 @@ import { readFileSync } from 'node:fs'
 const { get, post, put, remove, writeText } = vi.hoisted(() => ({ get: vi.fn(), post: vi.fn(), put: vi.fn(), remove: vi.fn(), writeText: vi.fn() }))
 vi.mock('@/utils/request', async () => { const { requestMock } = await import('@/test-utils/request-mock'); return { default: requestMock({ get, post, put, delete: remove }) } })
 import { useAuthStore } from '@/modules/auth/store'
+import { saveAuthSession } from '@/utils/auth-storage'
 import { useProjectStore } from './store'
 import ProjectListPage from './ProjectListPage.vue'
 import ProjectDetailPage from './ProjectDetailPage.vue'
@@ -97,6 +98,116 @@ async function mount(component: Component, path = '/projects') {
   await flush()
   return { root, app, router }
 }
+
+describe('个人设置', () => {
+  async function openSettings() {
+    const mounted = await mount(ConsoleLayout, '/dashboard')
+    const entry = all(mounted.root).find(n => n.type === 'button' && text(n) === '个人设置')
+    expect(entry).toBeDefined()
+    entry!.props.onClick()
+    await flush()
+    return mounted
+  }
+  const input = (root: Node, name: string, value: string) => all(root).find(n => n.props.name === name)!.props['onUpdate:modelValue'](value)
+  const submit = (root: Node, label: string) => all(root).find(n => n.type === 'form' && n.props['aria-label'] === label)!.props.onSubmit({ preventDefault() {} })
+
+  it.each(['user', 'system_admin'] as const)('角色 %s 可修改本人显示名称且无权限编辑字段', async globalRole => {
+    useAuthStore().acceptSession('测试会话', { username: 'operator', displayName: '旧名称', globalRole })
+    const { root, app } = await openSettings()
+    expect(text(root)).toContain('operator')
+    expect(all(root).some(n => n.props.name === 'global-role')).toBe(false)
+    input(root, 'personal-display-name', '  新名称  ')
+    put.mockResolvedValue({ username: 'operator', display_name: '新名称', global_role: globalRole, status: 'active', email: '', project_permissions: [] })
+    await submit(root, '显示名称设置')
+    await flush()
+    expect(put).toHaveBeenCalledWith('/me/profile', { display_name: '新名称' })
+    expect(useAuthStore().currentUser?.displayName).toBe('新名称')
+    expect(text(root)).toContain('显示名称已更新')
+    app.unmount()
+  })
+
+  it('密码确认及字节校验阻止提交，成功后清理密码并重新登录', async () => {
+    const { root, app, router } = await openSettings()
+    input(root, 'current-password', '虚构的当前密码')
+    input(root, 'new-password', '新'.repeat(25))
+    input(root, 'confirm-password', '新'.repeat(25))
+    await submit(root, '修改密码')
+    expect(put).not.toHaveBeenCalled()
+    input(root, 'new-password', '新'.repeat(24))
+    input(root, 'confirm-password', '确认错误')
+    await submit(root, '修改密码')
+    expect(put).not.toHaveBeenCalled()
+    input(root, 'confirm-password', '新'.repeat(24))
+    put.mockResolvedValue(undefined)
+    await submit(root, '修改密码')
+    await flush()
+    expect(put).toHaveBeenCalledWith('/me/password', { current_password: '虚构的当前密码', new_password: '新'.repeat(24) })
+    expect(useAuthStore().token).toBe('')
+    expect(router.currentRoute.value.path).toBe('/login')
+    expect(all(root).some(n => n.props.type === 'password')).toBe(false)
+    app.unmount()
+  })
+
+  it('关闭重开清空密码，失败提示不展示底层错误', async () => {
+    const { root, app } = await openSettings()
+    input(root, 'current-password', '旧的敏感输入')
+    all(root).find(n => n.props['aria-label'] === '关闭个人设置')!.props.onClick()
+    await flush()
+    all(root).find(n => n.type === 'button' && text(n) === '个人设置')!.props.onClick()
+    await flush()
+    expect(all(root).find(n => n.props.name === 'current-password')!.value).toBe('')
+    input(root, 'current-password', '错误的当前密码')
+    input(root, 'new-password', '虚构的新密码')
+    input(root, 'confirm-password', '虚构的新密码')
+    put.mockRejectedValue({ isAxiosError: true, response: { data: { code: 'PERSONAL_CURRENT_PASSWORD_INVALID', message: '底层敏感信息' } } })
+    await submit(root, '修改密码')
+    await flush()
+    expect(text(root)).not.toContain('底层敏感信息')
+    expect(text(root)).toContain('当前密码不正确，请重新输入')
+    expect(all(root).find(n => n.props.name === 'current-password')!.value).toBe('')
+    app.unmount()
+  })
+
+  it.each(['显示名称设置', '修改密码'])('%s 的旧响应不能修改或注销新会话', async label => {
+    const { root, app, router } = await openSettings()
+    input(root, 'personal-display-name', '旧请求名称')
+    input(root, 'current-password', '虚构的当前密码')
+    input(root, 'new-password', '虚构的新密码')
+    input(root, 'confirm-password', '虚构的新密码')
+    let finish!: (result: unknown) => void
+    put.mockReturnValue(new Promise(resolve => { finish = resolve }))
+    const pending = submit(root, label)
+    useAuthStore().acceptSession('新会话', { username: 'another', displayName: '新用户', globalRole: 'user' })
+    await flush()
+    finish({ username: 'operator', display_name: '旧请求名称', global_role: 'user' })
+    await pending
+    await flush()
+    expect(useAuthStore().token).toBe('新会话')
+    expect(useAuthStore().currentUser?.displayName).toBe('新用户')
+    expect(router.currentRoute.value.path).toBe('/dashboard')
+    expect(all(root).some(n => n.props.type === 'password')).toBe(false)
+    app.unmount()
+  })
+
+  it.each(['显示名称设置', '修改密码'])('%s 不覆盖尚未收到存储事件的其他标签页会话', async label => {
+    const { root, app, router } = await openSettings()
+    input(root, 'personal-display-name', '过时名称')
+    input(root, 'current-password', '虚构的当前密码')
+    input(root, 'new-password', '虚构的新密码')
+    input(root, 'confirm-password', '虚构的新密码')
+    let finish!: (result: unknown) => void
+    put.mockReturnValue(new Promise(resolve => { finish = resolve }))
+    const pending = submit(root, label)
+    saveAuthSession('其他标签页会话', { username: 'another', displayName: '另一账号', globalRole: 'user' })
+    finish({ username: 'operator', display_name: '过时名称', global_role: 'user' })
+    await pending
+    await flush()
+    expect(useAuthStore().currentUser?.username).toBe('another')
+    expect(useAuthStore().token).toBe('其他标签页会话')
+    expect(router.currentRoute.value.path).toBe('/dashboard')
+    app.unmount()
+  })
+})
 
 describe('项目控制台页面', () => {
   // 相同地址下换用户或更新令牌都必须重新授权，不能只依赖路由变化。

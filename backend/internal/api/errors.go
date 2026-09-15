@@ -37,6 +37,12 @@ func (e *errorResponse) VisitLoginResponse(w http.ResponseWriter) error { return
 // VisitGetMeResponse 输出该操作的统一安全失败。
 func (e *errorResponse) VisitGetMeResponse(w http.ResponseWriter) error { return e.write(w) }
 
+// VisitUpdateMyProfileResponse 输出本人资料更新的安全错误。
+func (e *errorResponse) VisitUpdateMyProfileResponse(w http.ResponseWriter) error { return e.write(w) }
+
+// VisitChangeMyPasswordResponse 输出本人密码更新的安全错误。
+func (e *errorResponse) VisitChangeMyPasswordResponse(w http.ResponseWriter) error { return e.write(w) }
+
 // VisitListProjectsResponse 输出该操作的统一安全失败。
 func (e *errorResponse) VisitListProjectsResponse(w http.ResponseWriter) error { return e.write(w) }
 

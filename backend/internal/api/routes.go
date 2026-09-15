@@ -13,6 +13,7 @@ import (
 // AuthorizationPolicies 显式声明每个契约操作的权限，新操作遗漏策略时拒绝启动。
 var AuthorizationPolicies = map[string]string{
 	"health": "public", "login": "public", "getMe": "authenticated", "listProjects": "authenticated",
+	"updateMyProfile": "authenticated", "changeMyPassword": "authenticated",
 	"listUsers": "system_admin_users", "createUser": "system_admin_users", "updateUser": "system_admin_users", "deleteUser": "system_admin_users", "updateUserStatus": "system_admin_users",
 	"createProject": "system_admin_project_create", "updateProject": "system_admin_project_write", "deleteProject": "system_admin_project_write",
 	"listGlobalAuditLogs": "system_admin_audit", "listAllResources": "system_admin_resources",

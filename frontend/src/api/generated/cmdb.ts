@@ -4,6 +4,7 @@
 import type {
   AddProjectMemberRequest,
   AuditLogPage,
+  ChangeMyPasswordRequest,
   ConnectionTestResult,
   CreateProjectRequest,
   CreateSourceRequest,
@@ -25,6 +26,7 @@ import type {
   Source,
   SyncJob,
   SyncJobPage,
+  UpdateMyProfileRequest,
   UpdateProjectMemberRoleRequest,
   UpdateProjectRequest,
   UpdateSourceRequest,
@@ -70,6 +72,34 @@ export const getMe = (
  options?: SecondParameter<typeof apiTransport<PublicUser>>,) => {
       return apiTransport<PublicUser>(
       {url: `/api/v1/me`, method: 'GET'
+    },
+      options);
+    }
+
+/**
+ * @summary 修改本人的显示名称
+ */
+export const updateMyProfile = (
+    updateMyProfileRequest: UpdateMyProfileRequest,
+ options?: SecondParameter<typeof apiTransport<PublicUser>>,) => {
+      return apiTransport<PublicUser>(
+      {url: `/api/v1/me/profile`, method: 'PUT',
+      headers: {'Content-Type': 'application/json', },
+      data: updateMyProfileRequest
+    },
+      options);
+    }
+
+/**
+ * @summary 校验当前密码并修改本人密码，使所有旧会话失效
+ */
+export const changeMyPassword = (
+    changeMyPasswordRequest: ChangeMyPasswordRequest,
+ options?: SecondParameter<typeof apiTransport<void>>,) => {
+      return apiTransport<void>(
+      {url: `/api/v1/me/password`, method: 'PUT',
+      headers: {'Content-Type': 'application/json', },
+      data: changeMyPasswordRequest
     },
       options);
     }
@@ -443,6 +473,8 @@ export const retrySyncJob = (
 export type HealthResult = NonNullable<Awaited<ReturnType<typeof health>>>
 export type LoginResult = NonNullable<Awaited<ReturnType<typeof login>>>
 export type GetMeResult = NonNullable<Awaited<ReturnType<typeof getMe>>>
+export type UpdateMyProfileResult = NonNullable<Awaited<ReturnType<typeof updateMyProfile>>>
+export type ChangeMyPasswordResult = NonNullable<Awaited<ReturnType<typeof changeMyPassword>>>
 export type ListUsersResult = NonNullable<Awaited<ReturnType<typeof listUsers>>>
 export type CreateUserResult = NonNullable<Awaited<ReturnType<typeof createUser>>>
 export type UpdateUserResult = NonNullable<Awaited<ReturnType<typeof updateUser>>>

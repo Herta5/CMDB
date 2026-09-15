@@ -83,7 +83,7 @@ func ensureJSONEOF(decoder *json.Decoder) error {
 
 var sensitiveKeys = map[string]struct{}{
 	"actorid": {}, "userid": {}, "targetuserid": {}, "owneruserid": {}, "previousowneruserid": {},
-	"password": {}, "passwordhash": {},
+	"password": {}, "passwordhash": {}, "currentpassword": {}, "newpassword": {}, "confirmpassword": {},
 	"token": {}, "sessiontoken": {}, "accesstoken": {}, "refreshtoken": {},
 	"apikey": {}, "accesskey": {}, "accesskeyid": {}, "accesskeysecret": {},
 	"secret": {}, "secretkey": {}, "secretaccesskey": {}, "clientsecret": {},

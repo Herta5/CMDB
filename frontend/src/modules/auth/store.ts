@@ -23,6 +23,14 @@ export const useAuthStore = defineStore('cmdb-auth', () => {
     replaceSession(saveAuthSession(nextToken, nextUser))
   }
 
+  /** 个人资料响应先同步跨标签页身份，尚未送达的存储事件也不能被旧请求覆盖。 */
+  function acceptPersonalProfile(requestSessionId: string | null, user: CurrentUser): boolean {
+    synchronizeStoredSession()
+    if (!requestSessionId || sessionId.value !== requestSessionId || currentUser.value?.username !== user.username) return false
+    acceptSession(token.value, user)
+    return true
+  }
+
   /** 提交登录信息；密码仅穿透到接口层，不保留在 Pinia 或本地存储中。 */
   async function signIn(username: string, password: string) {
     const session = await login(username, password)
@@ -70,5 +78,5 @@ export const useAuthStore = defineStore('cmdb-auth', () => {
   browser?.addEventListener?.('storage', synchronizeStorage)
   onScopeDispose(() => browser?.removeEventListener?.('storage', synchronizeStorage))
 
-  return { token, currentUser, sessionId, sessionVersion, acceptSession, signIn, refreshCurrentUser, logout, expireSession }
+  return { token, currentUser, sessionId, sessionVersion, acceptSession, acceptPersonalProfile, signIn, refreshCurrentUser, logout, expireSession }
 })
