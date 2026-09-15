@@ -541,11 +541,14 @@ func TestProjectSourceAPINeverReturnsCredentials(t *testing.T) {
 	path := "/api/v1/projects/" + strconv.FormatUint(created.ID, 10)
 	integrationRequest(t, server, admin, http.MethodPost, path+"/members", map[string]any{"username": "member_a", "role": "member"}, http.StatusCreated)
 	response := integrationRequest(t, server, admin, http.MethodPost, path+"/sources", map[string]any{"provider": "aws", "name": "AWS 生产账号", "region": "cn-north-1", "credential": map[string]any{"access_key_id": "example-id", "secret_access_key": "example-secret"}}, http.StatusCreated)
-	if strings.Contains(response.Body.String(), "123456789012") || strings.Contains(response.Body.String(), "identity_verified_at") || strings.Contains(response.Body.String(), "identity_status") {
-		t.Fatal("HTTP 新建来源不得公开账号、验证时间或不存在的身份状态")
+	if strings.Contains(response.Body.String(), "identity_verified_at") || strings.Contains(response.Body.String(), "identity_status") {
+		t.Fatal("HTTP 新建来源不得公开验证时间或不存在的身份状态")
 	}
 	if strings.Contains(response.Body.String(), "example") || strings.Contains(response.Body.String(), "encrypted") {
 		t.Fatal("接入源响应不得暴露凭证明文或密文字段")
+	}
+	if !strings.Contains(response.Body.String(), `"cloud_account_id":"111111111111"`) {
+		t.Fatal("新建来源必须返回云平台识别的完整账号 ID")
 	}
 	listed := integrationRequest(t, server, member, http.MethodGet, path+"/sources?provider=aws", nil, http.StatusOK)
 	if strings.Contains(listed.Body.String(), "example") || !strings.Contains(listed.Body.String(), "AWS 生产账号") {
@@ -573,6 +576,9 @@ func TestProjectSourceAPINeverReturnsCredentials(t *testing.T) {
 	updated := integrationRequest(t, server, admin, http.MethodPut, path+"/sources/"+strconv.FormatUint(source.ID, 10), map[string]any{"name": "AWS 更新账号", "region": "ap-east-1", "config": map[string]any{}, "enabled": true, "sync_interval_minutes": 120}, http.StatusOK)
 	if strings.Contains(updated.Body.String(), "example") || !strings.Contains(updated.Body.String(), "AWS 更新账号") {
 		t.Fatal("更新接入源必须保留凭证且响应不得暴露凭证")
+	}
+	if !strings.Contains(updated.Body.String(), `"cloud_account_id":"111111111111"`) {
+		t.Fatal("普通更新必须返回保持不变的云账号 ID")
 	}
 	jobs := integrationRequest(t, server, member, http.MethodGet, path+"/sync-jobs?source_id="+strconv.FormatUint(source.ID, 10), nil, http.StatusOK)
 	if !strings.Contains(jobs.Body.String(), `"trigger":"manual"`) {

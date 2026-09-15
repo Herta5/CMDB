@@ -46,8 +46,10 @@ func toMember(v *project.MemberRole) generated.ProjectMember {
 	}
 	return r
 }
+
+// toSource 只为已授权的接入源响应映射账号 ID，不返回凭证或身份验证时间。
 func toSource(v *resource.Source) generated.Source {
-	return generated.Source{Id: v.ID, ProjectId: v.ProjectID, Provider: generated.Provider(v.Provider), Name: v.Name, Region: v.Region, CredentialHint: v.CredentialHint, Config: v.Config, Enabled: v.Enabled, SyncIntervalMinutes: v.SyncIntervalMinutes, LastSyncAt: v.LastSyncAt, NextSyncAt: v.NextSyncAt, CreatedAt: v.CreatedAt, UpdatedAt: v.UpdatedAt}
+	return generated.Source{Id: v.ID, ProjectId: v.ProjectID, Provider: generated.Provider(v.Provider), Name: v.Name, CloudAccountId: v.CloudAccountID, Region: v.Region, CredentialHint: v.CredentialHint, Config: v.Config, Enabled: v.Enabled, SyncIntervalMinutes: v.SyncIntervalMinutes, LastSyncAt: v.LastSyncAt, NextSyncAt: v.NextSyncAt, CreatedAt: v.CreatedAt, UpdatedAt: v.UpdatedAt}
 }
 func toResource(v resource.Resource) generated.Resource {
 	var endpoints *[]generated.Endpoint

@@ -962,6 +962,24 @@ describe('项目控制台页面', () => {
     expect(get).toHaveBeenCalledWith('/resources', { params: expect.objectContaining({ resource_type: 'ecs,ec2', page: 1, page_size: 20 }) })
     app.unmount()
   })
+  it.each([['aws', '012345678901'], ['aliyun', '1234567890123456']])('接入源卡片只读展示 %s 完整云账号 ID，切换项目后清除', async (provider, accountId) => {
+    const projectStore = useProjectStore()
+    projectStore.projects = [2, 3].map(id => ({ id, code: `project-${id}`, name: `项目${id}`, description: '', status: 'enabled' as const, ownerUsername: null, currentRole: 'project_admin' as const, createdAt: '', updatedAt: '' }))
+    projectStore.listState = 'ready'
+    projectStore.selectProject(2)
+    get.mockImplementation((url: string) => Promise.resolve(url === '/projects/2/sources' ? [{ id: 1, project_id: 2, provider, name: '测试接入源', cloud_account_id: accountId, region: '测试区域', credential_hint: '已安全配置', config: {}, enabled: true, sync_interval_minutes: 60, last_sync_at: null, next_sync_at: null, created_at: '', updated_at: '' }] : url.endsWith('/sources') ? [] : { items: [], total: 0 }))
+    const { root, app } = await mount(CloudSyncManagementPage, '/cloud-sync')
+    try {
+      const card = all(root).find(n => n.type === 'article' && n.props.class === 'source-card')!
+      expect(text(card)).toContain(`云账号 ID：${accountId}`)
+      await all(card).find(n => n.type === 'button' && text(n) === '编辑')!.props.onClick()
+      await flush()
+      expect(all(root).filter(n => n.type === 'input').some(n => n.value === accountId || n.props.name === 'cloud-account-id')).toBe(false)
+      projectStore.selectProject(3)
+      await flush()
+      expect(text(root)).not.toContain(accountId)
+    } finally { app.unmount() }
+  })
   it('云同步管理移除平台页签并在创建时选择云平台', async () => {
     const projectStore = useProjectStore()
     projectStore.projects = [{ id: 2, code: 'platform', name: '平台项目', description: '', status: 'enabled', ownerUsername: null, currentRole: 'project_admin', createdAt: '', updatedAt: '' }]

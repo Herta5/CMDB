@@ -36,6 +36,9 @@ func Test公开契约完整且可解析(t *testing.T) {
 	for _, name := range []string{"PublicUser", "Project", "ProjectMember", "MemberCandidate", "Source", "Resource", "SyncJob", "AuditLog"} {
 		schema := spec.Components.Schemas[name].Value
 		for _, field := range []string{"user_id", "owner_user_id", "actor_id", "cloud_account_id", "identity_verified_at", "encrypted_credential", "raw_attributes", "password_hash"} {
+			if name == "Source" && field == "cloud_account_id" {
+				continue // 仅授权接入源响应允许展示云账号，其他 DTO 仍禁止扩散。
+			}
 			if _, exists := schema.Properties[field]; exists {
 				t.Errorf("%s 公开敏感字段 %s", name, field)
 			}
@@ -99,6 +102,25 @@ func Test内嵌契约保留原始操作标识(t *testing.T) {
 			if actual == nil || actual.OperationID != op.OperationID {
 				t.Errorf("内嵌操作标识发生变化：%s %s", method, path)
 			}
+		}
+	}
+}
+
+// Test云账号字段只读契约 防止生成类型误将身份标识作为客户端可写字段。
+func Test云账号字段只读契约(t *testing.T) {
+	loader := openapi3.NewLoader()
+	loader.IsExternalRefsAllowed = true
+	spec, err := loader.LoadFromFile("../../../../api/openapi.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	field := spec.Components.Schemas["Source"].Value.Properties["cloud_account_id"]
+	if field == nil || !field.Value.Type.Is("string") || !field.Value.ReadOnly {
+		t.Fatal("来源账号必须声明为只读字符串")
+	}
+	for _, name := range []string{"CreateSourceRequest", "UpdateSourceRequest"} {
+		if _, exists := spec.Components.Schemas[name].Value.Properties["cloud_account_id"]; exists {
+			t.Fatal("来源输入不得声明云账号 ID")
 		}
 	}
 }

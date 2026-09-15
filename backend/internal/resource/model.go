@@ -22,7 +22,7 @@ type Source struct {
 	ID        uint64 `gorm:"primaryKey" json:"id"`
 	ProjectID uint64 `gorm:"not null;index" json:"project_id"`
 	Provider  string `gorm:"size:32;not null;uniqueIndex:uk_resource_sources_provider_account" json:"provider"`
-	// 云账号与验证时间只在服务端参与归属判断，禁止进入公开响应。
+	// 领域模型不直接序列化身份字段；授权接入源 DTO 可只读返回云账号，验证时间仍仅供服务端使用。
 	CloudAccountID      string          `gorm:"size:128;not null;uniqueIndex:uk_resource_sources_provider_account" json:"-"`
 	IdentityVerifiedAt  *time.Time      `gorm:"not null" json:"-"`
 	Name                string          `gorm:"size:128;not null" json:"name"`

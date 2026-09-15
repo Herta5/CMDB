@@ -18,6 +18,7 @@ import (
 // TestSourceStrictJSONBoundary 验证拒绝模糊正文不会进入持久化或成功审计。
 func TestSourceStrictJSONBoundary(t *testing.T) {
 	for _, tc := range []struct{ name, body string }{
+		{"创建不得指定云账号 ID", `{"provider":"aws","name":"虚构来源","credential":{"access_key_id":"identity-ok","secret_access_key":"private-contract-value"},"cloud_account_id":"012345678901"}`},
 		{"未知外层字段", `{"provider":"aws","name":"虚构来源","region":"ap-east-1","credential":{"access_key_id":"identity-ok","secret_access_key":"private-contract-value"},"unexpected":"private-contract-value"}`},
 		{"尾随对象", `{"provider":"aws","name":"虚构来源","region":"ap-east-1","credential":{"access_key_id":"identity-ok","secret_access_key":"private-contract-value"}} {}`},
 		{"重复凭证字段", `{"provider":"aws","name":"虚构来源","region":"ap-east-1","credential":{"access_key_id":"identity-ok","secret_access_key":"private-contract-value","secret_access_key":"other"}}`},
@@ -133,4 +134,73 @@ func TestSyncJobPaginationContract(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestSourceAccountIDVisibility 验证账号 ID 按原字符串返回且受当前项目成员关系保护。
+func TestSourceAccountIDVisibility(t *testing.T) {
+	server, password, db := integrationServerWithDatabase(t)
+	admin := loginUser(t, server, "operator", password)
+	member := loginUser(t, server, "member_a", password)
+	parent := project.Project{Code: "account-card", Name: "账号卡片项目", Status: "enabled"}
+	if err := db.Create(&parent).Error; err != nil {
+		t.Fatal("准备项目失败")
+	}
+	aws := integrationIdentitySource(t, db, parent.ID, "012345678901", "identity-ok")
+	aliyun := integrationIdentitySource(t, db, parent.ID, "1234567890123456", "identity-ok")
+	if err := db.Model(&aliyun).Update("provider", "aliyun").Error; err != nil {
+		t.Fatal("准备阿里云来源失败")
+	}
+	path := fmt.Sprintf("/api/v1/projects/%d", parent.ID)
+	for _, token := range []string{"", member} {
+		status := http.StatusNotFound
+		if token == "" {
+			status = http.StatusUnauthorized
+		}
+		response := integrationRequest(t, server, token, http.MethodGet, path+"/sources", nil, status)
+		if strings.Contains(response.Body.String(), "cloud_account_id") || strings.Contains(response.Body.String(), aws.CloudAccountID) {
+			t.Fatal("无权访问不能获得云账号 ID")
+		}
+	}
+	integrationRequest(t, server, admin, http.MethodPost, path+"/members", map[string]any{"username": "member_a", "role": "member"}, http.StatusCreated)
+	for _, role := range []string{"member", "project_admin"} {
+		if role == "project_admin" {
+			integrationRequest(t, server, admin, http.MethodPut, path+"/members/member_a", map[string]any{"role": role}, http.StatusOK)
+		}
+		for _, token := range []string{admin, member} {
+			response := integrationRequest(t, server, token, http.MethodGet, path+"/sources", nil, http.StatusOK)
+			var sources []struct {
+				Provider       string `json:"provider"`
+				CloudAccountID string `json:"cloud_account_id"`
+			}
+			decodeIntegration(t, response, &sources)
+			accounts := map[string]string{}
+			for _, source := range sources {
+				accounts[source.Provider] = source.CloudAccountID
+			}
+			if len(sources) != 2 || accounts["aws"] != "012345678901" || accounts["aliyun"] != "1234567890123456" {
+				t.Fatal("授权列表必须完整保留两平台账号 ID，不能截断或丢失前导零")
+			}
+			for _, forbidden := range []string{"identity_verified_at", "encrypted_credential", aws.EncryptedCredential, "identity-test-secret"} {
+				if strings.Contains(response.Body.String(), forbidden) {
+					t.Fatal("账号展示不得扩大凭证或验证时间输出范围")
+				}
+			}
+		}
+	}
+
+	rejected := integrationRequest(t, server, admin, http.MethodPut, fmt.Sprintf("%s/sources/%d", path, aws.ID), map[string]any{"name": "拒绝修改", "cloud_account_id": "999999999999"}, http.StatusBadRequest)
+	assertIdentityVerificationError(t, rejected.Body.String(), "SOURCE_INVALID_REQUEST")
+	var unchanged cloudresource.Source
+	if err := db.First(&unchanged, aws.ID).Error; err != nil {
+		t.Fatal("读取拒绝后的来源失败")
+	}
+	if unchanged.CloudAccountID != "012345678901" || unchanged.Name != aws.Name || unchanged.EncryptedCredential != aws.EncryptedCredential {
+		t.Fatal("手工指定云账号 ID 不得修改来源或凭证")
+	}
+	var updateAudits int64
+	if err := db.Model(&audit.Log{}).Where("action = ?", audit.ActionSourceUpdated).Count(&updateAudits).Error; err != nil || updateAudits != 0 {
+		t.Fatal("拒绝手工指定云账号 ID 不得产生成功审计")
+	}
+	integrationRequest(t, server, admin, http.MethodDelete, path+"/members/member_a", nil, http.StatusNoContent)
+	integrationRequest(t, server, member, http.MethodGet, path+"/sources", nil, http.StatusNotFound)
 }

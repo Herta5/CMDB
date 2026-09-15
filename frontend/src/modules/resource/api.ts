@@ -4,7 +4,7 @@ import type { Source as SourceDTO, Resource as ResourceDTO, SyncJob as JobDTO, E
 export type { SourceCredential } from '@/api/generated/models'
 
 export type Provider = 'aliyun' | 'aws'
-export interface Source { id: number; projectId: number; provider: Provider; name: string; region: string; credentialHint: string; enabled: boolean; syncIntervalMinutes: number; lastSyncAt?: string; nextSyncAt?: string }
+export interface Source { id: number; projectId: number; provider: Provider; name: string; cloudAccountId: string; region: string; credentialHint: string; enabled: boolean; syncIntervalMinutes: number; lastSyncAt?: string; nextSyncAt?: string }
 export interface Endpoint { id?: number; kind: EndpointDTO['kind']; address: string; port: number; protocol: string; resolvedIps: string[] }
 export interface ServerDisk { id: string; kind: 'system' | 'data'; type: string; sizeGiB: number; device: string; encrypted: boolean }
 export interface CloudResource { id: number; projectName?: string; sourceId: number; sourceName: string; provider: Provider; resourceType: string; externalId: string; name: string; region: string; zone: string; cloudStatus: string; assetStatus: 'active' | 'lost'; engine?: string; engineVersion?: string; networkType?: string; instanceType?: string; vcpu?: number | null; memory?: number | null; storageType?: string; storageSizeGiB?: number | null; endpoints: Endpoint[]; disks: ServerDisk[]; firstSeenAt: string; lastSeenAt: string; missingSince?: string }
@@ -15,8 +15,8 @@ export interface SourceInput { provider: Provider; name: string; region: string;
 /** 创建必须提供完整凭证，更新则允许省略以保留服务端原密文。 */
 export type CreateSourceInput = SourceInput & { credential: SourceCredential }
 
-/** 将后端字段转换为页面稳定模型，动态解析 IP 仍保留在域名端点下。 */
-const toSource = (v: SourceDTO): Source => ({ id: v.id, projectId: v.project_id, provider: v.provider, name: v.name, region: v.region ?? '', credentialHint: v.credential_hint ?? '', enabled: v.enabled, syncIntervalMinutes: v.sync_interval_minutes, lastSyncAt: v.last_sync_at ?? undefined, nextSyncAt: v.next_sync_at ?? undefined })
+/** 账号 ID 保留原始字符串，避免丢失前导零；凭证和验证时间不进入页面模型。 */
+const toSource = (v: SourceDTO): Source => ({ id: v.id, projectId: v.project_id, provider: v.provider, name: v.name, cloudAccountId: v.cloud_account_id, region: v.region ?? '', credentialHint: v.credential_hint ?? '', enabled: v.enabled, syncIntervalMinutes: v.sync_interval_minutes, lastSyncAt: v.last_sync_at ?? undefined, nextSyncAt: v.next_sync_at ?? undefined })
 const toResource = (v: ResourceDTO): CloudResource => ({ id: v.id, projectName: v.project_name, sourceId: v.source_id, sourceName: v.source_name ?? '', provider: v.provider, resourceType: v.resource_type, externalId: v.external_id, name: v.name, region: v.region, zone: v.zone, cloudStatus: v.cloud_status, assetStatus: v.asset_status, engine: v.engine, engineVersion: v.engine_version, networkType: v.network_type, instanceType: v.instance_type, vcpu: v.vcpu, memory: v.memory, storageType: v.storage_type, storageSizeGiB: v.storage_size_gib, firstSeenAt: v.first_seen_at, lastSeenAt: v.last_seen_at, missingSince: v.missing_since ?? undefined, endpoints: (v.endpoints ?? []).map(e => ({ kind: e.kind, address: e.address, port: e.port, protocol: e.protocol, resolvedIps: e.resolved_ips ?? [] })), disks: (v.disks ?? []).map(disk => ({ id: disk.id, kind: disk.kind, type: disk.type, sizeGiB: disk.size_gib, device: disk.device, encrypted: disk.encrypted })) })
 const toJob = (v: JobDTO): SyncJob => ({ id: v.id, sourceId: v.source_id, status: v.status, trigger: v.trigger, statistics: v.statistics ?? {}, errorSummary: v.error_summary ?? '', startedAt: v.started_at, finishedAt: v.finished_at ?? undefined })
 

@@ -2584,6 +2584,11 @@ components:
           type: string
         region:
           type: string
+        cloud_account_id:
+          type: string
+          readOnly: true
+          x-go-type-skip-optional-pointer: true
+          description: 经云平台确认的完整 AWS Account ID 或阿里云账号 UID，仅供有接入源查看权限的用户只读核对；保留前导零。
         credential_hint:
           type: string
           description: 仅表示已安全配置，不含凭证片段
@@ -2615,6 +2620,7 @@ components:
       - provider
       - name
       - region
+      - cloud_account_id
       - credential_hint
       - config
       - enabled

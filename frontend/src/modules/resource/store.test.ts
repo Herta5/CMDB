@@ -223,7 +223,7 @@ describe('云资源状态层', () => {
   it('手工同步完成后刷新资源和任务', async () => {
     get.mockResolvedValue({ items: [], total: 0 }); post.mockResolvedValue({ id: 5, status: 'success' })
     const store = useResourceStore()
-    store.sources = [{ id: 4, projectId: 7, provider: 'aws', name: '账号', region: '', enabled: true, credentialHint: '已配置', syncIntervalMinutes: 60 }]
+    store.sources = [{ id: 4, projectId: 7, provider: 'aws', name: '账号', cloudAccountId: '012345678901', region: '', enabled: true, credentialHint: '已配置', syncIntervalMinutes: 60 }]
     await store.sync(7, 'aws', 4)
     expect(post).toHaveBeenCalledWith('/projects/7/sources/4/sync')
     expect(store.syncingSourceId).toBeNull()
@@ -234,7 +234,7 @@ describe('云资源状态层', () => {
     get.mockImplementation((url: string) => Promise.resolve(url.includes('/sources') ? [{ id: 4, project_id: 7, provider: 'aws', name: '账号', enabled: true, sync_interval_minutes: 60 }] : { items: [], total: 0 }))
     post.mockResolvedValue({ reachable_types: ['ec2'], failed_types: [] }); put.mockResolvedValue({}); remove.mockResolvedValue(undefined)
     const store = useResourceStore()
-    store.sources = [{ id: 4, projectId: 7, provider: 'aws', name: '账号', region: '', enabled: true, credentialHint: '已配置', syncIntervalMinutes: 60 }]
+    store.sources = [{ id: 4, projectId: 7, provider: 'aws', name: '账号', cloudAccountId: '012345678901', region: '', enabled: true, credentialHint: '已配置', syncIntervalMinutes: 60 }]
     await store.testConnection(7, 4)
     expect(store.connectionMessage).toContain('EC2')
     await store.toggle(7, 'aws', store.sources[0])

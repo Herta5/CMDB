@@ -29,13 +29,16 @@ describe('生成客户端与显示模型映射', () => {
     expect(await listProjects()).toEqual([{ id: 1, code: 'test', name: '测试项目', description: '', ownerUsername: null, status: 'enabled', createdAt: '2026-09-15', updatedAt: '2026-09-15', currentRole: 'member' }])
   })
 
-  it('接入源普通更新不发送凭证和平台，响应不携带账号身份', async () => {
+  it('接入源普通更新不发送凭证和平台，完整账号 ID 只用于读取', async () => {
     request.defaults.adapter = async config => {
       expect(config.url).toBe('/projects/1/sources/2')
       expect(JSON.parse(config.data)).toEqual({ name: '接入源', region: '', config: {}, enabled: true, sync_interval_minutes: 60 })
-      return { config, status: 200, statusText: '成功', headers: {}, data: { id: 2, project_id: 1, provider: 'aws', name: '接入源', region: '', credential_hint: '已安全配置', enabled: true, sync_interval_minutes: 60, last_sync_at: null, next_sync_at: null } }
+      return { config, status: 200, statusText: '成功', headers: {}, data: { id: 2, project_id: 1, provider: 'aws', name: '接入源', cloud_account_id: '012345678901', identity_verified_at: '不可进入页面状态', encrypted_credential: '不可进入页面状态', region: '', credential_hint: '已安全配置', enabled: true, sync_interval_minutes: 60, last_sync_at: null, next_sync_at: null } }
     }
     const source = await updateSource(1, 2, { provider: 'aws', name: '接入源', region: '', config: {}, enabled: true, syncIntervalMinutes: 60 })
+    expect(source).toHaveProperty('cloudAccountId', '012345678901')
+    expect(source).not.toHaveProperty('identity_verified_at')
+    expect(source).not.toHaveProperty('encrypted_credential')
     expect(source.lastSyncAt).toBeUndefined()
     expect(source.nextSyncAt).toBeUndefined()
     expect(source).not.toHaveProperty('credential')
