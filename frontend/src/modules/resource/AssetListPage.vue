@@ -208,13 +208,13 @@ const activeFilters = computed(() => [
 
 <template>
   <section>
-    <header class="page-heading"><div><p class="page-eyebrow">资产列表</p><h1>{{ category.title }}</h1></div><button class="console-button" :disabled="!hasAssetScope || loading" @click="loadAssets">刷新列表</button></header>
+    <header class="page-heading"><div><p class="page-eyebrow">资产列表</p><h1>{{ category.title }}</h1></div><button v-if="props.category !== 'server'" class="console-button" :disabled="!hasAssetScope || loading" @click="loadAssets">刷新列表</button></header>
     <div v-if="!hasAssetScope" class="console-panel page-state"><span class="state-symbol">▦</span><h3>请先选择项目</h3><p>资产必须在明确的项目边界内查看。</p></div>
     <template v-else-if="props.category === 'server'">
       <section class="console-panel server-list-panel">
         <div class="panel-heading"><h2>服务器列表</h2><span class="muted">共 {{ total }} 项</span></div>
         <div class="server-search-panel">
-          <form class="server-search" @submit.prevent="search"><input v-model="keywordInput" aria-label="搜索服务器" placeholder="搜索资源名称、实例 ID 或 IP 地址"><button class="console-button is-primary" type="submit">搜索</button><button class="console-button" type="button" :aria-expanded="filtersOpen" @click="filtersOpen = !filtersOpen">筛选<span v-if="activeFilterCount"> · {{ activeFilterCount }}</span></button><button class="console-button" type="button" :aria-expanded="columnsOpen" @click="columnsOpen = !columnsOpen">列设置</button></form>
+          <form class="server-search" @submit.prevent="search"><input v-model="keywordInput" aria-label="搜索服务器" placeholder="搜索资源名称、实例 ID 或 IP 地址"><button class="console-button is-primary" type="submit">搜索</button><button class="console-button" type="button" :aria-expanded="filtersOpen" @click="filtersOpen = !filtersOpen">筛选<span v-if="activeFilterCount"> · {{ activeFilterCount }}</span></button><button class="console-button" type="button" :aria-expanded="columnsOpen" @click="columnsOpen = !columnsOpen">列设置</button><button class="console-button" type="button" :disabled="loading" @click="loadAssets">刷新列表</button></form>
           <div v-if="activeFilters.length" class="active-filters"><span v-for="filter in activeFilters" :key="filter.key">{{ filter.name }}：{{ filter.value }}<button type="button" :aria-label="`移除${filter.name}筛选`" @click="removeFilter(filter.key)">×</button></span><button class="button-link" type="button" @click="clearFilters">全部清除</button></div>
           <div v-if="filtersOpen" class="server-filter-grid">
             <label>云平台<select v-model="draftProvider"><option value="">全部</option><option value="aliyun">阿里云</option><option value="aws">AWS</option></select></label>

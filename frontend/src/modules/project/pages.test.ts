@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { createRenderer, h, nextTick, type Component } from 'vue'
 import { createPinia, setActivePinia } from 'pinia'
 import { createMemoryHistory, createRouter } from 'vue-router'
+import { readFileSync } from 'node:fs'
 const { get, post, put, remove, writeText } = vi.hoisted(() => ({ get: vi.fn(), post: vi.fn(), put: vi.fn(), remove: vi.fn(), writeText: vi.fn() }))
 vi.mock('@/utils/request', () => ({ default: { get, post, put, delete: remove } }))
 import { useAuthStore } from '@/modules/auth/store'
@@ -16,6 +17,8 @@ import CloudPlatformPage from '@/modules/resource/CloudPlatformPage.vue'
 import CloudSyncManagementPage from '@/modules/resource/CloudSyncManagementPage.vue'
 import HomePage from '@/modules/home/HomePage.vue'
 import { useResourceStore } from '@/modules/resource/store'
+
+const baseStyles = readFileSync('src/styles/base.css', 'utf8')
 
 // 节点模型只承担宿主操作，页面逻辑、路由和项目状态均执行生产代码。
 type Node = { type: string; text: string; props: Record<string, any>; children: Node[]; parent: Node | null; value?: unknown; selected?: boolean; readonly options: Node[]; addEventListener: () => void; removeEventListener: () => void; getRootNode: () => Node }
@@ -345,6 +348,30 @@ describe('项目控制台页面', () => {
     expect(text(root)).not.toContain('搜索范围：资源名称、实例 ID、内网 IP、公网 IP')
     expect(text(root)).not.toContain('类型：ECS + EC2')
     app.unmount()
+  })
+  it('服务器刷新列表位于搜索操作行且不再占用页面标题区', async () => {
+    const projectStore = useProjectStore()
+    projectStore.projects = [{ id: 2, code: 'platform', name: '平台项目', description: '', status: 'enabled', ownerUsername: null, createdAt: '', updatedAt: '' }]
+    projectStore.selectProject(2)
+    get.mockResolvedValue({ items: [], total: 0 })
+
+    const component = { render: () => h(AssetListPage, { category: 'server' }) }
+    const { root, app } = await mount(component, '/assets/servers')
+    const heading = all(root).find(n => n.type === 'header' && String(n.props.class).includes('page-heading'))!
+    const searchForm = all(root).find(n => n.type === 'form' && String(n.props.class).includes('server-search'))!
+    const refresh = all(root).find(n => n.type === 'button' && text(n) === '刷新列表')!
+
+    expect(all(searchForm)).toContain(refresh)
+    expect(all(heading)).not.toContain(refresh)
+    expect(all(searchForm).filter(n => n.type === 'button').map(text)).toEqual(['搜索', '筛选', '列设置', '刷新列表'])
+    app.unmount()
+  })
+  it('服务器列表 IP 保持分行且不覆盖表格默认字体', () => {
+    expect(baseStyles).toContain('.ip-line')
+    const ipRule = baseStyles.match(/\.ip-line\s*\{([^}]*)\}/)?.[1] ?? ''
+
+    expect(ipRule).toMatch(/display:\s*block/)
+    expect(ipRule).not.toMatch(/font-family|font-size/)
   })
   it('服务器列表固定按资产名称升序请求且不提供排序交互', async () => {
     const projectStore = useProjectStore()
