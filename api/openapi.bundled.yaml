@@ -1,0 +1,3079 @@
+# 自动生成；请修改 openapi.yaml 与 schemas/ 后运行生成命令。
+openapi: 3.0.3
+info:
+  title: CMDB 公开 HTTP 契约
+  version: 1.0.0
+  description: 公开传输结构唯一来源；授权、事务与生命周期业务语义见 docs/project。所有操作的错误均为安全中文，凭证仅用于请求。
+security:
+- bearerAuth: []
+paths:
+  /health:
+    get:
+      operationId: health
+      summary: 检查进程存活
+      tags:
+      - CMDB
+      responses:
+        '500':
+          description: 服务暂不可用
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestID'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '200':
+          description: 操作成功
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestID'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Health'
+      parameters: []
+      security: []
+  /api/v1/auth/login:
+    post:
+      operationId: login
+      summary: 使用用户名和密码登录
+      tags:
+      - 身份
+      responses:
+        '400':
+          description: 请求格式或业务参数无效
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestID'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: 身份认证失败或失效
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestID'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: 服务暂不可用
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestID'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '200':
+          description: 操作成功
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestID'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LoginResponse'
+      parameters: []
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LoginRequest'
+  /api/v1/me:
+    get:
+      operationId: getMe
+      summary: 查询当前公开身份
+      tags:
+      - 身份
+      responses:
+        '401':
+          description: 身份认证失败或失效
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestID'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: 服务暂不可用
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestID'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '200':
+          description: 操作成功
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestID'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PublicUser'
+      parameters: []
+  /api/v1/users:
+    get:
+      operationId: listUsers
+      summary: 查询公开用户列表
+      tags:
+      - 身份
+      responses:
+        '401':
+          description: 身份认证失败或失效
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestID'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: 当前身份无权执行操作或云权限不足
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestID'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: 服务暂不可用
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestID'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '200':
+          description: 操作成功
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestID'
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/PublicUser'
+      parameters: []
+    post:
+      operationId: createUser
+      summary: 创建用户
+      tags:
+      - 身份
+      responses:
+        '400':
+          description: 请求格式或业务参数无效
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestID'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: 身份认证失败或失效
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestID'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: 当前身份无权执行操作或云权限不足
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestID'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: 业务冲突或状态不允许操作
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestID'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: 服务暂不可用
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestID'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '201':
+          description: 操作成功
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestID'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PublicUser'
+      parameters: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateUserRequest'
+  /api/v1/users/{username}:
+    put:
+      operationId: updateUser
+      summary: 更新用户资料与授权
+      tags:
+      - 身份
+      responses:
+        '400':
+          description: 请求格式或业务参数无效
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestID'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: 身份认证失败或失效
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestID'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: 当前身份无权执行操作或云权限不足
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestID'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: 对象不存在或无权访问该项目
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestID'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: 业务冲突或状态不允许操作
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestID'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: 服务暂不可用
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestID'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '200':
+          description: 操作成功
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestID'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PublicUser'
+      parameters:
+      - name: username
+        in: path
+        required: true
+        schema: &id001
+          type: string
+          minLength: 1
+          maxLength: 64
+          pattern: ^[A-Za-z0-9_]+$
+        description: 用户名
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateUserRequest'
+    delete:
+      operationId: deleteUser
+      summary: 删除其他用户
+      tags:
+      - 身份
+      responses:
+        '400':
+          description: 请求格式或业务参数无效
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestID'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: 身份认证失败或失效
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestID'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: 当前身份无权执行操作或云权限不足
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestID'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: 对象不存在或无权访问该项目
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestID'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: 业务冲突或状态不允许操作
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestID'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: 服务暂不可用
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestID'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '204':
+          description: 删除成功，无响应正文
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestID'
+      parameters:
+      - name: username
+        in: path
+        required: true
+        schema: *id001
+        description: 用户名
+  /api/v1/users/{username}/status:
+    put:
+      operationId: updateUserStatus
+      summary: 启用或停用用户
+      tags:
+      - 身份
+      responses:
+        '400':
+          description: 请求格式或业务参数无效
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestID'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: 身份认证失败或失效
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestID'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: 当前身份无权执行操作或云权限不足
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestID'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: 对象不存在或无权访问该项目
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestID'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: 业务冲突或状态不允许操作
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestID'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: 服务暂不可用
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestID'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '200':
+          description: 操作成功
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestID'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PublicUser'
+      parameters:
+      - name: username
+        in: path
+        required: true
+        schema: *id001
+        description: 用户名
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateUserStatusRequest'
+  /api/v1/projects:
+    get:
+      operationId: listProjects
+      summary: 查询可见业务项目
+      tags:
+      - CMDB
+      responses:
+        '401':
+          description: 身份认证失败或失效
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestID'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: 服务暂不可用
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestID'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '200':
+          description: 操作成功
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestID'
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Project'
+      parameters: []
+    post:
+      operationId: createProject
+      summary: 创建业务项目
+      tags:
+      - CMDB
+      responses:
+        '400':
+          description: 请求格式或业务参数无效
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestID'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: 身份认证失败或失效
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestID'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: 当前身份无权执行操作或云权限不足
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestID'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: 业务冲突或状态不允许操作
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestID'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: 服务暂不可用
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestID'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '201':
+          description: 操作成功
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestID'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Project'
+      parameters: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateProjectRequest'
+  /api/v1/projects/{id}:
+    get:
+      operationId: getProject
+      summary: 查询业务项目
+      tags:
+      - CMDB
+      responses:
+        '400':
+          description: 请求格式或业务参数无效
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestID'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: 身份认证失败或失效
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestID'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: 对象不存在或无权访问该项目
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestID'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: 服务暂不可用
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestID'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '200':
+          description: 操作成功
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestID'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Project'
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema: &id002
+          type: integer
+          format: int64
+          minimum: 1
+          x-go-type: uint64
+        description: 项目或资源公开标识
+    put:
+      operationId: updateProject
+      summary: 更新业务项目
+      tags:
+      - CMDB
+      responses:
+        '400':
+          description: 请求格式或业务参数无效
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestID'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: 身份认证失败或失效
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestID'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: 对象不存在或无权访问该项目
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestID'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: 服务暂不可用
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestID'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '200':
+          description: 操作成功
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestID'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Project'
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema: *id002
+        description: 项目或资源公开标识
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateProjectRequest'
+    delete:
+      operationId: deleteProject
+      summary: 删除无依赖业务项目
+      tags:
+      - CMDB
+      responses:
+        '400':
+          description: 请求格式或业务参数无效
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestID'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: 身份认证失败或失效
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestID'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: 对象不存在或无权访问该项目
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestID'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: 业务冲突或状态不允许操作
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestID'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: 服务暂不可用
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestID'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '204':
+          description: 删除成功，无响应正文
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestID'
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema: *id002
+        description: 项目或资源公开标识
+  /api/v1/projects/{id}/members:
+    get:
+      operationId: listProjectMembers
+      summary: 查询项目成员
+      tags:
+      - CMDB
+      responses:
+        '400':
+          description: 请求格式或业务参数无效
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestID'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: 身份认证失败或失效
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestID'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: 对象不存在或无权访问该项目
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestID'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: 服务暂不可用
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestID'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '200':
+          description: 操作成功
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestID'
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/ProjectMember'
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema: *id002
+        description: 项目或资源公开标识
+    post:
+      operationId: addProjectMember
+      summary: 添加项目成员
+      tags:
+      - CMDB
+      responses:
+        '400':
+          description: 请求格式或业务参数无效
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestID'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: 身份认证失败或失效
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestID'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: 对象不存在或无权访问该项目
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestID'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: 业务冲突或状态不允许操作
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestID'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: 服务暂不可用
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestID'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '201':
+          description: 操作成功
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestID'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProjectMember'
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema: *id002
+        description: 项目或资源公开标识
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AddProjectMemberRequest'
+  /api/v1/projects/{id}/members/{username}:
+    put:
+      operationId: updateProjectMemberRole
+      summary: 修改项目成员角色
+      tags:
+      - CMDB
+      responses:
+        '400':
+          description: 请求格式或业务参数无效
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestID'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: 身份认证失败或失效
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestID'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: 对象不存在或无权访问该项目
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestID'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: 服务暂不可用
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestID'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '200':
+          description: 操作成功
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestID'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProjectMember'
+      parameters:
+      - name: username
+        in: path
+        required: true
+        schema: *id001
+        description: 用户名
+      - name: id
+        in: path
+        required: true
+        schema: *id002
+        description: 项目或资源公开标识
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateProjectMemberRoleRequest'
+    delete:
+      operationId: removeProjectMember
+      summary: 移除项目成员
+      tags:
+      - CMDB
+      responses:
+        '400':
+          description: 请求格式或业务参数无效
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestID'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: 身份认证失败或失效
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestID'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: 对象不存在或无权访问该项目
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestID'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: 业务冲突或状态不允许操作
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestID'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: 服务暂不可用
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestID'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '204':
+          description: 删除成功，无响应正文
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestID'
+      parameters:
+      - name: username
+        in: path
+        required: true
+        schema: *id001
+        description: 用户名
+      - name: id
+        in: path
+        required: true
+        schema: *id002
+        description: 项目或资源公开标识
+  /api/v1/projects/{id}/member-candidates:
+    get:
+      operationId: listProjectMemberCandidates
+      summary: 查询可添加成员最小资料
+      tags:
+      - CMDB
+      responses:
+        '400':
+          description: 请求格式或业务参数无效
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestID'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: 身份认证失败或失效
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestID'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: 对象不存在或无权访问该项目
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestID'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: 服务暂不可用
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestID'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '200':
+          description: 操作成功
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestID'
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/MemberCandidate'
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema: *id002
+        description: 项目或资源公开标识
+  /api/v1/audit-logs:
+    get:
+      operationId: listGlobalAuditLogs
+      summary: 查询全局及全部项目审计
+      tags:
+      - CMDB
+      responses:
+        '400':
+          description: 请求格式或业务参数无效
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestID'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: 身份认证失败或失效
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestID'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: 当前身份无权执行操作或云权限不足
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestID'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: 服务暂不可用
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestID'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '200':
+          description: 操作成功
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestID'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuditLogPage'
+      parameters:
+      - &id005
+        name: page
+        in: query
+        required: false
+        schema:
+          type: integer
+          default: 1
+      - &id006
+        name: page_size
+        in: query
+        required: false
+        schema:
+          type: integer
+          default: 20
+      - &id007
+        name: action
+        in: query
+        required: false
+        schema: &id003
+          type: string
+      - &id008
+        name: actor_username
+        in: query
+        required: false
+        schema: *id003
+      - &id009
+        name: resource_type
+        in: query
+        required: false
+        schema: *id003
+      - &id010
+        name: resource_id
+        in: query
+        required: false
+        schema: *id003
+      - &id011
+        name: snapshot_id
+        in: query
+        required: false
+        schema: *id002
+      - &id012
+        name: start_at
+        in: query
+        required: false
+        schema: &id004
+          type: string
+          format: date-time
+      - &id013
+        name: end_at
+        in: query
+        required: false
+        schema: *id004
+  /api/v1/projects/{id}/audit-logs:
+    get:
+      operationId: listProjectAuditLogs
+      summary: 查询项目审计
+      tags:
+      - CMDB
+      responses:
+        '400':
+          description: 请求格式或业务参数无效
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestID'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: 身份认证失败或失效
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestID'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: 对象不存在或无权访问该项目
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestID'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: 服务暂不可用
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestID'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '200':
+          description: 操作成功
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestID'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuditLogPage'
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema: *id002
+        description: 项目或资源公开标识
+      - *id005
+      - *id006
+      - *id007
+      - *id008
+      - *id009
+      - *id010
+      - *id011
+      - *id012
+      - *id013
+  /api/v1/resources:
+    get:
+      operationId: listAllResources
+      summary: 跨项目查询资产
+      tags:
+      - CMDB
+      responses:
+        '400':
+          description: 请求格式或业务参数无效
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestID'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: 身份认证失败或失效
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestID'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: 当前身份无权执行操作或云权限不足
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestID'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: 服务暂不可用
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestID'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '200':
+          description: 操作成功
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestID'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ResourcePage'
+      parameters:
+      - *id005
+      - *id006
+      - &id014
+        name: source_id
+        in: query
+        required: false
+        schema:
+          type: integer
+          format: int64
+          minimum: 0
+          x-go-type: uint64
+      - &id015
+        name: provider
+        in: query
+        required: false
+        schema: *id003
+        description: 以逗号分隔的可组合筛选值；去除空白并忽略空项
+      - &id016
+        name: resource_type
+        in: query
+        required: false
+        schema: *id003
+        description: 以逗号分隔的可组合筛选值；去除空白并忽略空项
+      - &id017
+        name: keyword
+        in: query
+        required: false
+        schema: *id003
+      - &id018
+        name: engine
+        in: query
+        required: false
+        schema: *id003
+      - &id019
+        name: network_type
+        in: query
+        required: false
+        schema: *id003
+      - &id020
+        name: region
+        in: query
+        required: false
+        schema: *id003
+      - &id021
+        name: cloud_status
+        in: query
+        required: false
+        schema: *id003
+      - &id022
+        name: asset_status
+        in: query
+        required: false
+        schema: *id003
+      - &id023
+        name: sort_by
+        in: query
+        required: false
+        schema: *id003
+      - &id024
+        name: sort_order
+        in: query
+        required: false
+        schema: *id003
+  /api/v1/projects/{id}/resources:
+    get:
+      operationId: listProjectResources
+      summary: 查询项目资产
+      tags:
+      - CMDB
+      responses:
+        '400':
+          description: 请求格式或业务参数无效
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestID'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: 身份认证失败或失效
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestID'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: 对象不存在或无权访问该项目
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestID'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: 服务暂不可用
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestID'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '200':
+          description: 操作成功
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestID'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ResourcePage'
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema: *id002
+        description: 项目或资源公开标识
+      - *id005
+      - *id006
+      - *id014
+      - *id015
+      - *id016
+      - *id017
+      - *id018
+      - *id019
+      - *id020
+      - *id021
+      - *id022
+      - *id023
+      - *id024
+  /api/v1/projects/{id}/sources:
+    get:
+      operationId: listSources
+      summary: 查询项目接入源
+      tags:
+      - CMDB
+      responses:
+        '400':
+          description: 请求格式或业务参数无效
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestID'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: 身份认证失败或失效
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestID'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: 对象不存在或无权访问该项目
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestID'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: 服务暂不可用
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestID'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '200':
+          description: 操作成功
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestID'
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Source'
+                nullable: true
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema: *id002
+        description: 项目或资源公开标识
+      - name: provider
+        in: query
+        required: false
+        schema: *id003
+    post:
+      operationId: createSource
+      summary: 验证云账号并创建接入源
+      tags:
+      - CMDB
+      responses:
+        '400':
+          description: 请求格式或业务参数无效
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestID'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: 身份认证失败或失效
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestID'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: 对象不存在或无权访问该项目
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestID'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: 业务冲突或状态不允许操作
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestID'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: 服务暂不可用
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestID'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '502':
+          description: 云平台认证、身份或网络服务不可用
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestID'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '201':
+          description: 操作成功
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestID'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Source'
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema: *id002
+        description: 项目或资源公开标识
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateSourceRequest'
+  /api/v1/projects/{id}/sources/{sourceId}:
+    put:
+      operationId: updateSource
+      summary: 更新接入源并可选替换凭证
+      tags:
+      - CMDB
+      responses:
+        '400':
+          description: 请求格式或业务参数无效
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestID'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: 身份认证失败或失效
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestID'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: 对象不存在或无权访问该项目
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestID'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: 业务冲突或状态不允许操作
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestID'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: 服务暂不可用
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestID'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '502':
+          description: 云平台认证、身份或网络服务不可用
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestID'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '200':
+          description: 操作成功
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestID'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Source'
+      parameters:
+      - name: sourceId
+        in: path
+        required: true
+        schema: *id002
+        description: 项目或资源公开标识
+      - name: id
+        in: path
+        required: true
+        schema: *id002
+        description: 项目或资源公开标识
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateSourceRequest'
+    delete:
+      operationId: deleteSource
+      summary: 删除无依赖接入源
+      tags:
+      - CMDB
+      responses:
+        '400':
+          description: 请求格式或业务参数无效
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestID'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: 身份认证失败或失效
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestID'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: 对象不存在或无权访问该项目
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestID'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: 业务冲突或状态不允许操作
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestID'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: 服务暂不可用
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestID'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '502':
+          description: 云平台认证、身份或网络服务不可用
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestID'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '204':
+          description: 删除成功，无响应正文
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestID'
+      parameters:
+      - name: sourceId
+        in: path
+        required: true
+        schema: *id002
+        description: 项目或资源公开标识
+      - name: id
+        in: path
+        required: true
+        schema: *id002
+        description: 项目或资源公开标识
+  /api/v1/projects/{id}/sources/{sourceId}/sync:
+    post:
+      operationId: syncSource
+      summary: 创建手工同步排队任务
+      tags:
+      - CMDB
+      responses:
+        '400':
+          description: 请求格式或业务参数无效
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestID'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: 身份认证失败或失效
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestID'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: 对象不存在或无权访问该项目
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestID'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: 业务冲突或状态不允许操作
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestID'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: 服务暂不可用
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestID'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '502':
+          description: 云平台认证、身份或网络服务不可用
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestID'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '503':
+          description: 平台采集器暂不可用
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestID'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '202':
+          description: 操作成功
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestID'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SyncJob'
+      parameters:
+      - name: sourceId
+        in: path
+        required: true
+        schema: *id002
+        description: 项目或资源公开标识
+      - name: id
+        in: path
+        required: true
+        schema: *id002
+        description: 项目或资源公开标识
+  /api/v1/projects/{id}/sources/{sourceId}/test:
+    post:
+      operationId: testSourceConnection
+      summary: 测试各资源类型的只读访问能力
+      tags:
+      - CMDB
+      responses:
+        '400':
+          description: 请求格式或业务参数无效
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestID'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: 身份认证失败或失效
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestID'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: 当前身份无权执行操作或云权限不足
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestID'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: 对象不存在或无权访问该项目
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestID'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: 业务冲突或状态不允许操作
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestID'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: 服务暂不可用
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestID'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '502':
+          description: 云平台认证、身份或网络服务不可用
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestID'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '503':
+          description: 平台采集器暂不可用
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestID'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '200':
+          description: 操作成功
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestID'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConnectionTestResult'
+      parameters:
+      - name: sourceId
+        in: path
+        required: true
+        schema: *id002
+        description: 项目或资源公开标识
+      - name: id
+        in: path
+        required: true
+        schema: *id002
+        description: 项目或资源公开标识
+  /api/v1/projects/{id}/sync-jobs:
+    get:
+      operationId: listSyncJobs
+      summary: 查询同步任务历史
+      tags:
+      - CMDB
+      responses:
+        '400':
+          description: 请求格式或业务参数无效
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestID'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: 身份认证失败或失效
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestID'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: 对象不存在或无权访问该项目
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestID'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: 服务暂不可用
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestID'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '200':
+          description: 操作成功
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestID'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SyncJobPage'
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema: *id002
+        description: 项目或资源公开标识
+      - *id005
+      - *id006
+      - name: source_id
+        in: query
+        required: false
+        schema:
+          type: integer
+          format: int64
+          minimum: 0
+          x-go-type: uint64
+      - name: provider
+        in: query
+        required: false
+        schema: *id003
+  /api/v1/projects/{id}/sync-jobs/{jobId}/retry:
+    post:
+      operationId: retrySyncJob
+      summary: 新建任务重试失败或部分成功同步
+      tags:
+      - CMDB
+      responses:
+        '400':
+          description: 请求格式或业务参数无效
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestID'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: 身份认证失败或失效
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestID'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: 对象不存在或无权访问该项目
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestID'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: 业务冲突或状态不允许操作
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestID'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: 服务暂不可用
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestID'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '502':
+          description: 云平台认证、身份或网络服务不可用
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestID'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '202':
+          description: 操作成功
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestID'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SyncJob'
+      parameters:
+      - name: jobId
+        in: path
+        required: true
+        schema: *id002
+        description: 项目或资源公开标识
+      - name: id
+        in: path
+        required: true
+        schema: *id002
+        description: 项目或资源公开标识
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: 每次请求按当前用户和项目角色重新授权。
+  headers:
+    RequestID:
+      description: 服务端生成的可信请求关联标识
+      schema: *id003
+  schemas:
+    Identifier:
+      type: integer
+      format: int64
+      minimum: 1
+      x-go-type: uint64
+    Username:
+      type: string
+      minLength: 1
+      maxLength: 64
+      pattern: ^[A-Za-z0-9_]+$
+    Error:
+      type: object
+      additionalProperties: false
+      properties:
+        code:
+          type: string
+          description: 稳定业务错误码。当前已定义：AUDIT_INVALID_REQUEST、AUDIT_SERVICE_UNAVAILABLE、AUTH_INVALID_CREDENTIALS、AUTH_INVALID_REQUEST、AUTH_SERVICE_UNAVAILABLE、AUTH_UNAUTHORIZED、CLOUD_ACCOUNT_CONFLICT、CLOUD_IDENTITY_UNAVAILABLE、INTERNAL_ERROR、PROJECT_DELETE_CONFLICT、PROJECT_DUPLICATE_CODE、PROJECT_FORBIDDEN、PROJECT_INVALID_INPUT、PROJECT_INVALID_REQUEST、PROJECT_MEMBER_EXISTS、PROJECT_MEMBER_INVALID_INPUT、PROJECT_MEMBER_NOT_FOUND、PROJECT_MEMBER_SELF_REMOVE、PROJECT_NOT_FOUND、PROJECT_OWNER_NOT_FOUND、PROJECT_SERVICE_UNAVAILABLE、RESOURCE_INVALID_QUERY、RESOURCE_INVALID_REQUEST、RESOURCE_SERVICE_UNAVAILABLE、SOURCE_AUTHENTICATION_FAILED、SOURCE_COLLECTOR_UNAVAILABLE、SOURCE_CONNECTION_FAILED、SOURCE_DELETE_CONFLICT、SOURCE_DELETE_FAILED、SOURCE_IDENTITY_MISMATCH、SOURCE_INVALID_INPUT、SOURCE_INVALID_REQUEST、SOURCE_NOT_FOUND、SOURCE_PERMISSION_DENIED、SOURCE_SERVICE_UNAVAILABLE、SOURCE_SYNC_FAILED、SOURCE_SYNC_RUNNING、SYNC_JOB_INVALID_REQUEST、SYNC_JOB_NOT_FOUND、SYNC_JOB_NOT_RETRYABLE、SYNC_JOB_SERVICE_UNAVAILABLE、USER_DUPLICATE_USERNAME、USER_FORBIDDEN、USER_INVALID_INPUT、USER_INVALID_REQUEST、USER_NOT_FOUND、USER_SELF_PROTECTED、USER_SERVICE_UNAVAILABLE。各操作只返回对应领域与认证恢复中间件允许的类别。
+        message:
+          type: string
+          description: 不含原始输入或内部错误的中文安全说明
+      required:
+      - code
+      - message
+    Health:
+      type: object
+      additionalProperties: false
+      properties:
+        status:
+          type: string
+          enum:
+          - ok
+      required:
+      - status
+    GlobalRole:
+      type: string
+      enum:
+      - system_admin
+      - user
+    UserStatus:
+      type: string
+      enum:
+      - active
+      - disabled
+    ProjectRole:
+      type: string
+      enum:
+      - project_admin
+      - member
+    ProjectPermission:
+      type: object
+      additionalProperties: false
+      properties:
+        project_id:
+          type: integer
+          format: int64
+          minimum: 1
+          x-go-type: uint64
+        project_name:
+          type: string
+        role:
+          $ref: '#/components/schemas/ProjectRole'
+      required:
+      - project_id
+      - project_name
+      - role
+    ProjectPermissionInput:
+      type: object
+      additionalProperties: false
+      properties:
+        project_id:
+          type: integer
+          format: int64
+          minimum: 1
+          x-go-type: uint64
+        project_name:
+          type: string
+          nullable: true
+        role:
+          $ref: '#/components/schemas/ProjectRole'
+      required:
+      - project_id
+      - role
+    PublicUser:
+      type: object
+      additionalProperties: false
+      properties:
+        username:
+          type: string
+          minLength: 1
+          maxLength: 64
+          pattern: ^[A-Za-z0-9_]+$
+        display_name:
+          type: string
+        email:
+          type: string
+        global_role:
+          $ref: '#/components/schemas/GlobalRole'
+        status:
+          $ref: '#/components/schemas/UserStatus'
+        project_permissions:
+          type: array
+          items:
+            $ref: '#/components/schemas/ProjectPermission'
+          nullable: true
+      required:
+      - username
+      - display_name
+      - email
+      - global_role
+      - status
+      - project_permissions
+    LoginRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        username:
+          type: string
+          minLength: 1
+        password:
+          type: string
+          minLength: 1
+          writeOnly: true
+      required:
+      - username
+      - password
+    LoginResponse:
+      type: object
+      additionalProperties: false
+      properties:
+        token:
+          type: string
+          description: 有效期24小时的会话令牌
+        user:
+          $ref: '#/components/schemas/PublicUser'
+      required:
+      - token
+      - user
+    CreateUserRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        username:
+          type: string
+          minLength: 1
+          maxLength: 64
+          pattern: ^[A-Za-z0-9_]+$
+        password:
+          type: string
+          writeOnly: true
+          description: 按UTF-8字节计算，必须为12至72字节；服务端领域校验，不按Unicode字符数替代
+        display_name:
+          type: string
+          minLength: 1
+        email:
+          type: string
+          nullable: true
+          x-go-type-skip-optional-pointer: true
+        global_role:
+          $ref: '#/components/schemas/GlobalRole'
+        status:
+          $ref: '#/components/schemas/UserStatus'
+        project_permissions:
+          type: array
+          items:
+            $ref: '#/components/schemas/ProjectPermissionInput'
+          nullable: true
+      required:
+      - username
+      - password
+      - display_name
+      - global_role
+      - status
+    UpdateUserRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        display_name:
+          type: string
+          minLength: 1
+        email:
+          type: string
+          nullable: true
+          x-go-type-skip-optional-pointer: true
+        global_role:
+          $ref: '#/components/schemas/GlobalRole'
+        status:
+          $ref: '#/components/schemas/UserStatus'
+        project_permissions:
+          type: array
+          items:
+            $ref: '#/components/schemas/ProjectPermissionInput'
+          nullable: true
+        password:
+          type: string
+          writeOnly: true
+          description: 缺失、null或空字符串保留密码；非空值必须为12至72字节
+          nullable: true
+          x-go-type-skip-optional-pointer: true
+      required:
+      - display_name
+      - global_role
+      - status
+    UpdateUserStatusRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        status:
+          $ref: '#/components/schemas/UserStatus'
+      required:
+      - status
+    Project:
+      type: object
+      additionalProperties: false
+      properties:
+        id:
+          type: integer
+          format: int64
+          minimum: 1
+          x-go-type: uint64
+        code:
+          type: string
+        name:
+          type: string
+        description:
+          type: string
+        status:
+          type: string
+          enum:
+          - enabled
+          - disabled
+        owner_username:
+          type: string
+          minLength: 1
+          maxLength: 64
+          pattern: ^[A-Za-z0-9_]+$
+          nullable: true
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+        current_role:
+          $ref: '#/components/schemas/ProjectRole'
+      required:
+      - id
+      - code
+      - name
+      - description
+      - status
+      - owner_username
+      - created_at
+      - updated_at
+    CreateProjectRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        code:
+          type: string
+          minLength: 1
+        name:
+          type: string
+          minLength: 1
+        description:
+          type: string
+          nullable: true
+          x-go-type-skip-optional-pointer: true
+        owner_username:
+          type: string
+          minLength: 1
+          maxLength: 64
+          pattern: ^[A-Za-z0-9_]+$
+          nullable: true
+      required:
+      - code
+      - name
+    UpdateProjectRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        name:
+          type: string
+          minLength: 1
+        description:
+          type: string
+          nullable: true
+          x-go-type-skip-optional-pointer: true
+        status:
+          type: string
+          enum:
+          - enabled
+          - disabled
+        owner_username:
+          type: string
+          minLength: 1
+          maxLength: 64
+          pattern: ^[A-Za-z0-9_]+$
+          nullable: true
+        code:
+          type: string
+          nullable: true
+          description: 兼容提交时忽略此字段，项目编码创建后不可修改。
+          x-go-type-skip-optional-pointer: true
+      required:
+      - name
+      - status
+    ProjectMember:
+      type: object
+      additionalProperties: false
+      properties:
+        username:
+          type: string
+          minLength: 1
+          maxLength: 64
+          pattern: ^[A-Za-z0-9_]+$
+        display_name:
+          type: string
+        role:
+          $ref: '#/components/schemas/ProjectRole'
+      required:
+      - username
+      - display_name
+      - role
+    MemberCandidate:
+      type: object
+      additionalProperties: false
+      properties:
+        username:
+          type: string
+          minLength: 1
+          maxLength: 64
+          pattern: ^[A-Za-z0-9_]+$
+        display_name:
+          type: string
+      required:
+      - username
+      - display_name
+    AddProjectMemberRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        username:
+          type: string
+          minLength: 1
+          maxLength: 64
+          pattern: ^[A-Za-z0-9_]+$
+        role:
+          $ref: '#/components/schemas/ProjectRole'
+      required:
+      - username
+      - role
+    UpdateProjectMemberRoleRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        role:
+          $ref: '#/components/schemas/ProjectRole'
+      required:
+      - role
+    Provider:
+      type: string
+      enum:
+      - aliyun
+      - aws
+    ResourceType:
+      type: string
+      enum:
+      - ecs
+      - ec2
+      - rds
+      - slb
+      - clb
+      - alb
+      - nlb
+      - gwlb
+    AliyunCredential:
+      type: object
+      additionalProperties: false
+      properties:
+        access_key_id:
+          type: string
+          minLength: 1
+          pattern: \S
+          writeOnly: true
+        access_key_secret:
+          type: string
+          minLength: 1
+          pattern: \S
+          writeOnly: true
+      required:
+      - access_key_id
+      - access_key_secret
+    AWSCredential:
+      type: object
+      additionalProperties: false
+      properties:
+        access_key_id:
+          type: string
+          minLength: 1
+          pattern: \S
+          writeOnly: true
+        secret_access_key:
+          type: string
+          minLength: 1
+          pattern: \S
+          writeOnly: true
+        session_token:
+          type: string
+          minLength: 1
+          pattern: \S
+          writeOnly: true
+      required:
+      - access_key_id
+      - secret_access_key
+    SourceCredential:
+      oneOf:
+      - $ref: '#/components/schemas/AliyunCredential'
+      - $ref: '#/components/schemas/AWSCredential'
+      writeOnly: true
+      description: 创建时必须提交所属平台完整凭证，服务端保留原始JSON以拒绝重复键；平台匹配由专用严格边界再次验证。
+      x-go-type: rawjson.RawMessage
+      x-go-type-import:
+        path: encoding/json
+        name: rawjson
+      x-go-type-skip-optional-pointer: true
+    UpdateSourceCredential:
+      nullable: true
+      oneOf:
+      - $ref: '#/components/schemas/AliyunCredential'
+      - $ref: '#/components/schemas/AWSCredential'
+      - type: string
+        enum:
+        - ''
+        nullable: true
+      writeOnly: true
+      description: 缺失、null、空字符串均保留原凭证；完整对象整体替换，空对象及平台不匹配拒绝。
+      x-go-type: rawjson.RawMessage
+      x-go-type-import:
+        path: encoding/json
+        name: rawjson
+      x-go-type-skip-optional-pointer: true
+    EmptyConfig:
+      type: object
+      additionalProperties: false
+      properties: {}
+      description: 首期配置仅允许空对象；请求中也可以不提交。
+      x-go-type: rawjson.RawMessage
+      x-go-type-import:
+        path: encoding/json
+        name: rawjson
+      x-go-type-skip-optional-pointer: true
+    Source:
+      type: object
+      additionalProperties: false
+      properties:
+        id:
+          type: integer
+          format: int64
+          minimum: 1
+          x-go-type: uint64
+        project_id:
+          type: integer
+          format: int64
+          minimum: 1
+          x-go-type: uint64
+        provider:
+          $ref: '#/components/schemas/Provider'
+        name:
+          type: string
+        region:
+          type: string
+        credential_hint:
+          type: string
+          description: 仅表示已安全配置，不含凭证片段
+        config:
+          $ref: '#/components/schemas/EmptyConfig'
+        enabled:
+          type: boolean
+        sync_interval_minutes:
+          type: integer
+          minimum: 5
+          maximum: 10080
+        last_sync_at:
+          type: string
+          format: date-time
+          nullable: true
+        next_sync_at:
+          type: string
+          format: date-time
+          nullable: true
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+      required:
+      - id
+      - project_id
+      - provider
+      - name
+      - region
+      - credential_hint
+      - config
+      - enabled
+      - sync_interval_minutes
+      - last_sync_at
+      - next_sync_at
+      - created_at
+      - updated_at
+    CreateSourceRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        provider:
+          $ref: '#/components/schemas/Provider'
+        credential:
+          $ref: '#/components/schemas/SourceCredential'
+        name:
+          type: string
+          minLength: 1
+        region:
+          type: string
+          nullable: true
+          x-go-type-skip-optional-pointer: true
+        config:
+          $ref: '#/components/schemas/EmptyConfig'
+        sync_interval_minutes:
+          type: integer
+          description: 创建缺失或0表示默认60分钟，其他值必须为5至10080分钟
+          x-go-type-skip-optional-pointer: true
+          nullable: true
+      required:
+      - provider
+      - credential
+      - name
+    UpdateSourceRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        name:
+          type: string
+          minLength: 1
+        region:
+          type: string
+          nullable: true
+          x-go-type-skip-optional-pointer: true
+        config:
+          $ref: '#/components/schemas/EmptyConfig'
+        sync_interval_minutes:
+          type: integer
+          minimum: 5
+          maximum: 10080
+        credential:
+          $ref: '#/components/schemas/UpdateSourceCredential'
+        enabled:
+          type: boolean
+          nullable: true
+          x-go-type-skip-optional-pointer: true
+      required:
+      - name
+      - sync_interval_minutes
+    ConnectionTestResult:
+      type: object
+      additionalProperties: false
+      properties:
+        reachable_types:
+          type: array
+          items:
+            $ref: '#/components/schemas/ResourceType'
+          nullable: true
+        failed_types:
+          type: array
+          items:
+            $ref: '#/components/schemas/ResourceType'
+          nullable: true
+      required:
+      - reachable_types
+      - failed_types
+    Endpoint:
+      type: object
+      additionalProperties: false
+      properties:
+        kind:
+          type: string
+          enum:
+          - private
+          - public
+          - hostname
+        address:
+          type: string
+        port:
+          type: integer
+        protocol:
+          type: string
+        resolved_ips:
+          type: array
+          items:
+            type: string
+          nullable: true
+      required:
+      - kind
+      - address
+      - port
+      - protocol
+      - resolved_ips
+    ServerDisk:
+      type: object
+      additionalProperties: false
+      properties:
+        id:
+          type: string
+        kind:
+          type: string
+          enum:
+          - system
+          - data
+        type:
+          type: string
+        size_gib:
+          type: integer
+          format: int64
+        device:
+          type: string
+        encrypted:
+          type: boolean
+      required:
+      - id
+      - kind
+      - type
+      - size_gib
+      - device
+      - encrypted
+    Resource:
+      type: object
+      additionalProperties: false
+      properties:
+        id:
+          type: integer
+          format: int64
+          minimum: 1
+          x-go-type: uint64
+        project_id:
+          type: integer
+          format: int64
+          minimum: 1
+          x-go-type: uint64
+        source_id:
+          type: integer
+          format: int64
+          minimum: 1
+          x-go-type: uint64
+        provider:
+          $ref: '#/components/schemas/Provider'
+        resource_type:
+          $ref: '#/components/schemas/ResourceType'
+        external_id:
+          type: string
+        name:
+          type: string
+        region:
+          type: string
+        zone:
+          type: string
+        cloud_status:
+          type: string
+        asset_status:
+          type: string
+          enum:
+          - active
+          - lost
+        first_seen_at:
+          type: string
+          format: date-time
+        last_seen_at:
+          type: string
+          format: date-time
+        missing_since:
+          type: string
+          format: date-time
+          nullable: true
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+        source_name:
+          type: string
+        endpoints:
+          type: array
+          items:
+            $ref: '#/components/schemas/Endpoint'
+          nullable: true
+        disks:
+          type: array
+          items:
+            $ref: '#/components/schemas/ServerDisk'
+          nullable: true
+        project_name:
+          type: string
+        engine:
+          type: string
+        engine_version:
+          type: string
+        network_type:
+          type: string
+        instance_type:
+          type: string
+        storage_type:
+          type: string
+        vcpu:
+          type: integer
+        memory:
+          type: integer
+          format: int64
+        storage_size_gib:
+          type: integer
+          format: int64
+      required:
+      - id
+      - project_id
+      - source_id
+      - provider
+      - resource_type
+      - external_id
+      - name
+      - region
+      - zone
+      - cloud_status
+      - asset_status
+      - first_seen_at
+      - last_seen_at
+      - missing_since
+      - created_at
+      - updated_at
+      - source_name
+      - endpoints
+      - disks
+      description: 统一只读资产视图；未适用或不可确定的类型专属字段省略。memory单位MiB，容量单位GiB；不返回原始云属性。
+    SyncTypeStatistics:
+      type: object
+      additionalProperties: false
+      properties:
+        added:
+          type: integer
+          minimum: 0
+        updated:
+          type: integer
+          minimum: 0
+        restored:
+          type: integer
+          minimum: 0
+        lost:
+          type: integer
+          minimum: 0
+        deleted:
+          type: integer
+          minimum: 0
+        failed:
+          type: integer
+          minimum: 0
+      required:
+      - added
+      - updated
+      - restored
+      - lost
+      - deleted
+      - failed
+    SyncStatistics:
+      type: object
+      nullable: true
+      additionalProperties:
+        $ref: '#/components/schemas/SyncTypeStatistics'
+      description: 以资源类型为键；排队或整体失败时允许null或空对象。
+    SyncJob:
+      type: object
+      additionalProperties: false
+      properties:
+        id:
+          type: integer
+          format: int64
+          minimum: 1
+          x-go-type: uint64
+        project_id:
+          type: integer
+          format: int64
+          minimum: 1
+          x-go-type: uint64
+        source_id:
+          type: integer
+          format: int64
+          minimum: 1
+          x-go-type: uint64
+        previous_job_id:
+          type: integer
+          format: int64
+          minimum: 1
+          x-go-type: uint64
+          nullable: true
+        status:
+          type: string
+          enum:
+          - queued
+          - running
+          - success
+          - partial_success
+          - failed
+        trigger:
+          type: string
+          enum:
+          - manual
+          - scheduled
+        statistics:
+          $ref: '#/components/schemas/SyncStatistics'
+        error_summary:
+          type: string
+        started_at:
+          type: string
+          format: date-time
+        finished_at:
+          type: string
+          format: date-time
+          nullable: true
+      required:
+      - id
+      - project_id
+      - source_id
+      - previous_job_id
+      - status
+      - trigger
+      - statistics
+      - error_summary
+      - started_at
+      - finished_at
+    AuditDetail:
+      type: object
+      nullable: true
+      additionalProperties: true
+      description: 递归敏感键过滤后的审计详情；不同动作包含不同业务字段，客户端按unknown收窄，不实施业务键允许列表。
+      x-go-type: rawjson.RawMessage
+      x-go-type-import:
+        path: encoding/json
+        name: rawjson
+      x-go-type-skip-optional-pointer: true
+    AuditLog:
+      type: object
+      additionalProperties: false
+      properties:
+        id:
+          type: integer
+          format: int64
+          minimum: 1
+          x-go-type: uint64
+        actor_username:
+          type: string
+        actor_display_name:
+          type: string
+        project_id:
+          type: integer
+          format: int64
+          minimum: 1
+          x-go-type: uint64
+          nullable: true
+        project_name:
+          type: string
+        action:
+          type: string
+        resource_type:
+          type: string
+        resource_id:
+          type: string
+        resource_name:
+          type: string
+        detail:
+          $ref: '#/components/schemas/AuditDetail'
+        request_ip:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+      required:
+      - id
+      - actor_username
+      - actor_display_name
+      - project_id
+      - project_name
+      - action
+      - resource_type
+      - resource_id
+      - resource_name
+      - detail
+      - request_ip
+      - created_at
+    ResourcePage:
+      type: object
+      additionalProperties: false
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/Resource'
+        total:
+          type: integer
+          format: int64
+          minimum: 0
+        page:
+          type: integer
+        page_size:
+          type: integer
+      required:
+      - items
+      - total
+      - page
+      - page_size
+    SyncJobPage:
+      type: object
+      additionalProperties: false
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/SyncJob'
+          nullable: true
+        total:
+          type: integer
+          format: int64
+          minimum: 0
+        page:
+          type: integer
+        page_size:
+          type: integer
+      required:
+      - items
+      - total
+      - page
+      - page_size
+    AuditLogPage:
+      type: object
+      additionalProperties: false
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/AuditLog'
+        total:
+          type: integer
+          format: int64
+          minimum: 0
+        page:
+          type: integer
+        page_size:
+          type: integer
+        snapshot_id:
+          type: integer
+          format: int64
+          minimum: 0
+          x-go-type: uint64
+      required:
+      - items
+      - total
+      - page
+      - page_size
+      - snapshot_id

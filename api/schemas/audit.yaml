@@ -1,0 +1,86 @@
+AuditDetail:
+  type: object
+  nullable: true
+  additionalProperties: true
+  description: 递归敏感键过滤后的审计详情；不同动作包含不同业务字段，客户端按unknown收窄，不实施业务键允许列表。
+  x-go-type: rawjson.RawMessage
+  x-go-type-import:
+    path: encoding/json
+    name: rawjson
+  x-go-type-skip-optional-pointer: true
+AuditLog:
+  type: object
+  additionalProperties: false
+  properties:
+    id:
+      type: integer
+      format: int64
+      minimum: 1
+      x-go-type: uint64
+    actor_username:
+      type: string
+    actor_display_name:
+      type: string
+    project_id:
+      type: integer
+      format: int64
+      minimum: 1
+      x-go-type: uint64
+      nullable: true
+    project_name:
+      type: string
+    action:
+      type: string
+    resource_type:
+      type: string
+    resource_id:
+      type: string
+    resource_name:
+      type: string
+    detail:
+      $ref: ../openapi.yaml#/components/schemas/AuditDetail
+    request_ip:
+      type: string
+    created_at:
+      type: string
+      format: date-time
+  required:
+  - id
+  - actor_username
+  - actor_display_name
+  - project_id
+  - project_name
+  - action
+  - resource_type
+  - resource_id
+  - resource_name
+  - detail
+  - request_ip
+  - created_at
+AuditLogPage:
+  type: object
+  additionalProperties: false
+  properties:
+    items:
+      type: array
+      items:
+        $ref: ../openapi.yaml#/components/schemas/AuditLog
+    total:
+      type: integer
+      format: int64
+      minimum: 0
+    page:
+      type: integer
+    page_size:
+      type: integer
+    snapshot_id:
+      type: integer
+      format: int64
+      minimum: 0
+      x-go-type: uint64
+  required:
+  - items
+  - total
+  - page
+  - page_size
+  - snapshot_id

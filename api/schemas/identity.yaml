@@ -1,0 +1,172 @@
+GlobalRole:
+  type: string
+  enum:
+  - system_admin
+  - user
+UserStatus:
+  type: string
+  enum:
+  - active
+  - disabled
+ProjectPermission:
+  type: object
+  additionalProperties: false
+  properties:
+    project_id:
+      type: integer
+      format: int64
+      minimum: 1
+      x-go-type: uint64
+    project_name:
+      type: string
+    role:
+      $ref: ../openapi.yaml#/components/schemas/ProjectRole
+  required:
+  - project_id
+  - project_name
+  - role
+ProjectPermissionInput:
+  type: object
+  additionalProperties: false
+  properties:
+    project_id:
+      type: integer
+      format: int64
+      minimum: 1
+      x-go-type: uint64
+    project_name:
+      type: string
+      nullable: true
+    role:
+      $ref: ../openapi.yaml#/components/schemas/ProjectRole
+  required:
+  - project_id
+  - role
+PublicUser:
+  type: object
+  additionalProperties: false
+  properties:
+    username:
+      type: string
+      minLength: 1
+      maxLength: 64
+      pattern: ^[A-Za-z0-9_]+$
+    display_name:
+      type: string
+    email:
+      type: string
+    global_role:
+      $ref: ../openapi.yaml#/components/schemas/GlobalRole
+    status:
+      $ref: ../openapi.yaml#/components/schemas/UserStatus
+    project_permissions:
+      type: array
+      items:
+        $ref: ../openapi.yaml#/components/schemas/ProjectPermission
+      nullable: true
+  required:
+  - username
+  - display_name
+  - email
+  - global_role
+  - status
+  - project_permissions
+LoginRequest:
+  type: object
+  additionalProperties: false
+  properties:
+    username:
+      type: string
+      minLength: 1
+    password:
+      type: string
+      minLength: 1
+      writeOnly: true
+  required:
+  - username
+  - password
+LoginResponse:
+  type: object
+  additionalProperties: false
+  properties:
+    token:
+      type: string
+      description: 有效期24小时的会话令牌
+    user:
+      $ref: ../openapi.yaml#/components/schemas/PublicUser
+  required:
+  - token
+  - user
+CreateUserRequest:
+  type: object
+  additionalProperties: false
+  properties:
+    username:
+      type: string
+      minLength: 1
+      maxLength: 64
+      pattern: ^[A-Za-z0-9_]+$
+    password:
+      type: string
+      writeOnly: true
+      description: 按UTF-8字节计算，必须为12至72字节；服务端领域校验，不按Unicode字符数替代
+    display_name:
+      type: string
+      minLength: 1
+    email:
+      type: string
+      nullable: true
+      x-go-type-skip-optional-pointer: true
+    global_role:
+      $ref: ../openapi.yaml#/components/schemas/GlobalRole
+    status:
+      $ref: ../openapi.yaml#/components/schemas/UserStatus
+    project_permissions:
+      type: array
+      items:
+        $ref: ../openapi.yaml#/components/schemas/ProjectPermissionInput
+      nullable: true
+  required:
+  - username
+  - password
+  - display_name
+  - global_role
+  - status
+UpdateUserRequest:
+  type: object
+  additionalProperties: false
+  properties:
+    display_name:
+      type: string
+      minLength: 1
+    email:
+      type: string
+      nullable: true
+      x-go-type-skip-optional-pointer: true
+    global_role:
+      $ref: ../openapi.yaml#/components/schemas/GlobalRole
+    status:
+      $ref: ../openapi.yaml#/components/schemas/UserStatus
+    project_permissions:
+      type: array
+      items:
+        $ref: ../openapi.yaml#/components/schemas/ProjectPermissionInput
+      nullable: true
+    password:
+      type: string
+      writeOnly: true
+      description: 缺失、null或空字符串保留密码；非空值必须为12至72字节
+      nullable: true
+      x-go-type-skip-optional-pointer: true
+  required:
+  - display_name
+  - global_role
+  - status
+UpdateUserStatusRequest:
+  type: object
+  additionalProperties: false
+  properties:
+    status:
+      $ref: ../openapi.yaml#/components/schemas/UserStatus
+  required:
+  - status

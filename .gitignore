@@ -11,6 +11,7 @@
 .gomodcache/
 .gomodcache2/
 .gopath/
+.cache/
 
 # Node
 node_modules/
@@ -43,6 +44,7 @@ docs/project/*
 !docs/project/README.md
 !docs/project/acceptance.md
 !docs/project/implementation-status.md
+!docs/project/api-contract.md
 
 # Isolated development worktrees
 .worktrees/

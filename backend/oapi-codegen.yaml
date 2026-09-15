@@ -1,0 +1,13 @@
+# 固定 Go 生成器版本由 backend/go.mod 的 tool 指令维护。
+package: generated
+generate:
+  models: true
+  gin-server: true
+  strict-server: true
+  embedded-spec: true
+output: internal/api/generated/api.gen.go
+output-options:
+  skip-prune: true
+compatibility:
+  # 运行时授权必须使用契约原始 operationId，而非 Go 方法名规范化后的副本。
+  preserve-original-operation-id-casing-in-embedded-spec: true

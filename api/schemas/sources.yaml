@@ -1,0 +1,209 @@
+Provider:
+  type: string
+  enum:
+  - aliyun
+  - aws
+AliyunCredential:
+  type: object
+  additionalProperties: false
+  properties:
+    access_key_id:
+      type: string
+      minLength: 1
+      pattern: \S
+      writeOnly: true
+    access_key_secret:
+      type: string
+      minLength: 1
+      pattern: \S
+      writeOnly: true
+  required:
+  - access_key_id
+  - access_key_secret
+AWSCredential:
+  type: object
+  additionalProperties: false
+  properties:
+    access_key_id:
+      type: string
+      minLength: 1
+      pattern: \S
+      writeOnly: true
+    secret_access_key:
+      type: string
+      minLength: 1
+      pattern: \S
+      writeOnly: true
+    session_token:
+      type: string
+      minLength: 1
+      pattern: \S
+      writeOnly: true
+  required:
+  - access_key_id
+  - secret_access_key
+SourceCredential:
+  oneOf:
+  - $ref: ../openapi.yaml#/components/schemas/AliyunCredential
+  - $ref: ../openapi.yaml#/components/schemas/AWSCredential
+  writeOnly: true
+  description: 创建时必须提交所属平台完整凭证，服务端保留原始JSON以拒绝重复键；平台匹配由专用严格边界再次验证。
+  x-go-type: rawjson.RawMessage
+  x-go-type-import:
+    path: encoding/json
+    name: rawjson
+  x-go-type-skip-optional-pointer: true
+UpdateSourceCredential:
+  nullable: true
+  oneOf:
+  - $ref: ../openapi.yaml#/components/schemas/AliyunCredential
+  - $ref: ../openapi.yaml#/components/schemas/AWSCredential
+  - type: string
+    enum:
+    - ''
+    nullable: true
+  writeOnly: true
+  description: 缺失、null、空字符串均保留原凭证；完整对象整体替换，空对象及平台不匹配拒绝。
+  x-go-type: rawjson.RawMessage
+  x-go-type-import:
+    path: encoding/json
+    name: rawjson
+  x-go-type-skip-optional-pointer: true
+EmptyConfig:
+  type: object
+  additionalProperties: false
+  properties: {}
+  description: 首期配置仅允许空对象；请求中也可以不提交。
+  x-go-type: rawjson.RawMessage
+  x-go-type-import:
+    path: encoding/json
+    name: rawjson
+  x-go-type-skip-optional-pointer: true
+Source:
+  type: object
+  additionalProperties: false
+  properties:
+    id:
+      type: integer
+      format: int64
+      minimum: 1
+      x-go-type: uint64
+    project_id:
+      type: integer
+      format: int64
+      minimum: 1
+      x-go-type: uint64
+    provider:
+      $ref: ../openapi.yaml#/components/schemas/Provider
+    name:
+      type: string
+    region:
+      type: string
+    credential_hint:
+      type: string
+      description: 仅表示已安全配置，不含凭证片段
+    config:
+      $ref: ../openapi.yaml#/components/schemas/EmptyConfig
+    enabled:
+      type: boolean
+    sync_interval_minutes:
+      type: integer
+      minimum: 5
+      maximum: 10080
+    last_sync_at:
+      type: string
+      format: date-time
+      nullable: true
+    next_sync_at:
+      type: string
+      format: date-time
+      nullable: true
+    created_at:
+      type: string
+      format: date-time
+    updated_at:
+      type: string
+      format: date-time
+  required:
+  - id
+  - project_id
+  - provider
+  - name
+  - region
+  - credential_hint
+  - config
+  - enabled
+  - sync_interval_minutes
+  - last_sync_at
+  - next_sync_at
+  - created_at
+  - updated_at
+CreateSourceRequest:
+  type: object
+  additionalProperties: false
+  properties:
+    provider:
+      $ref: ../openapi.yaml#/components/schemas/Provider
+    credential:
+      $ref: ../openapi.yaml#/components/schemas/SourceCredential
+    name:
+      type: string
+      minLength: 1
+    region:
+      type: string
+      nullable: true
+      x-go-type-skip-optional-pointer: true
+    config:
+      $ref: ../openapi.yaml#/components/schemas/EmptyConfig
+    sync_interval_minutes:
+      type: integer
+      description: 创建缺失或0表示默认60分钟，其他值必须为5至10080分钟
+      x-go-type-skip-optional-pointer: true
+      nullable: true
+  required:
+  - provider
+  - credential
+  - name
+UpdateSourceRequest:
+  type: object
+  additionalProperties: false
+  properties:
+    name:
+      type: string
+      minLength: 1
+    region:
+      type: string
+      nullable: true
+      x-go-type-skip-optional-pointer: true
+    config:
+      $ref: ../openapi.yaml#/components/schemas/EmptyConfig
+    sync_interval_minutes:
+      type: integer
+      minimum: 5
+      maximum: 10080
+    credential:
+      $ref: ../openapi.yaml#/components/schemas/UpdateSourceCredential
+    enabled:
+      type: boolean
+      nullable: true
+      x-go-type-skip-optional-pointer: true
+  required:
+  - name
+  - sync_interval_minutes
+ConnectionTestResult:
+  type: object
+  additionalProperties: false
+  properties:
+    reachable_types:
+      type: array
+      items:
+        $ref: ../openapi.yaml#/components/schemas/ResourceType
+      nullable: true
+    failed_types:
+      type: array
+      items:
+        $ref: ../openapi.yaml#/components/schemas/ResourceType
+      nullable: true
+  required:
+  - reachable_types
+  - failed_types

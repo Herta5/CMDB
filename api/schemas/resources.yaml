@@ -1,0 +1,193 @@
+ResourceType:
+  type: string
+  enum:
+  - ecs
+  - ec2
+  - rds
+  - slb
+  - clb
+  - alb
+  - nlb
+  - gwlb
+Endpoint:
+  type: object
+  additionalProperties: false
+  properties:
+    kind:
+      type: string
+      enum:
+      - private
+      - public
+      - hostname
+    address:
+      type: string
+    port:
+      type: integer
+    protocol:
+      type: string
+    resolved_ips:
+      type: array
+      items:
+        type: string
+      nullable: true
+  required:
+  - kind
+  - address
+  - port
+  - protocol
+  - resolved_ips
+ServerDisk:
+  type: object
+  additionalProperties: false
+  properties:
+    id:
+      type: string
+    kind:
+      type: string
+      enum:
+      - system
+      - data
+    type:
+      type: string
+    size_gib:
+      type: integer
+      format: int64
+    device:
+      type: string
+    encrypted:
+      type: boolean
+  required:
+  - id
+  - kind
+  - type
+  - size_gib
+  - device
+  - encrypted
+Resource:
+  type: object
+  additionalProperties: false
+  properties:
+    id:
+      type: integer
+      format: int64
+      minimum: 1
+      x-go-type: uint64
+    project_id:
+      type: integer
+      format: int64
+      minimum: 1
+      x-go-type: uint64
+    source_id:
+      type: integer
+      format: int64
+      minimum: 1
+      x-go-type: uint64
+    provider:
+      $ref: ../openapi.yaml#/components/schemas/Provider
+    resource_type:
+      $ref: ../openapi.yaml#/components/schemas/ResourceType
+    external_id:
+      type: string
+    name:
+      type: string
+    region:
+      type: string
+    zone:
+      type: string
+    cloud_status:
+      type: string
+    asset_status:
+      type: string
+      enum:
+      - active
+      - lost
+    first_seen_at:
+      type: string
+      format: date-time
+    last_seen_at:
+      type: string
+      format: date-time
+    missing_since:
+      type: string
+      format: date-time
+      nullable: true
+    created_at:
+      type: string
+      format: date-time
+    updated_at:
+      type: string
+      format: date-time
+    source_name:
+      type: string
+    endpoints:
+      type: array
+      items:
+        $ref: ../openapi.yaml#/components/schemas/Endpoint
+      nullable: true
+    disks:
+      type: array
+      items:
+        $ref: ../openapi.yaml#/components/schemas/ServerDisk
+      nullable: true
+    project_name:
+      type: string
+    engine:
+      type: string
+    engine_version:
+      type: string
+    network_type:
+      type: string
+    instance_type:
+      type: string
+    storage_type:
+      type: string
+    vcpu:
+      type: integer
+    memory:
+      type: integer
+      format: int64
+    storage_size_gib:
+      type: integer
+      format: int64
+  required:
+  - id
+  - project_id
+  - source_id
+  - provider
+  - resource_type
+  - external_id
+  - name
+  - region
+  - zone
+  - cloud_status
+  - asset_status
+  - first_seen_at
+  - last_seen_at
+  - missing_since
+  - created_at
+  - updated_at
+  - source_name
+  - endpoints
+  - disks
+  description: 统一只读资产视图；未适用或不可确定的类型专属字段省略。memory单位MiB，容量单位GiB；不返回原始云属性。
+ResourcePage:
+  type: object
+  additionalProperties: false
+  properties:
+    items:
+      type: array
+      items:
+        $ref: ../openapi.yaml#/components/schemas/Resource
+    total:
+      type: integer
+      format: int64
+      minimum: 0
+    page:
+      type: integer
+    page_size:
+      type: integer
+  required:
+  - items
+  - total
+  - page
+  - page_size

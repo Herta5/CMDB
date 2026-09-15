@@ -1,5 +1,10 @@
 .git
 .worktrees
+.gocache*
+.gomodcache*
+.gopath
+.cache
+.codegraph
 .agents
 .codex
 .superpowers
