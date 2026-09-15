@@ -629,7 +629,8 @@ describe('项目控制台页面', () => {
     expect(text(root)).toContain('云平台：AWS')
     await all(root).find(n => n.type === 'button' && n.props['aria-label'] === '移除云平台筛选')!.props.onClick()
     await flush()
-    expect(get).toHaveBeenLastCalledWith('/projects/2/resources', { params: expect.objectContaining({ provider: '', page: 1 }) })
+    expect(get).toHaveBeenLastCalledWith('/projects/2/resources', { params: expect.objectContaining({ page: 1 }) })
+    expect(get.mock.lastCall?.[1]?.params).not.toHaveProperty('provider')
     app.unmount()
   })
   it('服务器列设置只允许隐藏来源、类型、实例类型和地域', async () => {

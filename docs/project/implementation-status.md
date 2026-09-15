@@ -72,3 +72,9 @@
 类型非法的数字查询现在返回安全 `400`，不再将非数字字符串静默当作零值。合法请求的路径、公开字段、默认值、安全业务错误、项目隔离和资源生命周期沿用既有语义。离线文档提供 bundled OpenAPI，未增加生产在线调试入口或运行时响应 Schema 校验。
 
 本轮生产 Docker 镜像已构建通过；验收环境使用隔离 PostgreSQL 容器且已清理，未访问真实云账号，未变更正在运行的部署。前端构建保留既有依赖注释及较大 chunk 提示，不属于本次接口契约重构的功能差距。
+
+## 资产列表空筛选回归修复
+
+以 `675b568` 为修复前基线，资产页未填写的筛选被序列化为 `provider=` 等空参数，在 OpenAPI 请求校验中返回 `400 RESOURCE_INVALID_QUERY`。`frontend/src/modules/resource/api.ts` 现对具体项目及所有项目查询统一省略空字符串，保留有效筛选、数字零、排序与分页，不修改调用方对象或放宽服务端校验；对应要求见 [frontend-guidelines.md](frontend-guidelines.md#资源列表)，验收见 AC-048。
+
+已实现并验证：`frontend/src/modules/resource/api.test.ts` 新增 8 项真实 Axios URL 序列化回归，其中 6 项在修复前因空筛选失败、修复后通过；`frontend/src/modules/project/pages.test.ts` 验证移除筛选后不再传空值。前端全量 203 项测试与类型检查通过，生产 Docker 镜像构建通过；隔离 PostgreSQL 17 与真实应用中，三类资产在两类项目上下文的请求均返回 `200`，原始空参数请求均复现 `400`。隔离验证仅使用虚构账号和空资产数据，未连接现有业务数据库或真实云平台；测试容器与网络已清理。

@@ -22,10 +22,14 @@ const toJob = (v: JobDTO): SyncJob => ({ id: v.id, sourceId: v.source_id, status
 
 /** 查询指定平台的接入源。 */
 export async function listSources(projectId: number, provider?: Provider) { return (await client.listSources(projectId, { provider }) ?? []).map(toSource) }
+/** 未填写的筛选应省略；空字符串会被契约拒绝，数值零等明确输入必须保留。 */
+function resourceQueryParams(params: ListAllResourcesParams): ListAllResourcesParams {
+  return Object.fromEntries(Object.entries(params).filter(([, value]) => value !== ''))
+}
 /** 查询资源并传递契约声明的服务端分页筛选条件。 */
-export async function listResources(projectId: number, params: ListProjectResourcesParams) { const value = await client.listProjectResources(projectId, params); return { items: (value.items ?? []).map(toResource), total: value.total } }
+export async function listResources(projectId: number, params: ListProjectResourcesParams) { const value = await client.listProjectResources(projectId, resourceQueryParams(params)); return { items: (value.items ?? []).map(toResource), total: value.total } }
 /** 系统管理员查询所有项目资源，搜索、排序和分页都由服务端统一执行。 */
-export async function listAllResources(params: ListAllResourcesParams) { const value = await client.listAllResources(params); return { items: (value.items ?? []).map(toResource), total: value.total } }
+export async function listAllResources(params: ListAllResourcesParams) { const value = await client.listAllResources(resourceQueryParams(params)); return { items: (value.items ?? []).map(toResource), total: value.total } }
 /** 查询最近同步任务。 */
 export async function listJobs(projectId: number, provider: Provider, sourceId?: number) { const value = await client.listSyncJobs(projectId, { provider, ...(sourceId ? { source_id: sourceId } : {}), page: 1, page_size: 20 }); return { items: (value.items ?? []).map(toJob), total: value.total } }
 /** 创建接入源，完整凭证只在本次请求体内出现。 */
