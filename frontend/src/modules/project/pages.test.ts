@@ -1045,45 +1045,115 @@ describe('项目控制台页面', () => {
     expect(all(root).some(n => n.type === 'button' && text(n) === '保存修改')).toBe(true)
     app.unmount()
   })
-  it('系统管理员确认后删除其他用户，当前用户没有删除入口', async () => {
+  it('用户列表只提供编辑，删除在编辑中确认且等待成功后关闭窗口', async () => {
     useAuthStore().acceptSession('管理员会话', { username: 'admin', displayName: '系统管理员', globalRole: 'system_admin' })
     get.mockImplementation((url: string) => Promise.resolve(url === '/users' ? [
       { username: 'admin', display_name: '系统管理员', email: '', global_role: 'system_admin', status: 'active', project_permissions: [] },
       { username: 'cloud_user', display_name: '云资源用户', email: '', global_role: 'user', status: 'active', project_permissions: [] },
     ] : []))
-    remove.mockResolvedValue(undefined)
+    let finishDelete!: () => void
+    remove.mockImplementation(() => new Promise<void>(resolve => { finishDelete = resolve }))
     const { root, app } = await mount(UserManagementPage, '/users')
-    const deleteButtons = all(root).filter(n => n.type === 'button' && text(n) === '删除')
-    expect(deleteButtons).toHaveLength(1)
-    await deleteButtons[0].props.onClick()
-    await flush()
-    expect(text(root)).toContain('确认删除用户')
-    await all(root).find(n => n.type === 'button' && text(n) === '确认删除')!.props.onClick()
-    await flush()
-    expect(remove).toHaveBeenCalledWith('/users/cloud_user')
-    expect(text(root)).not.toContain('云资源用户')
-    expect(text(root)).toContain('系统管理员')
-    app.unmount()
+    try {
+      const rows = all(root).filter(n => n.type === 'tr' && all(n).some(c => c.type === 'td'))
+      expect(rows.map(row => all(row).filter(n => n.type === 'button').map(text))).toEqual([['编辑'], ['编辑']])
+      await all(rows[1]!).find(n => n.type === 'button' && text(n) === '编辑')!.props.onClick()
+      await flush()
+      all(root).find(n => n.props.name === 'display-name')!.props['onUpdate:modelValue']('未保存的名称')
+      all(root).find(n => n.props.name === 'password')!.props['onUpdate:modelValue']('virtual-new-password')
+      await all(root).find(n => n.type === 'button' && text(n) === '删除用户')!.props.onClick()
+      await flush()
+      let confirmation = all(root).find(n => n.props.role === 'alertdialog')!
+      expect(text(confirmation)).toContain('云资源用户（cloud_user）')
+      expect(remove).not.toHaveBeenCalled()
+      expect(all(root).some(n => n.props.role === 'dialog')).toBe(false)
+      await all(confirmation).find(n => n.type === 'button' && text(n) === '取消')!.props.onClick()
+      await flush()
+      expect(all(root).find(n => n.props.name === 'display-name')?.value).toBe('未保存的名称')
+      expect(remove).not.toHaveBeenCalled()
+      await all(root).find(n => n.type === 'button' && text(n) === '删除用户')!.props.onClick()
+      await flush()
+      confirmation = all(root).find(n => n.props.role === 'alertdialog')!
+      const deletion = all(confirmation).find(n => n.type === 'button' && text(n) === '确认删除')!.props.onClick()
+      await flush()
+      expect(all(confirmation).filter(n => n.type === 'button').every(n => n.props.disabled)).toBe(true)
+      expect(text(root)).toContain('正在删除…')
+      expect(text(root)).toContain('云资源用户')
+      finishDelete()
+      await deletion
+      await flush()
+      expect(remove).toHaveBeenCalledWith('/users/cloud_user')
+      expect(text(root)).not.toContain('云资源用户')
+      expect(all(root).some(n => ['dialog', 'alertdialog'].includes(n.props.role))).toBe(false)
+      expect(all(root).some(n => n.props.name === 'password')).toBe(false)
+      expect(text(root)).toContain('系统管理员')
+    } finally { app.unmount() }
   })
-  it('用户管理以用户名展示，并按当前用户名保护删除、降级和停用入口', async () => {
+  it.each([
+    ['system_admin', [], '所有项目'],
+    ['system_admin', [{ project_id: 2, project_name: '平台项目', role: 'member' }], '所有项目'],
+    ['user', [], '未授权'],
+    ['user', [{ project_id: 2, project_name: '平台项目', role: 'member' }], '1 个项目'],
+  ])('用户项目权限根据全局角色 %s 和成员关系展示有效范围', async (globalRole, permissions, expected) => {
+    useAuthStore().acceptSession('管理员会话', { username: 'admin', globalRole: 'system_admin' })
+    get.mockImplementation((url: string) => Promise.resolve(url === '/users' ? [
+      { username: 'account', display_name: '测试用户', email: '', global_role: globalRole, status: 'active', project_permissions: permissions },
+    ] : []))
+    const { root, app } = await mount(UserManagementPage, '/users')
+    try {
+      const row = all(root).find(n => n.type === 'tr' && all(n).some(c => c.type === 'td'))!
+      expect(text(row.children.filter(n => n.type === 'td')[3]!)).toBe(expected)
+    } finally { app.unmount() }
+  })
+  it('显示名称在用户名上方，自己的编辑窗口和创建窗口没有删除入口', async () => {
     useAuthStore().acceptSession('管理员会话', { username: 'admin', displayName: '系统管理员', globalRole: 'system_admin' })
     get.mockImplementation((url: string) => Promise.resolve(url === '/users' ? [
       { username: 'admin', display_name: '系统管理员', email: '', global_role: 'system_admin', status: 'active', project_permissions: [] },
       { username: 'cloud_user', display_name: '云资源用户', email: '', global_role: 'user', status: 'active', project_permissions: [] },
+      { username: 'legacy_user', display_name: '', email: '', global_role: 'user', status: 'active', project_permissions: [] },
     ] : []))
-
     const { root, app } = await mount(UserManagementPage, '/users')
-
-    expect(text(root)).toContain('admin')
-    expect(text(root)).toContain('cloud_user')
-    expect(text(root)).not.toContain('ID')
-    expect(all(root).filter(n => n.type === 'button' && text(n) === '删除')).toHaveLength(1)
-
-    await all(root).filter(n => n.type === 'button' && text(n) === '编辑')[0]!.props.onClick()
-    await flush()
-    expect(all(root).find(n => n.props.name === 'global-role')?.props.disabled).toBe(true)
-    expect(all(root).find(n => n.props.name === 'status')?.props.disabled).toBe(true)
-    app.unmount()
+    try {
+      const cells = all(root).filter(n => n.type === 'tr').flatMap(row => row.children.filter(n => n.type === 'td').slice(0, 1))
+      expect(cells.map(cell => all(cell).filter(n => n.type === 'strong').map(text))).toEqual([['系统管理员'], ['云资源用户'], ['legacy_user']])
+      expect(cells.map(cell => all(cell).filter(n => n.type === 'span').map(text))).toEqual([['admin'], ['cloud_user'], ['legacy_user']])
+      expect(text(cells[1]!)).toBe('云资源用户cloud_user')
+      expect(text(root)).not.toContain('ID')
+      await all(root).filter(n => n.type === 'button' && text(n) === '编辑')[0]!.props.onClick()
+      await flush()
+      expect(all(root).find(n => n.props.name === 'global-role')?.props.disabled).toBe(true)
+      expect(all(root).find(n => n.props.name === 'status')?.props.disabled).toBe(true)
+      expect(all(root).some(n => n.type === 'button' && text(n) === '删除用户')).toBe(false)
+      await all(root).find(n => n.type === 'button' && text(n) === '取消')!.props.onClick()
+      await flush()
+      await all(root).find(n => n.type === 'button' && text(n) === '创建用户')!.props.onClick()
+      await flush()
+      expect(all(root).some(n => n.type === 'button' && text(n) === '删除用户')).toBe(false)
+    } finally { app.unmount() }
+  })
+  it('编辑中删除失败时保留确认目标并显示安全错误，允许重试', async () => {
+    useAuthStore().acceptSession('管理员会话', { username: 'admin', globalRole: 'system_admin' })
+    get.mockImplementation((url: string) => Promise.resolve(url === '/users' ? [
+      { username: 'cloud_user', display_name: '云资源用户', email: '', global_role: 'user', status: 'active', project_permissions: [] },
+    ] : []))
+    remove.mockRejectedValueOnce({ response: { status: 500, data: { code: 'USER_SERVICE_UNAVAILABLE', message: '不可展示的内部错误' } } }).mockResolvedValue(undefined)
+    const { root, app } = await mount(UserManagementPage, '/users')
+    try {
+      await all(root).find(n => n.type === 'button' && text(n) === '编辑')!.props.onClick()
+      await flush()
+      await all(root).find(n => n.type === 'button' && text(n) === '删除用户')!.props.onClick()
+      await flush()
+      await all(root).find(n => n.type === 'button' && text(n) === '确认删除')!.props.onClick()
+      await flush()
+      const confirmation = all(root).find(n => n.props.role === 'alertdialog')!
+      expect(text(confirmation)).toContain('用户删除失败，请稍后重试')
+      expect(text(root)).not.toContain('不可展示的内部错误')
+      expect(text(root)).toContain('云资源用户')
+      await all(confirmation).find(n => n.type === 'button' && text(n) === '确认删除')!.props.onClick()
+      await flush()
+      expect(text(root)).not.toContain('云资源用户')
+      expect(all(root).some(n => ['dialog', 'alertdialog'].includes(n.props.role))).toBe(false)
+    } finally { app.unmount() }
   })
   it('创建用户时拒绝非法用户名且不提交请求', async () => {
     get.mockResolvedValue([])

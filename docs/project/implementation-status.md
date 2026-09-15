@@ -87,3 +87,9 @@
 实现证据：`backend/internal/platform/httpserver/integration_test.go` 覆盖创建与普通编辑响应，`source_contract_test.go` 覆盖两平台完整账号、当前角色与成员关系、匿名和无权读取、客户端指定账号被拒绝；`frontend/src/api/client-contract.test.ts` 验证字段映射与编辑请求，`frontend/src/modules/project/pages.test.ts` 验证卡片、编辑表单隔离和项目切换清理。前端全量 205 项测试、类型检查和生产构建通过；`scripts/test-backend.sh` 使用隔离 PostgreSQL 17 运行全量后端测试通过，并完成测试容器与网络清理；`scripts/check-api.sh main` 的生成一致性与历史接口兼容检查通过，生产 Docker 镜像已构建。
 
 边界：仅授权接入源响应和卡片展示账号，凭证、密文与身份验证时间继续隐藏，错误、运行日志和审计不增加账号标识。项目成员的 HTTP 读取权限已验证；上表已记录的普通成员导航与路由只读可达差距仍存在，此次没有修改页面准入或操作权限。云身份测试使用虚构账号与模拟适配器。
+
+## 用户管理展示与编辑内删除
+
+以 `c6363ff` 为本轮实现前基线，按 AC-050 调整用户管理：显示名称在上、用户名在下，缺失显示名称时回退为用户名；系统管理员的项目权限显示“所有项目”，普通用户显示授权项目数量或“未授权”。列表只保留编辑，删除用户入口移至编辑弹窗底部左侧，保留原始用户身份确认、当前管理员自我保护、取消后返回编辑、删除等待与失败重试；成功后关闭两个弹窗，密码在进入删除确认和关闭时清理。
+
+实现证据为 `frontend/src/modules/user/UserManagementPage.vue` 与 `frontend/src/modules/project/pages.test.ts`：使用真实 Vue 渲染与业务状态验证显示顺序、有效权限、删除入口、取消、延迟成功、失败重试及自身保护。前端全量 210 项测试、TypeScript 类型检查和生产 Docker 镜像构建通过。本轮只修改前端交互与正式规范，后端授权和用户名 API 契约沿用现有实现，没有变更数据库结构。

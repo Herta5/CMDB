@@ -60,13 +60,19 @@ async function submit() {
 }
 
 /** 关闭窗口时立即清除可能输入的新密码。 */
-function closeDialog() { showDialog.value = false; form.password = '' }
-/** 打开删除确认时保存公开用户资料，当前管理员不会获得此操作入口。 */
-function requestDelete(user: User) { deletingUser.value = user; feedback.value = '' }
+function closeDialog() { if (store.submitting) return; showDialog.value = false; form.password = '' }
+/** 从原始编辑对象确认删除，不能使用尚未保存的表单资料改变目标。 */
+function requestDelete() {
+  const user = store.users.find(value => value.username === editingUsername.value)
+  if (store.submitting || !user || user.username === auth.currentUser?.username) return
+  deletingUser.value = user; feedback.value = ''; form.password = ''
+}
+/** 取消确认后保留编辑资料；删除提交中必须等待服务端结果。 */
+function cancelDelete() { if (store.submitting) return; deletingUser.value = null; feedback.value = '' }
 /** 服务端确认删除成功后关闭确认框，失败时保留目标便于重试。 */
 async function confirmDelete() {
-  if (!deletingUser.value) return
-  try { await store.deleteUser(deletingUser.value.username); deletingUser.value = null }
+  if (!deletingUser.value || store.submitting) return
+  try { await store.deleteUser(deletingUser.value.username); deletingUser.value = null; closeDialog() }
   catch { feedback.value = store.errorCode === 'USER_SELF_PROTECTED' ? '不能删除当前管理员' : store.errorCode === 'USER_NOT_FOUND' ? '用户已不存在' : '用户删除失败，请稍后重试' }
 }
 /** 全局角色选择保持明确的联合类型边界。 */
@@ -78,21 +84,21 @@ function setStatus(event: Event) { form.status = (event.target as HTMLSelectElem
 <template>
   <section aria-labelledby="users-title">
     <div class="page-heading"><div><p class="page-eyebrow">管理 / 用户管理</p><h1 id="users-title">用户管理</h1><p class="page-description">维护可登录 CMDB 的用户身份、全局角色与项目权限。</p></div><button class="console-button is-primary" @click="openCreate">创建用户</button></div>
-    <p v-if="feedback" class="form-error" role="alert">{{ feedback }}</p>
+    <p v-if="feedback && !showDialog && !deletingUser" class="form-error" role="alert">{{ feedback }}</p>
     <div class="console-panel" :aria-busy="store.loadState === 'loading'">
       <div class="panel-heading"><h2>用户列表</h2><span class="muted">共 {{ store.users.length }} 个用户</span></div>
       <div v-if="store.loadState === 'loading' || store.loadState === 'idle'" class="page-state"><span class="loading-spinner" /><h3>正在加载用户…</h3></div>
       <div v-else-if="store.loadState === 'forbidden'" class="page-state"><h3>无权访问用户管理</h3></div>
       <div v-else-if="store.loadState === 'error'" class="page-state"><h3>用户加载失败</h3><button class="console-button" @click="store.loadUsers()">重试</button></div>
-      <div v-else class="table-scroll"><table class="console-table"><thead><tr><th>用户</th><th>邮箱</th><th>全局角色</th><th>项目权限</th><th>状态</th><th>操作</th></tr></thead><tbody><tr v-for="user in store.users" :key="user.username"><td><strong>{{ user.username }}</strong><span class="project-code">{{ user.displayName }}</span></td><td>{{ user.email || '未设置' }}</td><td>{{ user.globalRole === 'system_admin' ? '系统管理员' : '普通用户' }}</td><td>{{ user.projectPermissions.length ? `${user.projectPermissions.length} 个项目` : '未授权' }}</td><td>{{ user.status === 'active' ? '已启用' : '已停用' }}</td><td><button class="table-action button-link" :disabled="store.submitting" @click="openEdit(user)">编辑</button><button v-if="user.username !== auth.currentUser?.username" class="table-action button-link is-danger" :disabled="store.submitting" @click="requestDelete(user)">删除</button></td></tr></tbody></table></div>
+      <div v-else class="table-scroll"><table class="console-table"><thead><tr><th>用户</th><th>邮箱</th><th>全局角色</th><th>项目权限</th><th>状态</th><th>操作</th></tr></thead><tbody><tr v-for="user in store.users" :key="user.username"><td><strong>{{ user.displayName || user.username }}</strong><span class="project-code">{{ user.username }}</span></td><td>{{ user.email || '未设置' }}</td><td>{{ user.globalRole === 'system_admin' ? '系统管理员' : '普通用户' }}</td><td>{{ user.globalRole === 'system_admin' ? '所有项目' : user.projectPermissions.length ? `${user.projectPermissions.length} 个项目` : '未授权' }}</td><td>{{ user.status === 'active' ? '已启用' : '已停用' }}</td><td><button class="table-action button-link" :disabled="store.submitting" @click="openEdit(user)">编辑</button></td></tr></tbody></table></div>
     </div>
-    <div v-if="showDialog" class="dialog-backdrop" @click.self="closeDialog"><section class="console-dialog" role="dialog" aria-modal="true" aria-labelledby="user-dialog-title"><div class="dialog-heading"><h2 id="user-dialog-title">{{ editingUsername !== null ? '编辑用户' : '创建用户' }}</h2><button class="dialog-close" @click="closeDialog">×</button></div><form class="project-form" @submit.prevent="submit">
+    <div v-if="showDialog && !deletingUser" class="dialog-backdrop" @click.self="closeDialog"><section class="console-dialog" role="dialog" aria-modal="true" aria-labelledby="user-dialog-title"><div class="dialog-heading"><h2 id="user-dialog-title">{{ editingUsername !== null ? '编辑用户' : '创建用户' }}</h2><button class="dialog-close" :disabled="store.submitting" aria-label="关闭用户编辑窗口" @click="closeDialog">×</button></div><form class="project-form" @submit.prevent="submit">
       <label>用户名<input v-model="form.username" name="username" :disabled="editingUsername !== null" autocomplete="off"></label><label>显示名称<input v-model="form.displayName" name="display-name" autocomplete="off"></label><label>{{ editingUsername !== null ? '重置密码（留空不修改）' : '登录密码' }}<input v-model="form.password" name="password" type="password" autocomplete="new-password"></label><label>邮箱（可选）<input v-model="form.email" name="email" type="email" autocomplete="off"></label>
       <label>全局角色<select name="global-role" :value="form.globalRole" :disabled="editingUsername === auth.currentUser?.username" @change="setGlobalRole"><option value="user">普通用户</option><option value="system_admin">系统管理员</option></select><small>{{ form.globalRole === 'system_admin' ? '可管理所有项目、云同步和用户' : '仅访问已授权项目，能力由项目角色决定' }}</small></label><label>状态<select name="status" :value="form.status" :disabled="editingUsername === auth.currentUser?.username" @change="setStatus"><option value="active">已启用</option><option value="disabled">已停用</option></select></label>
       <fieldset class="form-wide permission-fieldset"><legend>项目权限</legend><p class="role-help">项目管理员：查看资产，管理成员、接入源及同步任务；项目成员：仅查看项目和资产。</p><p v-if="projectStore.listState === 'loading'" class="muted">正在加载项目…</p><p v-else-if="!projectStore.projects.length" class="muted">暂无可授权项目</p><div v-for="project in projectStore.projects" :key="project.id" class="permission-row"><label class="checkbox-field"><input :name="`project-${project.id}`" type="checkbox" :checked="projectSelected(project.id)" @change="toggleProject(project.id, ($event.target as HTMLInputElement).checked)">{{ project.name }}</label><select :name="`project-role-${project.id}`" :value="projectRole(project.id)" :disabled="!projectSelected(project.id)" @change="setProjectRole(project.id, ($event.target as HTMLSelectElement).value as ProjectPermission['role'])"><option value="project_admin">项目管理员</option><option value="member">项目成员</option></select></div></fieldset>
-      <p v-if="feedback" class="form-error">{{ feedback }}</p><div class="dialog-actions form-wide"><button type="button" class="console-button" @click="closeDialog">取消</button><button class="console-button is-primary" :disabled="store.submitting">{{ store.submitting ? '正在保存…' : editingUsername !== null ? '保存修改' : '创建用户' }}</button></div>
+      <p v-if="feedback" class="form-error">{{ feedback }}</p><div class="dialog-actions form-wide user-dialog-actions"><button v-if="editingUsername !== null && editingUsername !== auth.currentUser?.username" type="button" class="console-button is-danger user-delete-action" :disabled="store.submitting" @click="requestDelete">删除用户</button><button type="button" class="console-button" :disabled="store.submitting" @click="closeDialog">取消</button><button class="console-button is-primary" :disabled="store.submitting">{{ store.submitting ? '正在保存…' : editingUsername !== null ? '保存修改' : '创建用户' }}</button></div>
     </form></section></div>
-    <div v-if="deletingUser" class="dialog-backdrop" @click.self="deletingUser = null"><section class="console-dialog" role="alertdialog" aria-modal="true" aria-labelledby="delete-user-title"><div class="dialog-heading"><h2 id="delete-user-title">确认删除用户</h2><button class="dialog-close" @click="deletingUser = null">×</button></div><p>删除“{{ deletingUser.displayName }}（{{ deletingUser.username }}）”后，该用户将无法登录，已有项目权限也会一并移除。</p><div class="dialog-actions"><button class="console-button" :disabled="store.submitting" @click="deletingUser = null">取消</button><button class="console-button is-danger-solid" :disabled="store.submitting" @click="confirmDelete">{{ store.submitting ? '正在删除…' : '确认删除' }}</button></div></section></div>
+    <div v-if="deletingUser" class="dialog-backdrop" @click.self="cancelDelete"><section class="console-dialog" role="alertdialog" aria-modal="true" aria-labelledby="delete-user-title"><div class="dialog-heading"><h2 id="delete-user-title">确认删除用户</h2><button class="dialog-close" :disabled="store.submitting" aria-label="取消删除用户" @click="cancelDelete">×</button></div><p>删除“{{ deletingUser.displayName }}（{{ deletingUser.username }}）”后，该用户将无法登录，已有项目权限也会一并移除。</p><p v-if="feedback" class="form-error" role="alert">{{ feedback }}</p><div class="dialog-actions"><button class="console-button" :disabled="store.submitting" @click="cancelDelete">取消</button><button class="console-button is-danger-solid" :disabled="store.submitting" @click="confirmDelete">{{ store.submitting ? '正在删除…' : '确认删除' }}</button></div></section></div>
   </section>
 </template>
 
@@ -102,4 +108,7 @@ function setStatus(event: Event) { form.status = (event.target as HTMLSelectElem
 .permission-fieldset legend { padding: 0 6px; font-weight: 600; }
 .permission-row { display: grid; grid-template-columns: minmax(0, 1fr) 160px; gap: 16px; align-items: center; padding: 8px 0; }
 .permission-row + .permission-row { border-top: 1px solid var(--cmdb-border); }
+/* 删除与保存分置两侧，避免相邻按钮造成误操作。 */
+.user-dialog-actions { flex-wrap: wrap; }
+.user-delete-action { margin-right: auto; }
 </style>
