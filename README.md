@@ -8,7 +8,18 @@ CMDB 是面向公有云的资源配置管理平台，业务项目是最高级的
 
 ## 技术栈
 
-后端使用 Go 1.25.1、Gin、GORM；前端使用 Vue 3、TypeScript、Pinia、Vue Router、Element Plus；数据库使用 PostgreSQL 17。Docker Compose 启动一个 PostgreSQL 容器和一个同时提供前端静态文件与 API 的应用容器。
+| 层次 | 技术与版本 | 职责 |
+| --- | --- | --- |
+| 后端 | Go 1.25.1、Gin、GORM | HTTP 服务、领域逻辑与数据访问。 |
+| 前端 | Vue 3、TypeScript、Pinia、Vue Router、Element Plus | 控制台页面、状态管理与路由。 |
+| 数据库 | PostgreSQL 17 | 业务数据持久化；集成测试使用隔离的真实数据库。 |
+| 接口契约 | OpenAPI 3.0.3 | 统一维护公开 HTTP 路径、参数、响应和状态码。 |
+| 后端接口生成与校验 | oapi-codegen 2.5.1、kin-openapi 0.133.0 | 生成 Go 类型与 Gin 严格服务端接口，执行请求 Schema 校验。 |
+| 前端接口生成 | Orval 7.13.2、Axios | 从同一契约生成 TypeScript 类型和客户端，通过共享请求通道调用。 |
+| 契约兼容检查 | oasdiff 1.11.7、GitHub Actions | 检查历史契约兼容性，并在 CI 中检查生成产物一致性。 |
+| 部署 | Docker Compose | 启动一个 PostgreSQL 容器和一个同时提供前端静态文件与 API 的应用容器。 |
+
+接口契约入口为 [`api/openapi.yaml`](api/openapi.yaml)，双端生成产物纳入版本控制。开发依赖与生成、检查命令见 [接口开发说明](api/README.md)，契约维护与验收要求见 [接口契约规范](docs/project/api-contract.md)。离线规范合并使用 Python 与 PyYAML 6.0.2，仅用于开发和 CI。
 
 ## 构建应用镜像
 
