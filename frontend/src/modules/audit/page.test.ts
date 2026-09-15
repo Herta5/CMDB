@@ -78,6 +78,46 @@ describe('审计日志页面', () => {
     app.unmount()
   })
 
+  it('在列表中以图形和文字直接展示全部审计结果', async () => {
+    const base = {
+      actor_username: 'audit_admin', actor_display_name: '审计管理员', project_id: 7, project_name: '云项目',
+      resource_type: 'resource_source', resource_id: '1', resource_name: '生产环境阿里云', request_ip: '', created_at: '2026-09-10T08:00:00Z',
+    }
+    get.mockResolvedValue({
+      items: [
+        { ...base, id: 10, action: 'source.synced', detail: { status: 'success' } },
+        { ...base, id: 11, action: 'source.synced', detail: { status: 'partial_success' } },
+        { ...base, id: 12, action: 'source.synced', detail: { status: 'failed' } },
+        { ...base, id: 13, action: 'source.connection_tested', detail: { reachable_types: ['ecs'], failed_types: [] } },
+        { ...base, id: 14, action: 'source.connection_tested', detail: { reachable_types: ['ecs'], failed_types: ['rds'] } },
+        { ...base, id: 15, action: 'source.connection_tested', detail: { reachable_types: [], failed_types: ['ecs'] } },
+        { ...base, id: 16, action: 'project.created', resource_type: 'project', detail: {} },
+        { ...base, id: 17, action: 'source.synced', detail: {} },
+      ],
+      total: 8, page: 1, page_size: 20,
+    })
+
+    const { app, root } = await mountAuditPage()
+    const table = all(root).find(value => value.type === 'table')!
+    const headings = all(table).filter(value => value.type === 'th').map(text)
+    const rows = all(table).filter(value => value.type === 'tbody').flatMap(value => value.children.filter(child => child.type === 'tr'))
+    const results = rows.map(row => row.children.filter(child => child.type === 'td').map(text)[4])
+
+    expect(headings).toEqual(['时间', '操作人', '项目', '操作', '结果', '对象', '来源 IP', '详情'])
+    expect(results).toEqual(['✓ 成功', '! 部分成功', '× 失败', '✓ 成功', '! 部分成功', '× 失败', '✓ 成功', '? 状态未知'])
+    app.unmount()
+  })
+
+  it('操作人优先展示显示名称并在下方展示用户名', async () => {
+    const { app, root } = await mountAuditPage()
+    const table = all(root).find(value => value.type === 'table')!
+    const firstRow = all(table).find(value => value.type === 'tbody')!.children.find(value => value.type === 'tr')!
+    const actorCell = firstRow.children.filter(value => value.type === 'td')[1]
+
+    expect(text(actorCell)).toBe('审计管理员audit_admin')
+    app.unmount()
+  })
+
   it('在同步审计没有有效变化时提示空变化状态', async () => {
     get.mockResolvedValue({ items: [{ id: 6, actor_username: 'audit_admin', actor_display_name: '审计管理员', project_id: 7, project_name: '云项目', action: 'source.synced', resource_type: 'resource_source', resource_id: '1', resource_name: '生产环境阿里云', detail: { status: 'success', trigger: 'scheduled', statistics: {}, changes: { created: null, updated: { ec2: [] } } }, request_ip: '', created_at: '2026-09-10T08:00:00Z' }], total: 1, page: 1, page_size: 20 })
     const { app, root } = await mountAuditPage()
