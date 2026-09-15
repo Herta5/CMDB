@@ -11,6 +11,8 @@ import (
 	"testing"
 	"time"
 
+	"cmdb/internal/api"
+	"cmdb/internal/api/generated"
 	"cmdb/internal/audit"
 	"github.com/gin-gonic/gin"
 )
@@ -34,7 +36,7 @@ func TestHTTPFiltersActorUsernameExactly(t *testing.T) {
 		t.Fatalf("删除测试操作者失败：%v", err)
 	}
 	router := gin.New()
-	router.GET("/audit", audit.NewHTTPHandler(audit.NewService(audit.NewRepository(db))).ListGlobal)
+	generated.RegisterHandlers(router, generated.NewStrictHandler(api.New(nil, nil, nil, audit.NewService(audit.NewRepository(db))), nil))
 	for _, tt := range []struct {
 		name, username string
 		wantID         uint64
@@ -48,7 +50,7 @@ func TestHTTPFiltersActorUsernameExactly(t *testing.T) {
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			response := httptest.NewRecorder()
-			router.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/audit?actor_username="+url.QueryEscape(tt.username), nil))
+			router.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/v1/audit-logs?actor_username="+url.QueryEscape(tt.username), nil))
 			if response.Code != http.StatusOK {
 				t.Fatalf("用户名筛选必须成功：%d %s", response.Code, response.Body.String())
 			}

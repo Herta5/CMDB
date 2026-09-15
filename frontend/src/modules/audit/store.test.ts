@@ -5,7 +5,7 @@ import { createPinia, setActivePinia } from 'pinia'
 import request from '@/utils/request'
 import { useAuditStore } from './store'
 
-vi.mock('@/utils/request', () => ({ default: { get: vi.fn() } }))
+vi.mock('@/utils/request', async () => { const { requestMock } = await import('@/test-utils/request-mock'); return { default: requestMock({ get: vi.fn() }) } })
 const get = vi.mocked(request.get)
 
 describe('审计日志状态', () => {

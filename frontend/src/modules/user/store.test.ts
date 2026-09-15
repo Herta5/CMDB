@@ -2,7 +2,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { createPinia, setActivePinia } from 'pinia'
 const { get, post, put, remove } = vi.hoisted(() => ({ get: vi.fn(), post: vi.fn(), put: vi.fn(), remove: vi.fn() }))
-vi.mock('@/utils/request', () => ({ default: { get, post, put, delete: remove } }))
+vi.mock('@/utils/request', async () => { const { requestMock } = await import('@/test-utils/request-mock'); return { default: requestMock({ get, post, put, delete: remove }) } })
 import { useUserStore } from './store'
 
 const permissions = [{ project_id: 7, project_name: '平台项目', role: 'project_admin' as const }]

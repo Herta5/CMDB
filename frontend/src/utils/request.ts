@@ -3,27 +3,6 @@ import axios, { type InternalAxiosRequestConfig } from 'axios'
 import { ElMessage } from 'element-plus'
 import { useAuthStore } from '@/modules/auth/store'
 
-export interface ApiResponse<T> {
-  code: number
-  message: string
-  data: T
-}
-
-export interface PagePayload<T> {
-  items: T[]
-  total: number
-  page: number
-  page_size: number
-}
-
-export function extractPayload<T>(response: ApiResponse<T>): T {
-  return response.data
-}
-
-export function extractPagePayload<T>(response: ApiResponse<PagePayload<T>>): PagePayload<T> {
-  return extractPayload(response)
-}
-
 const request = axios.create({
   baseURL: '/api/v1',
   timeout: 15000,
@@ -42,24 +21,21 @@ request.interceptors.request.use((config) => {
   return config
 })
 
-request.interceptors.response.use(
-  (res) => {
-    // 新版 CMDB API 直接返回资源数据，统一在此剥离 Axios 响应对象。
-    return res.data
-  },
-  handleResponseError,
-)
+request.interceptors.response.use(undefined, handleResponseError)
 
 /** 只让仍属于当前会话的 401 执行全局失效；旧请求仍向原调用方返回失败。 */
-export function handleResponseError(err: any) {
-  const sent = err.config ? requestSessions.get(err.config) : undefined
-  if (err.response?.status === 401 && sent && sent.auth.expireSession(sent.sessionId)) {
+export function handleResponseError(err: unknown) {
+  const responseError = axios.isAxiosError<unknown>(err) ? err : undefined
+  const sent = responseError?.config ? requestSessions.get(responseError.config) : undefined
+  if (responseError?.response?.status === 401 && sent && sent.auth.expireSession(sent.sessionId)) {
     // 认证失效后采用完整跳转，避免已卸载的路由上下文继续渲染受保护页面。
     if (typeof window !== 'undefined' && window.location.pathname !== '/login') {
       window.location.href = '/login'
     }
   }
-  ElMessage.error(err.response?.data?.message || '网络错误')
+  const data = responseError?.response?.data
+  const message = data && typeof data === 'object' && 'message' in data ? data.message : undefined
+  ElMessage.error(typeof message === 'string' && message ? message : '网络错误')
   return Promise.reject(err)
 }
 

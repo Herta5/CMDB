@@ -8,7 +8,7 @@ vi.mock('element-plus', () => ({ ElMessage: { error: vi.fn() } }))
 const { requestGet, requestPost } = vi.hoisted(() => ({ requestGet: vi.fn(), requestPost: vi.fn() }))
 
 // 认证状态测试保留真实 API 映射，仅替换 HTTP 传输以注入后端原始响应。
-vi.mock('@/utils/request', () => ({ default: { get: requestGet, post: requestPost } }))
+vi.mock('@/utils/request', async () => { const { requestMock } = await import('@/test-utils/request-mock'); return { default: requestMock({ get: requestGet, post: requestPost }) } })
 
 import { getCurrentUser } from './api'
 import { useAuthStore } from './store'

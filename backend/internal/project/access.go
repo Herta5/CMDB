@@ -4,6 +4,7 @@ package project
 import (
 	"errors"
 	"net/http"
+	"strconv"
 
 	"cmdb/internal/identity"
 	"github.com/gin-gonic/gin"
@@ -77,5 +78,20 @@ func abortProjectNotFound(c *gin.Context) {
 // abortProjectError 终止后续处理器链，防止中间件已拒绝请求后仍发生资源读取或写入。
 func abortProjectError(c *gin.Context, status int, code, message string) {
 	c.Abort()
-	writeProjectError(c, status, code, message)
+	c.JSON(status, gin.H{"code": code, "message": message})
+}
+
+// projectIDFromPath 只解析授权所需的项目标识，兼容独立中间件使用 projectId 命名。
+func projectIDFromPath(c *gin.Context) (uint64, bool) {
+	raw := c.Param("id")
+	if raw == "" {
+		raw = c.Param("projectId")
+	}
+	id, err := strconv.ParseUint(raw, 10, 64)
+	return id, err == nil && id > 0
+}
+
+// isSystemAdmin 仅依据认证中间件提供的数据库当前角色判断全局例外。
+func isSystemAdmin(claims identity.UserClaims) bool {
+	return claims.GlobalRole == identity.GlobalRoleSystemAdmin
 }

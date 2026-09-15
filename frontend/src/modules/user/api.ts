@@ -1,5 +1,6 @@
 // 本文件封装用户管理接口，密码只允许出现在创建或显式重置请求中。
-import request from '@/utils/request'
+import * as client from '@/api/generated/cmdb'
+import type { PublicUser } from '@/api/generated/models'
 
 /** User 是控制台可显示的公开身份资料，不包含任何认证凭证。 */
 export interface User {
@@ -35,38 +36,29 @@ export interface UpdateUserInput {
   projectPermissions: ProjectPermission[]
 }
 
-interface UserDTO {
-  username: string
-  display_name: string
-  email: string
-  global_role: 'system_admin' | 'user'
-  status: 'active' | 'disabled'
-  project_permissions?: Array<{ project_id: number; project_name: string; role: ProjectPermission['role'] }>
-}
-
 /** 显式选择公开字段，即使后端意外增加字段也不会进入页面状态。 */
-function toUser(value: UserDTO): User {
+function toUser(value: PublicUser): User {
   return { username: value.username, displayName: value.display_name, email: value.email, globalRole: value.global_role, status: value.status, projectPermissions: (value.project_permissions ?? []).map(permission => ({ projectId: permission.project_id, projectName: permission.project_name, role: permission.role })) }
 }
 
 /** 列出系统管理员可管理的全局用户。 */
 export async function listUsers(): Promise<User[]> {
-  const values = await request.get('/users') as UserDTO[] | null
+  const values = await client.listUsers()
   return (values ?? []).map(toUser)
 }
 
 /** 创建用户时同时提交全局角色、状态和完整项目权限。 */
 export async function createUser(input: CreateUserInput): Promise<User> {
-  const value = await request.post('/users', { username: input.username, password: input.password, display_name: input.displayName, email: input.email, global_role: input.globalRole, status: input.status, project_permissions: input.projectPermissions.map(permission => ({ project_id: permission.projectId, role: permission.role })) }) as UserDTO
+  const value = await client.createUser({ username: input.username, password: input.password, display_name: input.displayName, email: input.email, global_role: input.globalRole, status: input.status, project_permissions: input.projectPermissions.map(permission => ({ project_id: permission.projectId, role: permission.role })) })
   return toUser(value)
 }
 
 /** 更新用户可维护资料；响应继续通过公开字段白名单转换。 */
 export async function updateUser(username: string, input: UpdateUserInput): Promise<User> {
-  return toUser(await request.put(`/users/${encodeURIComponent(username)}`, { display_name: input.displayName, email: input.email, global_role: input.globalRole, status: input.status, password: input.password, project_permissions: input.projectPermissions.map(permission => ({ project_id: permission.projectId, role: permission.role })) }) as UserDTO)
+  return toUser(await client.updateUser(encodeURIComponent(username), { display_name: input.displayName, email: input.email, global_role: input.globalRole, status: input.status, password: input.password, project_permissions: input.projectPermissions.map(permission => ({ project_id: permission.projectId, role: permission.role })) }))
 }
 
 /** 删除用户身份；关联项目成员关系由服务端统一清理。 */
 export async function deleteUser(username: string): Promise<void> {
-  await request.delete(`/users/${encodeURIComponent(username)}`)
+  await client.deleteUser(encodeURIComponent(username))
 }

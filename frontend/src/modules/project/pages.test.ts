@@ -5,7 +5,7 @@ import { createPinia, setActivePinia } from 'pinia'
 import { createMemoryHistory, createRouter } from 'vue-router'
 import { readFileSync } from 'node:fs'
 const { get, post, put, remove, writeText } = vi.hoisted(() => ({ get: vi.fn(), post: vi.fn(), put: vi.fn(), remove: vi.fn(), writeText: vi.fn() }))
-vi.mock('@/utils/request', () => ({ default: { get, post, put, delete: remove } }))
+vi.mock('@/utils/request', async () => { const { requestMock } = await import('@/test-utils/request-mock'); return { default: requestMock({ get, post, put, delete: remove }) } })
 import { useAuthStore } from '@/modules/auth/store'
 import { useProjectStore } from './store'
 import ProjectListPage from './ProjectListPage.vue'
@@ -71,7 +71,8 @@ beforeEach(() => {
 })
 
 /** 等待页面异步接口与 Vue 更新队列，不引入固定延时。 */
-async function flush() { for (let index = 0; index < 8; index++) await nextTick() }
+/** 等待当前事件循环的微任务完成，不依赖客户端内部 Promise 层数。 */
+async function flush() { await new Promise<void>(resolve => setTimeout(resolve, 0)); await nextTick() }
 async function mount(component: Component, path = '/projects') {
   const router = createRouter({ history: createMemoryHistory(), routes: [
     { path: '/dashboard', component: HomePage },
@@ -868,7 +869,7 @@ describe('项目控制台页面', () => {
     await all(root).find(n => n.type === 'button' && text(n) === '应用筛选')!.props.onClick()
     await flush()
     expect(get).toHaveBeenLastCalledWith('/projects/2/resources', { params: expect.objectContaining({
-      provider: 'aws', source_id: '9', resource_type: 'alb', network_type: 'private', region: 'ap-southeast-1', cloud_status: 'provisioning', asset_status: 'lost', page: 1,
+      provider: 'aws', source_id: 9, resource_type: 'alb', network_type: 'private', region: 'ap-southeast-1', cloud_status: 'provisioning', asset_status: 'lost', page: 1,
     }) })
     expect(text(root)).toContain('类型：ALB')
     expect(text(root)).toContain('网络类型：私网')

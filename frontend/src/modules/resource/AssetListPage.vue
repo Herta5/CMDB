@@ -105,7 +105,7 @@ async function loadAssets() {
   loading.value = true
   try {
     const params = {
-      resource_type: resourceType.value || category.value.types.join(','), provider: provider.value, source_id: sourceID.value,
+      resource_type: resourceType.value || category.value.types.join(','), provider: provider.value, source_id: sourceID.value ? Number(sourceID.value) : undefined,
       keyword: keyword.value, engine: props.category === 'database' ? engine.value : '', network_type: props.category === 'load_balancer' ? networkType.value : '', region: region.value, cloud_status: cloudStatus.value, asset_status: assetStatus.value,
       // 资源列表不提供排序切换，所有请求固定按资产名称升序，避免分页刷新时顺序变化。
       sort_by: 'name', sort_order: 'asc', page: page.value, page_size: pageSize.value,

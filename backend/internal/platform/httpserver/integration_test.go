@@ -349,7 +349,8 @@ func TestProjectBoundaryEndToEnd(t *testing.T) {
 func TestHealthEndpoint(t *testing.T) {
 	server, _ := integrationServer(t)
 	response := integrationRequest(t, server, "", "GET", "/health", nil, 200)
-	if response.Body.String() != `{"status":"ok"}` {
+	var health map[string]string
+	if json.Unmarshal(response.Body.Bytes(), &health) != nil || len(health) != 1 || health["status"] != "ok" {
 		t.Fatal("健康响应不得包含内部配置或凭证")
 	}
 }
@@ -771,7 +772,13 @@ func TestSourceMutationInternalFailureIsSafeAndAtomic(t *testing.T) {
 			}); err != nil {
 				t.Fatal("安装审计失败夹具失败")
 			}
-			response := integrationRequest(t, server, admin, method, path, map[string]any{"provider": "aws", "name": "未提交的新名称", "region": "ap-east-1", "credential": map[string]string{"access_key_id": "identity-ok", "secret_access_key": "identity-test-secret"}, "config": map[string]any{}, "enabled": true, "sync_interval_minutes": 60}, http.StatusInternalServerError)
+			body := map[string]any{"name": "未提交的新名称", "region": "ap-east-1", "credential": map[string]string{"access_key_id": "identity-ok", "secret_access_key": "identity-test-secret"}, "config": map[string]any{}, "sync_interval_minutes": 60}
+			if method == http.MethodPost {
+				body["provider"] = "aws"
+			} else {
+				body["enabled"] = true
+			}
+			response := integrationRequest(t, server, admin, method, path, body, http.StatusInternalServerError)
 			assertIdentityVerificationError(t, response.Body.String(), "SOURCE_SERVICE_UNAVAILABLE")
 			if strings.Contains(response.Body.String(), "虚构数据库") {
 				t.Fatal("内部故障不得暴露数据库原文")
@@ -1194,6 +1201,7 @@ func integrationRequest(t *testing.T, server http.Handler, token, method, path s
 	}
 	response := httptest.NewRecorder()
 	server.ServeHTTP(response, request)
+	assertContractResponse(t, request, response)
 	if response.Code != status {
 		t.Fatalf("%s %s 返回 %d，期望 %d", method, path, response.Code, status)
 	}
@@ -1210,6 +1218,7 @@ func integrationRawRequest(t *testing.T, server http.Handler, token, method, pat
 	}
 	response := httptest.NewRecorder()
 	server.ServeHTTP(response, request)
+	assertContractResponse(t, request, response)
 	if response.Code != status {
 		t.Fatalf("%s %s 返回 %d，期望 %d", method, path, response.Code, status)
 	}

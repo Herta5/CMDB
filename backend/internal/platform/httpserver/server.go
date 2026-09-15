@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"time"
 
+	"cmdb/internal/api"
 	"cmdb/internal/audit"
 	"cmdb/internal/identity"
 	"cmdb/internal/platform/diagnostics"
@@ -40,10 +41,6 @@ func New(dependencies Dependencies) *gin.Engine {
 		output = slog.Default()
 	}
 	engine.Use(requestDiagnostics(output))
-	// 健康检查只报告进程存活，不暴露数据库配置，也不要求部署探针持有用户凭证。
-	engine.GET("/health", func(c *gin.Context) {
-		c.JSON(http.StatusOK, gin.H{"status": "ok"})
-	})
 
 	repository := dependencies.UserRepository
 	var projectRepository project.Repository
@@ -58,74 +55,12 @@ func New(dependencies Dependencies) *gin.Engine {
 	auditRepository := audit.NewRepository(dependencies.Database)
 	identityService := identity.NewService(repository, dependencies.JWTSecret, auditRepository)
 	authenticator := NewAuthenticator(identityService)
-	handler := identity.NewHTTPHandler(identityService)
-	projectHandler := project.NewHTTPHandler(project.NewService(projectRepository, auditRepository))
-	auditHandler := audit.NewHTTPHandler(audit.NewService(auditRepository))
 	resourceService := dependencies.ResourceService
 	if resourceService == nil {
 		resourceService = cloudresource.NewService(cloudresource.NewRepository(dependencies.Database), cloudresource.NewCredentialCipher(dependencies.EncryptionKey), dependencies.Adapters, auditRepository)
 	}
-	resourceHandler := cloudresource.NewHTTPHandler(resourceService)
-	engine.POST("/api/v1/auth/login", handler.Login)
-	engine.GET("/api/v1/me", authenticator.RequireUser(), func(c *gin.Context) {
-		handler.Me(c, CurrentUser(c))
-	})
-	users := engine.Group("/api/v1/users", authenticator.RequireUser())
-	users.GET("", func(c *gin.Context) { handler.ListUsers(c, CurrentUser(c)) })
-	users.POST("", func(c *gin.Context) { handler.CreateUser(c, CurrentUser(c)) })
-	users.DELETE("/:username", func(c *gin.Context) { handler.DeleteUser(c, CurrentUser(c)) })
-	users.PUT("/:username", func(c *gin.Context) { handler.UpdateUser(c, CurrentUser(c)) })
-	users.PUT("/:username/status", func(c *gin.Context) { handler.UpdateUserStatus(c, CurrentUser(c)) })
-	// 全局审计包含无项目归属的用户操作，只允许系统管理员访问。
-	auditLogs := engine.Group("/api/v1/audit-logs", authenticator.RequireUser())
-	auditLogs.GET("", func(c *gin.Context) {
-		if CurrentUser(c).GlobalRole != identity.GlobalRoleSystemAdmin {
-			c.JSON(http.StatusForbidden, gin.H{"code": "AUDIT_FORBIDDEN", "message": "无权查看审计日志"})
-			return
-		}
-		auditHandler.ListGlobal(c)
-	})
-	// “所有项目”资源由后端统一搜索、排序和分页，只向系统管理员开放。
-	engine.GET("/api/v1/resources", authenticator.RequireUser(), func(c *gin.Context) {
-		if CurrentUser(c).GlobalRole != identity.GlobalRoleSystemAdmin {
-			c.JSON(http.StatusForbidden, gin.H{"code": "RESOURCE_FORBIDDEN", "message": "无权查看全部项目资源"})
-			return
-		}
-		resourceHandler.ListAllResources(c)
-	})
-	projects := engine.Group("/api/v1/projects")
-	projects.Use(authenticator.RequireUser())
-	projects.GET("", func(c *gin.Context) {
-		projectHandler.List(c, CurrentUser(c))
-	})
-	projects.POST("", func(c *gin.Context) {
-		projectHandler.Create(c, CurrentUser(c))
-	})
-	projects.PUT("/:id", func(c *gin.Context) {
-		projectHandler.Update(c, CurrentUser(c))
-	})
-	projects.DELETE("/:id", func(c *gin.Context) {
-		projectHandler.Delete(c, CurrentUser(c))
-	})
-	projectReadRoles := []string{project.MemberRoleProjectAdmin, project.MemberRoleMember}
-	projects.GET("/:id", project.RequireRole(projectRepository, projectReadRoles...), projectHandler.Get)
-	members := projects.Group("/:id/members", project.RequireRole(projectRepository, projectReadRoles...))
-	members.GET("", projectHandler.ListMembers)
-	members.POST("", project.RequireRole(projectRepository, project.MemberRoleProjectAdmin), projectHandler.AddMember)
-	members.PUT("/:username", project.RequireRole(projectRepository, project.MemberRoleProjectAdmin), projectHandler.UpdateMemberRole)
-	members.DELETE("/:username", project.RequireRole(projectRepository, project.MemberRoleProjectAdmin), projectHandler.RemoveMember)
-	projects.GET("/:id/member-candidates", project.RequireRole(projectRepository, project.MemberRoleProjectAdmin), projectHandler.ListMemberCandidates)
-	projects.GET("/:id/audit-logs", project.RequireRole(projectRepository, project.MemberRoleProjectAdmin), auditHandler.ListProject)
-	sources := projects.Group("/:id/sources", project.RequireRole(projectRepository, projectReadRoles...))
-	sources.GET("", resourceHandler.ListSources)
-	sources.POST("", project.RequireRole(projectRepository, project.MemberRoleProjectAdmin), resourceHandler.CreateSource)
-	sources.PUT("/:sourceId", project.RequireRole(projectRepository, project.MemberRoleProjectAdmin), resourceHandler.UpdateSource)
-	sources.DELETE("/:sourceId", project.RequireRole(projectRepository, project.MemberRoleProjectAdmin), resourceHandler.DeleteSource)
-	sources.POST("/:sourceId/sync", project.RequireRole(projectRepository, project.MemberRoleProjectAdmin), resourceHandler.SyncSource)
-	sources.POST("/:sourceId/test", project.RequireRole(projectRepository, project.MemberRoleProjectAdmin), resourceHandler.TestSourceConnection)
-	projects.GET("/:id/resources", project.RequireRole(projectRepository, projectReadRoles...), resourceHandler.ListResources)
-	projects.GET("/:id/sync-jobs", project.RequireRole(projectRepository, projectReadRoles...), resourceHandler.ListJobs)
-	projects.POST("/:id/sync-jobs/:jobId/retry", project.RequireRole(projectRepository, project.MemberRoleProjectAdmin), resourceHandler.RetryJob)
+	api.Register(engine, api.New(identityService, project.NewService(projectRepository, auditRepository), resourceService, audit.NewService(auditRepository)), authenticator.RequireUser(), projectRepository)
+
 	return engine
 }
 

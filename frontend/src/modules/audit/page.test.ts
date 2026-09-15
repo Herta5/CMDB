@@ -5,7 +5,7 @@ import { createPinia, setActivePinia } from 'pinia'
 import { createMemoryHistory, createRouter } from 'vue-router'
 
 const { get } = vi.hoisted(() => ({ get: vi.fn() }))
-vi.mock('@/utils/request', () => ({ default: { get } }))
+vi.mock('@/utils/request', async () => { const { requestMock } = await import('@/test-utils/request-mock'); return { default: requestMock({ get }) } })
 import { useAuthStore } from '@/modules/auth/store'
 import { useProjectStore } from '@/modules/project/store'
 import AuditLogPage from './AuditLogPage.vue'

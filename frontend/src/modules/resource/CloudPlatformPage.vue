@@ -3,7 +3,7 @@
 import { computed, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
 import { useProjectStore } from '@/modules/project/store'
 import { useResourceStore } from './store'
-import type { Provider, Source, SourceInput } from './api'
+import type { Provider, Source, SourceInput, SourceCredential } from './api'
 import type { CloudResource, SyncJob } from './api'
 
 const props = withDefaults(defineProps<{ provider?: Provider; syncOnly?: boolean }>(), { provider: 'aliyun', syncOnly: false })
@@ -21,7 +21,7 @@ watch(() => [projects.currentProjectId, props.provider], ([projectId]) => { clos
 /** 资源筛选变化回到第一页，避免旧页码导致误判为空。 */
 async function applyFilters() { store.page = 1; if (projects.currentProjectId) await store.load(projects.currentProjectId, props.provider) }
 /** 按平台构造仅在传输期间存在的凭证对象。 */
-function credential(): Record<string, unknown> {
+function credential(): SourceCredential {
   if (selectedProvider.value === 'aliyun') return { access_key_id: form.accessKeyId, access_key_secret: form.secret }
   return { access_key_id: form.accessKeyId, secret_access_key: form.secret, ...(form.sessionToken ? { session_token: form.sessionToken } : {}) }
 }
@@ -39,8 +39,8 @@ async function submit() {
   submitting.value = true
   const replacingCredential = form.accessKeyId !== '' || form.secret !== ''
   const existing = store.sources.find(source => source.id === editingSourceId.value)
-  const input: SourceInput = { provider: selectedProvider.value, name: form.name, region: form.region, credential: editingSourceId.value && !replacingCredential ? undefined : credential(), config: {}, enabled: existing?.enabled ?? true, syncIntervalMinutes: form.interval }
-  try { if (editingSourceId.value) await store.update(projects.currentProjectId, selectedProvider.value, editingSourceId.value, input, props.syncOnly); else await store.create(projects.currentProjectId, selectedProvider.value, input, props.syncOnly); if (token === sourceDialogToken) dialogOpen.value = false } finally { if (token === sourceDialogToken) { clearSourceCredentials(); submitting.value = false } }
+  const input: SourceInput = { provider: selectedProvider.value, name: form.name, region: form.region, config: {}, enabled: existing?.enabled ?? true, syncIntervalMinutes: form.interval }
+  try { if (editingSourceId.value) await store.update(projects.currentProjectId, selectedProvider.value, editingSourceId.value, { ...input, credential: replacingCredential ? credential() : undefined }, props.syncOnly); else await store.create(projects.currentProjectId, selectedProvider.value, { ...input, credential: credential() }, props.syncOnly); if (token === sourceDialogToken) dialogOpen.value = false } finally { if (token === sourceDialogToken) { clearSourceCredentials(); submitting.value = false } }
 }
 /** 删除前说明服务端依赖保护，避免用户误以为来源删除会级联清理资产。 */
 async function remove(source: Source) { if (window.confirm(`确认删除接入源“${source.name}”吗？存在资产或排队、运行中的同步任务时无法删除。`) && projects.currentProjectId) await store.remove(projects.currentProjectId, source.provider, source.id, props.syncOnly) }

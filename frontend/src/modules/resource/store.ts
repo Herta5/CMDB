@@ -1,14 +1,14 @@
 // 本文件为三个平台页面提供共享状态，平台差异只存在于表单和资源类型展示。
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
-import { createSource as createSourceRequest, deleteSource as deleteSourceRequest, listJobs, listResources, listSources, retrySyncJob, syncSource, testSourceConnection, updateSource as updateSourceRequest, type CloudResource, type Provider, type Source, type SourceInput, type SyncJob } from './api'
+import { createSource as createSourceRequest, deleteSource as deleteSourceRequest, listJobs, listResources, listSources, retrySyncJob, syncSource, testSourceConnection, updateSource as updateSourceRequest, type CreateSourceInput, type CloudResource, type Provider, type Source, type SourceInput, type SyncJob } from './api'
 
 export type ResourceLoadState = 'idle' | 'loading' | 'ready' | 'empty' | 'error' | 'forbidden'
 
 /** 将权限隐藏响应与普通故障区分，页面不得把失败伪装成空数据。 */
 function errorState(error: unknown): ResourceLoadState { const status = (error as { response?: { status?: number } })?.response?.status; return status === 403 || status === 404 ? 'forbidden' : 'error' }
 /** 来源提交完成后原地移除短生命周期凭证值，避免调用方意外持有秘密。 */
-function clearCredential(credential?: Record<string, unknown>) { if (credential) for (const key of Object.keys(credential)) delete credential[key] }
+function clearCredential(credential?: object) { if (credential) for (const key of Object.keys(credential)) Reflect.deleteProperty(credential, key) }
 export const useResourceStore = defineStore('cmdb-resource', () => {
   const sources = ref<Source[]>([]); const resources = ref<CloudResource[]>([]); const jobs = ref<SyncJob[]>([])
   const state = ref<ResourceLoadState>('idle'); const mutationError = ref(''); const syncingSourceId = ref<number | null>(null)
@@ -93,7 +93,7 @@ export const useResourceStore = defineStore('cmdb-resource', () => {
     if (failure) throw failure
   }
   /** 新建后刷新仍有效的页面视图。 */
-  async function create(projectId: number, provider: Provider, input: SourceInput, syncManagement = false) { await mutateSource(projectId, provider, input, syncManagement, () => createSourceRequest(projectId, { ...input, provider })) }
+  async function create(projectId: number, provider: Provider, input: CreateSourceInput, syncManagement = false) { await mutateSource(projectId, provider, input, syncManagement, () => createSourceRequest(projectId, { ...input, provider })) }
   /** 编辑后刷新仍有效的页面视图。 */
   async function update(projectId: number, provider: Provider, sourceId: number, input: SourceInput, syncManagement = false) { await mutateSource(projectId, provider, input, syncManagement, () => updateSourceRequest(projectId, sourceId, { ...input, provider })) }
   /** 服务端确认不存在资产或活动任务依赖后删除来源，随后刷新页面。 */

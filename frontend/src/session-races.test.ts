@@ -7,6 +7,7 @@ import { AxiosError, type AxiosResponse } from 'axios'
 
 vi.mock('element-plus', () => ({ ElMessage: { error: vi.fn() } }))
 import request from '@/utils/request'
+import { apiTransport } from '@/api/transport'
 import { authSessionStorageKey, clearAuthStorage, readAuthSession, saveAuthSession } from '@/utils/auth-storage'
 import { useAuthStore } from '@/modules/auth/store'
 import { useProjectStore } from '@/modules/project/store'
@@ -199,7 +200,7 @@ describe('跨标签页与在途请求的身份隔离', () => {
     const auth = useAuthStore()
     await auth.signIn('user_a', '测试输入')
     saveAuthSession(tokens.user_b, users[1]!)
-    const response = await request.get('/me') as unknown as { username: string }
+    const response = await apiTransport<{ username: string }>({ url: '/api/v1/me' })
     expect(response.username).toBe(auth.currentUser?.username)
   })
 
