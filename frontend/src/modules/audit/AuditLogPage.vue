@@ -34,6 +34,14 @@ const auditResults: Record<string, AuditResult> = {
   failed: { label: '失败', symbol: '×', tone: 'is-failed' },
 }
 const unknownAuditResult: AuditResult = { label: '状态未知', symbol: '?', tone: 'is-unknown' }
+/** ownValue 仅读取映射自有键，历史字符串不得命中 Object 原型属性。 */
+function ownValue<T>(mapping: Record<string, T>, key: string): T | undefined {
+  return Object.prototype.hasOwnProperty.call(mapping, key) ? mapping[key] : undefined
+}
+/** resourceTypes 仅接受非空字符串数组，格式错误的历史摘要不参与结果推导。 */
+function resourceTypes(value: unknown): string[] | null {
+  return Array.isArray(value) && value.every(item => typeof item === 'string' && item.trim()) ? value : null
+}
 
 /** toRFC3339 将本地时间控件转换为带时区的服务端时间边界。 */
 function toRFC3339(value: string) { return value ? new Date(value).toISOString() : undefined }
@@ -73,17 +81,20 @@ function isSyncAudit(item: AuditLog) { return item.action === 'source.synced' }
 /** auditResult 使用服务端事实展示结果；连接测试兼容早期未写状态的可达类型列表。 */
 function auditResult(item: AuditLog): AuditResult {
   const status = typeof item.detail.status === 'string' ? item.detail.status : ''
-  if (item.action === 'source.synced') return auditResults[status] ?? unknownAuditResult
+  const explicitResult = ownValue(auditResults, status)
+  if (item.action === 'source.synced') return explicitResult ?? unknownAuditResult
   if (item.action === 'source.connection_tested') {
-    if (auditResults[status]) return auditResults[status]
-    const reachable = Array.isArray(item.detail.reachable_types) ? item.detail.reachable_types : null
-    const failed = Array.isArray(item.detail.failed_types) ? item.detail.failed_types : null
+    if (explicitResult) return explicitResult
+    const reachable = resourceTypes(item.detail.reachable_types)
+    const failed = resourceTypes(item.detail.failed_types)
     if (!reachable || !failed || (!reachable.length && !failed.length)) return unknownAuditResult
+    const reachableTypes = new Set(reachable)
+    if (failed.some(resourceType => reachableTypes.has(resourceType))) return unknownAuditResult
     if (!failed.length) return auditResults.success
     if (!reachable.length) return auditResults.failed
     return auditResults.partial_success
   }
-  return item.action in actionLabels ? auditResults.success : unknownAuditResult
+  return ownValue(actionLabels, item.action) ? auditResults.success : unknownAuditResult
 }
 
 watch(() => projects.currentProjectId, () => { page.value = 1; void load() }, { immediate: true })

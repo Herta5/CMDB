@@ -91,10 +91,11 @@ describe('审计日志页面', () => {
         { ...base, id: 13, action: 'source.connection_tested', detail: { reachable_types: ['ecs'], failed_types: [] } },
         { ...base, id: 14, action: 'source.connection_tested', detail: { reachable_types: ['ecs'], failed_types: ['rds'] } },
         { ...base, id: 15, action: 'source.connection_tested', detail: { reachable_types: [], failed_types: ['ecs'] } },
-        { ...base, id: 16, action: 'project.created', resource_type: 'project', detail: {} },
-        { ...base, id: 17, action: 'source.synced', detail: {} },
+        { ...base, id: 16, action: 'source.connection_tested', detail: { status: 'failed', reachable_types: ['ecs'], failed_types: [] } },
+        { ...base, id: 17, action: 'project.created', resource_type: 'project', detail: {} },
+        { ...base, id: 18, action: 'source.synced', detail: {} },
       ],
-      total: 8, page: 1, page_size: 20,
+      total: 9, page: 1, page_size: 20,
     })
 
     const { app, root } = await mountAuditPage()
@@ -104,17 +105,75 @@ describe('审计日志页面', () => {
     const results = rows.map(row => row.children.filter(child => child.type === 'td').map(text)[4])
 
     expect(headings).toEqual(['时间', '操作人', '项目', '操作', '结果', '对象', '来源 IP', '详情'])
-    expect(results).toEqual(['✓ 成功', '! 部分成功', '× 失败', '✓ 成功', '! 部分成功', '× 失败', '✓ 成功', '? 状态未知'])
+    expect(results).toEqual(['✓ 成功', '! 部分成功', '× 失败', '✓ 成功', '! 部分成功', '× 失败', '× 失败', '✓ 成功', '? 状态未知'])
+    app.unmount()
+  })
+
+  it('不将对象原型上的名称误判为已知审计结果', async () => {
+    const base = {
+      actor_username: 'audit_admin', actor_display_name: '审计管理员', project_id: 7, project_name: '云项目',
+      resource_type: 'resource_source', resource_id: '1', resource_name: '生产环境阿里云', request_ip: '', created_at: '2026-09-10T08:00:00Z',
+    }
+    get.mockResolvedValue({
+      items: [
+        { ...base, id: 18, action: 'source.synced', detail: { status: 'constructor' } },
+        { ...base, id: 19, action: 'toString', detail: {} },
+      ],
+      total: 2, page: 1, page_size: 20,
+    })
+
+    const { app, root } = await mountAuditPage()
+    const table = all(root).find(value => value.type === 'table')!
+    const rows = all(table).filter(value => value.type === 'tbody').flatMap(value => value.children.filter(child => child.type === 'tr'))
+    const badges = rows.map(row => all(row).find(value => value.type === 'span' && String(value.props.class).includes('audit-result'))!)
+
+    expect(badges.map(text)).toEqual(['? 状态未知', '? 状态未知'])
+    expect(badges.map(value => value.props.class)).toEqual(['audit-result is-unknown', 'audit-result is-unknown'])
+    app.unmount()
+  })
+
+  it('格式错误或相互矛盾的连接测试摘要显示状态未知', async () => {
+    const base = {
+      actor_username: 'audit_admin', actor_display_name: '审计管理员', project_id: 7, project_name: '云项目',
+      action: 'source.connection_tested', resource_type: 'resource_source', resource_id: '1', resource_name: '生产环境阿里云',
+      request_ip: '', created_at: '2026-09-10T08:00:00Z',
+    }
+    get.mockResolvedValue({
+      items: [
+        { ...base, id: 20, detail: { reachable_types: [null], failed_types: [] } },
+        { ...base, id: 21, detail: { reachable_types: ['ecs'], failed_types: ['ecs'] } },
+        { ...base, id: 22, detail: { reachable_types: [''], failed_types: [] } },
+        { ...base, id: 23, detail: { reachable_types: ['future_compute'], failed_types: [] } },
+      ],
+      total: 4, page: 1, page_size: 20,
+    })
+
+    const { app, root } = await mountAuditPage()
+    const table = all(root).find(value => value.type === 'table')!
+    const rows = all(table).filter(value => value.type === 'tbody').flatMap(value => value.children.filter(child => child.type === 'tr'))
+    const results = rows.map(row => row.children.filter(child => child.type === 'td').map(text)[4])
+
+    expect(results).toEqual(['? 状态未知', '? 状态未知', '? 状态未知', '✓ 成功'])
     app.unmount()
   })
 
   it('操作人优先展示显示名称并在下方展示用户名', async () => {
+    get.mockResolvedValue({
+      items: [
+        { id: 24, actor_username: 'audit_admin', actor_display_name: '审计管理员', project_id: 7, project_name: '云项目', action: 'project.created', resource_type: 'project', resource_id: 'cloud', detail: {}, request_ip: '127.0.0.1', created_at: '2026-09-10T08:00:00Z' },
+        { id: 25, actor_username: '', actor_display_name: '', project_id: 7, project_name: '云项目', action: 'source.synced', resource_type: 'resource_source', resource_id: '1', detail: { status: 'success' }, request_ip: '', created_at: '2026-09-10T09:00:00Z' },
+      ],
+      total: 2, page: 1, page_size: 20,
+    })
     const { app, root } = await mountAuditPage()
     const table = all(root).find(value => value.type === 'table')!
-    const firstRow = all(table).find(value => value.type === 'tbody')!.children.find(value => value.type === 'tr')!
-    const actorCell = firstRow.children.filter(value => value.type === 'td')[1]
+    const rows = all(table).find(value => value.type === 'tbody')!.children.filter(value => value.type === 'tr')
+    const actorCells = rows.map(row => row.children.filter(value => value.type === 'td')[1])
 
-    expect(text(actorCell)).toBe('审计管理员audit_admin')
+    expect(all(actorCells[0]).find(value => value.type === 'strong')?.text).toBe('审计管理员')
+    expect(all(actorCells[0]).find(value => value.type === 'small')?.text).toBe('audit_admin')
+    expect(text(actorCells[1])).toBe('系统任务')
+    expect(all(actorCells[1]).some(value => value.type === 'small')).toBe(false)
     app.unmount()
   })
 
