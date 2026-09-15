@@ -19,7 +19,7 @@
 
 首次了解产品时，先阅读 [overview.md](overview.md)，确认产品定位、首期范围、角色和公共能力边界；再阅读 [domain-model.md](domain-model.md)，掌握数据归属、资源身份和领域关系。
 
-涉及同步流程、并发、采集结果或资源生命周期时，阅读 [resource-sync.md](resource-sync.md)；涉及身份、权限、凭证和审计时，阅读 [security.md](security.md)；涉及页面、导航、交互或响应式适配时，阅读 [frontend-guidelines.md](frontend-guidelines.md)。首次安装前，先阅读 [数据库首次初始化边界](security.md#数据库首次初始化边界)，再按根目录 [首次安装](../../README.md#首次安装) 操作并以 [AC-041](acceptance.md#ac-041-postgresql-17-空库首次初始化安全场景) 验收。完成其他跨领域开发或测试前，使用 [acceptance.md](acceptance.md) 按场景核对验收要求，最后参阅 [implementation-status.md](implementation-status.md) 了解指定提交的交付状态和证据。
+涉及同步流程、并发、采集结果或资源生命周期时，阅读 [resource-sync.md](resource-sync.md)；涉及身份、权限、凭证和审计时，阅读 [security.md](security.md)；涉及页面、导航、交互或响应式适配时，阅读 [frontend-guidelines.md](frontend-guidelines.md)。涉及公开 HTTP 接口、前端调用或生成工具时，阅读 [api-contract.md](api-contract.md)。首次安装前，先阅读 [数据库首次初始化边界](security.md#数据库首次初始化边界)，再按根目录 [首次安装](../../README.md#首次安装) 操作并以 [AC-041](acceptance.md#ac-041-postgresql-17-空库首次初始化安全场景) 验收。完成其他跨领域开发或测试前，使用 [acceptance.md](acceptance.md) 按场景核对验收要求，最后参阅 [implementation-status.md](implementation-status.md) 了解指定提交的交付状态和证据。
 
 ## 文档职责
 
@@ -30,6 +30,7 @@
 | [resource-sync.md](resource-sync.md) | 接入源配置、同步触发与并发、采集结果、资源生命周期和失败保护。 |
 | [security.md](security.md) | 身份认证、授权矩阵、凭证保护、审计和错误披露边界。 |
 | [frontend-guidelines.md](frontend-guidelines.md) | 导航、页面职责、列表交互、状态展示、可访问性和中文界面要求。 |
+| [api-contract.md](api-contract.md) | 公开 HTTP 契约、双端生成、兼容检查和接口验收边界。 |
 | [acceptance.md](acceptance.md) | 以“前置条件—操作—预期结果”组织跨领域端到端验收场景，包括 PostgreSQL 17 空库首次初始化。 |
 | [implementation-status.md](implementation-status.md) | 以指定提交为基线的实现状态、差距和代码或测试证据。 |
 

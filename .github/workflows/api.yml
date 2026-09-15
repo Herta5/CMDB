@@ -1,0 +1,57 @@
+name: 接口契约与前端验证
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  api:
+    name: OpenAPI 生成、兼容及前端回归
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: 检出完整比较历史
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: 安装项目指定 Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: backend/go.mod
+          cache-dependency-path: backend/go.sum
+      - name: 安装 Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: 安装 Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: 安装固定生成依赖
+        run: |
+          corepack enable
+          corepack prepare pnpm@9.15.9 --activate
+          python -m pip install -r api/requirements.txt
+          pnpm --dir frontend install --frozen-lockfile
+      - name: 检查契约与生成产物
+        env:
+          API_BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          if [[ -n "$API_BASE_SHA" && "$API_BASE_SHA" != 0000000000000000000000000000000000000000 ]]; then
+            ./scripts/check-api.sh "$API_BASE_SHA"
+          else
+            ./scripts/check-api.sh
+          fi
+      - name: 验证前端行为和生产构建
+        run: |
+          pnpm --dir frontend test
+          pnpm --dir frontend type-check
+          pnpm --dir frontend build
+      - name: 保存可离线使用的接口契约
+        uses: actions/upload-artifact@v4
+        with:
+          name: cmdb-openapi
+          path: api/openapi.bundled.yaml
