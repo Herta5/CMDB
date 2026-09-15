@@ -330,6 +330,37 @@ describe('项目控制台页面', () => {
     expect(get).toHaveBeenCalledWith('/projects/2/resources', { params: expect.objectContaining({ resource_type: 'ecs,ec2', page: 1, page_size: 20, sort_by: 'name', sort_order: 'asc' }) })
     app.unmount()
   })
+  it('服务器搜索工具栏收纳在列表卡片内且不显示默认范围说明', async () => {
+    const projectStore = useProjectStore()
+    projectStore.projects = [{ id: 2, code: 'platform', name: '平台项目', description: '', status: 'enabled', ownerUsername: null, createdAt: '', updatedAt: '' }]
+    projectStore.selectProject(2)
+    get.mockResolvedValue({ items: [], total: 0 })
+
+    const component = { render: () => h(AssetListPage, { category: 'server' }) }
+    const { root, app } = await mount(component, '/assets/servers')
+    const listPanel = all(root).find(n => n.type === 'section' && String(n.props.class).includes('server-list-panel'))!
+    const searchForm = all(root).find(n => n.type === 'form' && String(n.props.class).includes('server-search'))!
+
+    expect(all(listPanel)).toContain(searchForm)
+    expect(text(root)).not.toContain('搜索范围：资源名称、实例 ID、内网 IP、公网 IP')
+    expect(text(root)).not.toContain('类型：ECS + EC2')
+    app.unmount()
+  })
+  it('服务器列表固定按资产名称升序请求且不提供排序交互', async () => {
+    const projectStore = useProjectStore()
+    projectStore.projects = [{ id: 2, code: 'platform', name: '平台项目', description: '', status: 'enabled', ownerUsername: null, createdAt: '', updatedAt: '' }]
+    projectStore.selectProject(2)
+    get.mockResolvedValue({ items: [{ id: 1, provider: 'aws', resource_type: 'ec2', external_id: 'i-1', name: '节点', asset_status: 'active', endpoints: [], disks: [] }], total: 1 })
+
+    const component = { render: () => h(AssetListPage, { category: 'server' }) }
+    const { root, app } = await mount(component, '/assets/servers')
+
+    expect(get).toHaveBeenCalledWith('/projects/2/resources', { params: expect.objectContaining({ sort_by: 'name', sort_order: 'asc' }) })
+    const tableHeaders = all(root).filter(n => n.type === 'th')
+    expect(tableHeaders.some(header => all(header).some(n => n.type === 'button'))).toBe(false)
+    expect(text(root)).not.toContain('按资源名称升序')
+    app.unmount()
+  })
   it('负载均衡资产页按官方类型分别查询且不查询 ELB', async () => {
     const projectStore = useProjectStore()
     projectStore.projects = [{ id: 2, code: 'platform', name: '平台项目', description: '', status: 'enabled', ownerUsername: null, createdAt: '', updatedAt: '' }]
@@ -477,7 +508,7 @@ describe('项目控制台页面', () => {
     await all(root).find(n => n.type === 'form' && String(n.props.class).includes('server-search'))!.props.onSubmit({ preventDefault: () => {} })
     await flush()
     expect(get).toHaveBeenLastCalledWith('/projects/2/resources', { params: expect.objectContaining({ keyword: '10.0.0.8', page: 1, page_size: 20 }) })
-    expect(text(root)).toContain('搜索范围：资源名称、实例 ID、内网 IP、公网 IP')
+    expect(text(root)).not.toContain('搜索范围：资源名称、实例 ID、内网 IP、公网 IP')
     app.unmount()
   })
   it('服务器精确筛选折叠展示，生效条件可单项移除', async () => {

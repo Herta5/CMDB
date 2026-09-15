@@ -35,8 +35,6 @@ const draftResourceType = ref('')
 const draftRegion = ref('')
 const draftCloudStatus = ref('')
 const draftAssetStatus = ref('')
-const sortBy = ref('name')
-const sortOrder = ref<'asc' | 'desc'>('asc')
 let requestVersion = 0
 
 const category = computed(() => ({
@@ -98,7 +96,8 @@ async function loadAssets() {
     const params = {
       resource_type: resourceType.value || category.value.types.join(','), provider: provider.value, source_id: sourceID.value,
       keyword: keyword.value, region: region.value, cloud_status: cloudStatus.value, asset_status: assetStatus.value,
-      sort_by: sortBy.value, sort_order: sortOrder.value, page: props.category === 'server' ? page.value : 1, page_size: props.category === 'server' ? pageSize.value : 200,
+      // 资源列表不提供排序切换，所有请求固定按资产名称升序，避免分页刷新时顺序变化。
+      sort_by: 'name', sort_order: 'asc', page: props.category === 'server' ? page.value : 1, page_size: props.category === 'server' ? pageSize.value : 200,
     }
     // 尚未完成新版分页交互的两类页面维持既有“每项目、每类型最多 200 条”读取，不能因类型集合查询缩小可见范围。
     if (props.category !== 'server') {
@@ -172,7 +171,6 @@ function removeFilter(key: string) {
 }
 function changePage(next: number) { if (next < 1 || next > totalPages.value) return; page.value = next; void loadAssets() }
 function changePageSize() { page.value = 1; void loadAssets() }
-function changeSort(column: string) { if (sortBy.value === column) sortOrder.value = sortOrder.value === 'asc' ? 'desc' : 'asc'; else { sortBy.value = column; sortOrder.value = 'asc' }; page.value = 1; void loadAssets() }
 function openDetails(item: AssetRow) { selected.value = item }
 function closeDetails() { selected.value = null }
 async function copyValue(value: string) { await navigator.clipboard?.writeText(value) }
@@ -182,7 +180,7 @@ watch(() => [projects.currentProjectId, props.category], () => {
   selected.value = null
   keywordInput.value = ''; keyword.value = ''; provider.value = ''; sourceID.value = ''; resourceType.value = ''; region.value = ''; cloudStatus.value = ''; assetStatus.value = ''
   draftProvider.value = ''; draftSourceID.value = ''; draftResourceType.value = ''; draftRegion.value = ''; draftCloudStatus.value = ''; draftAssetStatus.value = ''
-  page.value = 1; sortBy.value = 'name'; sortOrder.value = 'asc'
+  page.value = 1
   loadColumnSettings()
   void loadAssets()
   void loadFilterOptions()
@@ -199,18 +197,13 @@ const cloudStatusLabel = (value: string) => ({ running: '运行中', stopped: '�
 const activeFilterCount = computed(() => [provider.value, sourceID.value, resourceType.value, region.value, cloudStatus.value, assetStatus.value].filter(Boolean).length)
 const sourceOptions = computed(() => availableSources.value.map(source => [source.id, viewingAllProjects.value ? `${source.projectName} · ${source.name}` : source.name] as const))
 const activeFilters = computed(() => [
-  { key: 'type', name: '类型', value: resourceType.value ? resourceTypeLabel(resourceType.value) : 'ECS + EC2', fixed: !resourceType.value },
-  provider.value ? { key: 'provider', name: '云平台', value: providerLabel(provider.value), fixed: false } : null,
-  sourceID.value ? { key: 'source', name: '接入源', value: sourceOptions.value.find(option => String(option[0]) === String(sourceID.value))?.[1] ?? sourceID.value, fixed: false } : null,
-  region.value ? { key: 'region', name: '地域', value: region.value, fixed: false } : null,
-  cloudStatus.value ? { key: 'cloud', name: '云端状态', value: cloudStatusLabel(cloudStatus.value), fixed: false } : null,
-  assetStatus.value ? { key: 'asset', name: '资产状态', value: assetStatus.value === 'lost' ? '已失联' : '正常', fixed: false } : null,
-].filter((value): value is { key: string; name: string; value: string; fixed: boolean } => Boolean(value)))
-const sortableColumns: Partial<Record<ServerColumn, string>> = { asset: 'name', project: 'project', source: 'source', type: 'resource_type', instance_type: 'instance_type', vcpu: 'vcpu', memory: 'memory', disk_size: 'disk_size', region: 'region', cloud_status: 'cloud_status', asset_status: 'asset_status', last_seen_at: 'last_seen_at' }
-const sortSummary = computed(() => {
-  const column = Object.entries(sortableColumns).find(([, field]) => field === sortBy.value)?.[0] as ServerColumn | undefined
-  return `按${column === 'asset' || !column ? '资源名称' : columnLabels[column]}${sortOrder.value === 'asc' ? '升序' : '降序'}`
-})
+  resourceType.value ? { key: 'type', name: '类型', value: resourceTypeLabel(resourceType.value) } : null,
+  provider.value ? { key: 'provider', name: '云平台', value: providerLabel(provider.value) } : null,
+  sourceID.value ? { key: 'source', name: '接入源', value: sourceOptions.value.find(option => String(option[0]) === String(sourceID.value))?.[1] ?? sourceID.value } : null,
+  region.value ? { key: 'region', name: '地域', value: region.value } : null,
+  cloudStatus.value ? { key: 'cloud', name: '云端状态', value: cloudStatusLabel(cloudStatus.value) } : null,
+  assetStatus.value ? { key: 'asset', name: '资产状态', value: assetStatus.value === 'lost' ? '已失联' : '正常' } : null,
+].filter((value): value is { key: string; name: string; value: string } => Boolean(value)))
 </script>
 
 <template>
@@ -218,30 +211,29 @@ const sortSummary = computed(() => {
     <header class="page-heading"><div><p class="page-eyebrow">资产列表</p><h1>{{ category.title }}</h1></div><button class="console-button" :disabled="!hasAssetScope || loading" @click="loadAssets">刷新列表</button></header>
     <div v-if="!hasAssetScope" class="console-panel page-state"><span class="state-symbol">▦</span><h3>请先选择项目</h3><p>资产必须在明确的项目边界内查看。</p></div>
     <template v-else-if="props.category === 'server'">
-      <section class="server-search-panel">
-        <form class="server-search" @submit.prevent="search"><input v-model="keywordInput" aria-label="搜索服务器" placeholder="搜索资源名称、实例 ID 或 IP 地址"><button class="console-button is-primary" type="submit">搜索</button><button class="console-button" type="button" :aria-expanded="filtersOpen" @click="filtersOpen = !filtersOpen">筛选<span v-if="activeFilterCount"> · {{ activeFilterCount }}</span></button><button class="console-button" type="button" :aria-expanded="columnsOpen" @click="columnsOpen = !columnsOpen">列设置</button></form>
-        <p class="search-scope">搜索范围：资源名称、实例 ID、内网 IP、公网 IP</p>
-        <div v-if="activeFilters.length" class="active-filters"><span v-for="filter in activeFilters" :key="filter.key">{{ filter.name }}：{{ filter.value }}<button v-if="!filter.fixed" type="button" :aria-label="`移除${filter.name}筛选`" @click="removeFilter(filter.key)">×</button></span><button v-if="activeFilterCount" class="button-link" type="button" @click="clearFilters">全部清除</button></div>
-        <div v-if="filtersOpen" class="server-filter-grid">
-          <label>云平台<select v-model="draftProvider"><option value="">全部</option><option value="aliyun">阿里云</option><option value="aws">AWS</option></select></label>
-          <label>接入源<select v-model="draftSourceID"><option value="">全部</option><option v-for="option in sourceOptions" :key="option[0]" :value="option[0]">{{ option[1] }}</option></select></label>
-          <label>类型<select v-model="draftResourceType"><option value="">ECS + EC2</option><option value="ecs">ECS</option><option value="ec2">EC2</option></select></label>
-          <label>地域<input v-model="draftRegion" placeholder="输入地域，如 cn-shanghai"></label>
-          <label>云端状态<select v-model="draftCloudStatus"><option value="">全部</option><option value="running">运行中</option><option value="stopped">已停止</option></select></label>
-          <label>资产状态<select v-model="draftAssetStatus"><option value="">全部</option><option value="active">正常</option><option value="lost">已失联</option></select></label>
-          <div class="filter-actions"><button class="console-button is-primary" type="button" @click="applyFilters">应用筛选</button><button class="console-button" type="button" @click="clearFilters">全部清除</button></div>
-        </div>
-        <div v-if="columnsOpen" class="column-settings" aria-label="列设置">
-          <div v-for="column in serverColumns" :key="column"><label><input type="checkbox" :checked="!hiddenServerColumns.includes(column)" :disabled="!optionalServerColumns.has(column)" @change="toggleColumn(column)">{{ columnLabels[column] }}</label><span><button type="button" aria-label="上移列" @click="moveColumn(column, -1)">↑</button><button type="button" aria-label="下移列" @click="moveColumn(column, 1)">↓</button></span></div>
-          <button class="button-link" type="button" @click="resetColumns">恢复默认</button>
-        </div>
-      </section>
       <section class="console-panel server-list-panel">
-        <div class="panel-heading"><div><h2>服务器列表</h2><p class="muted">{{ sortSummary }}</p></div><span class="muted">共 {{ total }} 项</span></div>
+        <div class="panel-heading"><h2>服务器列表</h2><span class="muted">共 {{ total }} 项</span></div>
+        <div class="server-search-panel">
+          <form class="server-search" @submit.prevent="search"><input v-model="keywordInput" aria-label="搜索服务器" placeholder="搜索资源名称、实例 ID 或 IP 地址"><button class="console-button is-primary" type="submit">搜索</button><button class="console-button" type="button" :aria-expanded="filtersOpen" @click="filtersOpen = !filtersOpen">筛选<span v-if="activeFilterCount"> · {{ activeFilterCount }}</span></button><button class="console-button" type="button" :aria-expanded="columnsOpen" @click="columnsOpen = !columnsOpen">列设置</button></form>
+          <div v-if="activeFilters.length" class="active-filters"><span v-for="filter in activeFilters" :key="filter.key">{{ filter.name }}：{{ filter.value }}<button type="button" :aria-label="`移除${filter.name}筛选`" @click="removeFilter(filter.key)">×</button></span><button class="button-link" type="button" @click="clearFilters">全部清除</button></div>
+          <div v-if="filtersOpen" class="server-filter-grid">
+            <label>云平台<select v-model="draftProvider"><option value="">全部</option><option value="aliyun">阿里云</option><option value="aws">AWS</option></select></label>
+            <label>接入源<select v-model="draftSourceID"><option value="">全部</option><option v-for="option in sourceOptions" :key="option[0]" :value="option[0]">{{ option[1] }}</option></select></label>
+            <label>类型<select v-model="draftResourceType"><option value="">ECS + EC2</option><option value="ecs">ECS</option><option value="ec2">EC2</option></select></label>
+            <label>地域<input v-model="draftRegion" placeholder="输入地域，如 cn-shanghai"></label>
+            <label>云端状态<select v-model="draftCloudStatus"><option value="">全部</option><option value="running">运行中</option><option value="stopped">已停止</option></select></label>
+            <label>资产状态<select v-model="draftAssetStatus"><option value="">全部</option><option value="active">正常</option><option value="lost">已失联</option></select></label>
+            <div class="filter-actions"><button class="console-button is-primary" type="button" @click="applyFilters">应用筛选</button><button class="console-button" type="button" @click="clearFilters">全部清除</button></div>
+          </div>
+          <div v-if="columnsOpen" class="column-settings" aria-label="列设置">
+            <div v-for="column in serverColumns" :key="column"><label><input type="checkbox" :checked="!hiddenServerColumns.includes(column)" :disabled="!optionalServerColumns.has(column)" @change="toggleColumn(column)">{{ columnLabels[column] }}</label><span><button type="button" aria-label="上移列" @click="moveColumn(column, -1)">↑</button><button type="button" aria-label="下移列" @click="moveColumn(column, 1)">↓</button></span></div>
+            <button class="button-link" type="button" @click="resetColumns">恢复默认</button>
+          </div>
+        </div>
         <div v-if="loading" class="page-state compact"><span class="loading-spinner"/><p>正在加载资产…</p></div>
         <div v-else-if="failed" class="page-state compact"><h3>资产加载失败</h3><button class="console-button" @click="loadAssets">重试</button></div>
         <div v-else-if="!resources.length" class="page-state compact"><h3>暂无服务器</h3><p>{{ keyword || activeFilterCount ? '没有匹配当前条件的服务器。' : '完成云同步后，资产会显示在这里。' }}</p></div>
-        <div v-else class="table-scroll"><table class="console-table server-table"><thead><tr><th v-for="column in visibleServerColumns" :key="column"><button v-if="sortableColumns[column]" class="sort-button" type="button" @click="changeSort(sortableColumns[column]!)">{{ columnLabels[column] }}<span v-if="sortBy === sortableColumns[column]">{{ sortOrder === 'asc' ? '↑' : '↓' }}</span></button><span v-else>{{ columnLabels[column] }}</span></th></tr></thead><tbody><tr v-for="item in resources" :key="`${item.sourceId}-${item.resourceType}-${item.externalId}`"><td v-for="column in visibleServerColumns" :key="column">
+        <div v-else class="table-scroll"><table class="console-table server-table"><thead><tr><th v-for="column in visibleServerColumns" :key="column">{{ columnLabels[column] }}</th></tr></thead><tbody><tr v-for="item in resources" :key="`${item.sourceId}-${item.resourceType}-${item.externalId}`"><td v-for="column in visibleServerColumns" :key="column">
           <template v-if="column === 'asset'"><button class="resource-name" type="button" @click="openDetails(item)">{{ item.name || item.externalId }}</button><small class="resource-id">{{ item.externalId }}</small></template>
           <template v-else-if="column === 'project'">{{ item.projectName }}</template>
           <template v-else-if="column === 'source'"><span class="provider-source">{{ providerLabel(item.provider) }}</span><small>{{ display(item.sourceName) }}</small></template>
