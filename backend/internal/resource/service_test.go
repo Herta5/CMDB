@@ -947,6 +947,76 @@ func TestListResourcesFiltersDatabaseEngine(t *testing.T) {
 	}
 }
 
+// TestListResourcesFiltersLoadBalancerNetworkType 验证负载均衡网络类型和完整访问地址参与服务端筛选、搜索与分页。
+func TestListResourcesFiltersLoadBalancerNetworkType(t *testing.T) {
+	service, db, source, now := newResourceServiceTest(t)
+	loadBalancers := []LoadBalancer{
+		{AssetBase: AssetBase{ProjectID: source.ProjectID, SourceID: source.ID, Provider: ProviderAWS, ResourceType: "alb", ExternalID: "alb-internal", Name: "内部入口", Region: "ap-southeast-1", CloudStatus: "active", AssetStatus: AssetStatusActive, LastSeenAt: *now}, NetworkType: "internal", Endpoints: json.RawMessage(`[{"kind":"hostname","address":"internal.example.com","port":443,"protocol":"https","resolved_ips":["10.0.0.8"]}]`)},
+		{AssetBase: AssetBase{ProjectID: source.ProjectID, SourceID: source.ID, Provider: ProviderAWS, ResourceType: "nlb", ExternalID: "nlb-public", Name: "公网入口", Region: "ap-southeast-1", CloudStatus: "provisioning", AssetStatus: AssetStatusActive, LastSeenAt: now.Add(-time.Minute)}, NetworkType: "internet-facing", Endpoints: json.RawMessage(`[{"kind":"hostname","address":"public.example.com","port":80,"protocol":"tcp","resolved_ips":[]}]`)},
+		{AssetBase: AssetBase{ProjectID: source.ProjectID, SourceID: source.ID, Provider: ProviderAliyun, ResourceType: "alb", ExternalID: "alb-create-failed", Name: "创建失败入口", Region: "cn-shanghai", CloudStatus: "CreateFailed", AssetStatus: AssetStatusActive, LastSeenAt: now.Add(-2 * time.Minute)}, NetworkType: "internet", Endpoints: json.RawMessage(`[]`)},
+	}
+	if err := db.Create(&loadBalancers).Error; err != nil {
+		t.Fatalf("准备负载均衡列表失败：%v", err)
+	}
+	server := Server{AssetBase: AssetBase{ProjectID: source.ProjectID, SourceID: source.ID, Provider: ProviderAWS, ResourceType: "ec2", ExternalID: "i-internal", Name: "内部节点", AssetStatus: AssetStatusActive, LastSeenAt: *now}, PrivateIPs: json.RawMessage(`[]`), PublicIPs: json.RawMessage(`[]`), Disks: json.RawMessage(`[]`)}
+	if err := db.Create(&server).Error; err != nil {
+		t.Fatalf("准备非负载均衡资产失败：%v", err)
+	}
+
+	values, total, err := service.ListResources(context.Background(), source.ProjectID, ResourceListQuery{
+		ResourceTypes: []string{"slb", "clb", "alb", "nlb", "gwlb"}, NetworkType: "private", CloudStatus: "running", Keyword: "internal.example.com:443", SortBy: "name", SortOrder: "asc", Page: 1, PageSize: 20,
+	})
+	if err != nil || total != 1 || len(values) != 1 || values[0].ExternalID != "alb-internal" || values[0].NetworkType != "internal" {
+		t.Fatalf("负载均衡网络类型与完整访问地址组合查询不正确：total=%d values=%+v err=%v", total, values, err)
+	}
+	values, total, err = service.ListResources(context.Background(), source.ProjectID, ResourceListQuery{ResourceTypes: []string{"ec2"}, NetworkType: "internal", SortBy: "name", SortOrder: "asc", Page: 1, PageSize: 20})
+	if err != nil || total != 0 || len(values) != 0 {
+		t.Fatalf("网络类型与服务器类型组合必须返回空结果：total=%d values=%+v err=%v", total, values, err)
+	}
+	values, total, err = service.ListResources(context.Background(), source.ProjectID, ResourceListQuery{ResourceTypes: []string{"alb"}, CloudStatus: "failed", SortBy: "name", SortOrder: "asc", Page: 1, PageSize: 20})
+	if err != nil || total != 1 || len(values) != 1 || values[0].ExternalID != "alb-create-failed" {
+		t.Fatalf("失败筛选必须覆盖阿里云 CreateFailed：total=%d values=%+v err=%v", total, values, err)
+	}
+}
+
+// TestListLoadBalancerResourcesPaginatesAfterEndpointSearch 验证完整地址搜索后再计数分页，并以资源身份稳定排列同名资产。
+func TestListLoadBalancerResourcesPaginatesAfterEndpointSearch(t *testing.T) {
+	service, db, source, now := newResourceServiceTest(t)
+	values := make([]LoadBalancer, 21)
+	for index := range values {
+		values[index] = LoadBalancer{
+			AssetBase:   AssetBase{ProjectID: source.ProjectID, SourceID: source.ID, Provider: ProviderAWS, ResourceType: "alb", ExternalID: fmt.Sprintf("alb-%02d", index), Name: "共享入口", CloudStatus: "active", AssetStatus: AssetStatusActive, LastSeenAt: *now},
+			NetworkType: "internet-facing",
+			Endpoints:   json.RawMessage(fmt.Sprintf(`[{"kind":"hostname","address":"edge-%02d.example.com","port":443,"protocol":"https","resolved_ips":[]}]`, index)),
+		}
+	}
+	if err := db.Create(&values).Error; err != nil {
+		t.Fatalf("准备负载均衡分页数据失败：%v", err)
+	}
+	statements := make([]string, 0)
+	const callbackName = "test:capture-load-balancer-list-sql"
+	if err := db.Callback().Query().After("gorm:query").Register(callbackName, func(tx *gorm.DB) {
+		statements = append(statements, strings.ToLower(tx.Statement.SQL.String()))
+	}); err != nil {
+		t.Fatalf("注册负载均衡查询观察器失败：%v", err)
+	}
+	if err := db.Callback().Row().After("gorm:row").Register(callbackName, func(tx *gorm.DB) {
+		statements = append(statements, strings.ToLower(tx.Statement.SQL.String()))
+	}); err != nil {
+		t.Fatalf("注册负载均衡分页观察器失败：%v", err)
+	}
+	t.Cleanup(func() { _ = db.Callback().Query().Remove(callbackName); _ = db.Callback().Row().Remove(callbackName) })
+
+	page, total, err := service.ListAllResources(context.Background(), ResourceListQuery{ResourceTypes: []string{"alb"}, Keyword: ".example.com:443", SortBy: "name", SortOrder: "asc", Page: 2, PageSize: 10})
+	if err != nil || total != 21 || len(page) != 10 || page[0].ExternalID != "alb-10" || page[9].ExternalID != "alb-19" {
+		t.Fatalf("负载均衡搜索后分页或稳定排序不正确：total=%d page=%+v err=%v", total, page, err)
+	}
+	listSQL := strings.Join(statements, "\n")
+	if !strings.Contains(listSQL, "limit 10") || strings.Contains(listSQL, "select * from `resources_load_balancers`") || strings.Contains(listSQL, "raw_attributes") {
+		t.Fatalf("负载均衡列表必须数据库分页且只读取公开投影，实际 SQL：%s", listSQL)
+	}
+}
+
 // TestListResourcesRejectsUnsupportedQuery 验证未知筛选值和排序字段不会下沉成数据库故障。
 func TestListResourcesRejectsUnsupportedQuery(t *testing.T) {
 	service, _, source, _ := newResourceServiceTest(t)

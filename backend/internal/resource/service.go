@@ -275,6 +275,7 @@ type ResourceListQuery struct {
 	SourceID      uint64
 	Keyword       string
 	Engine        string
+	NetworkType   string
 	Region        string
 	CloudStatus   string
 	AssetStatus   string
@@ -307,6 +308,7 @@ func (s *Service) ListAllResources(ctx context.Context, query ResourceListQuery)
 
 func normalizedResourceListQuery(query ResourceListQuery) (ResourceListQuery, error) {
 	query.Engine = strings.TrimSpace(query.Engine)
+	query.NetworkType = strings.TrimSpace(query.NetworkType)
 	for _, provider := range query.Providers {
 		if !validProvider(provider) {
 			return query, ErrInvalidResourceQuery

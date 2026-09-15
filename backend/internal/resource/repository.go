@@ -120,8 +120,12 @@ func (r *Repository) ListResources(ctx context.Context, projectID uint64, filter
 		}
 	}
 	// 服务器列表是当前高频分页入口，必须由数据库在完整范围筛选、排序后只返回当前页。
-	if len(tables) == 1 && tables[0] == "resources_servers" && filter.Engine == "" {
+	if len(tables) == 1 && tables[0] == "resources_servers" && filter.Engine == "" && filter.NetworkType == "" {
 		return r.listServerResources(ctx, projectID, filter)
+	}
+	// 负载均衡端点参与模糊搜索，仍必须由数据库完成完整结果集计数与分页，并排除原始属性投影。
+	if len(tables) == 1 && tables[0] == "resources_load_balancers" && filter.Engine == "" {
+		return r.listLoadBalancerResources(ctx, projectID, filter)
 	}
 	sourceQuery := r.db.WithContext(ctx)
 	if projectID > 0 {
@@ -156,6 +160,9 @@ func (r *Repository) ListResources(ctx context.Context, projectID uint64, filter
 		if filter.Engine != "" && table != "resources_databases" {
 			continue
 		}
+		if filter.NetworkType != "" && table != "resources_load_balancers" {
+			continue
+		}
 		query := r.db.WithContext(ctx).Table(table)
 		if projectID > 0 {
 			query = query.Where("project_id = ?", projectID)
@@ -173,13 +180,16 @@ func (r *Repository) ListResources(ctx context.Context, projectID uint64, filter
 			query = query.Where("region = ?", filter.Region)
 		}
 		if filter.CloudStatus != "" {
-			query = query.Where("LOWER(cloud_status) = ?", strings.ToLower(filter.CloudStatus))
+			query = applyCloudStatusFilter(query, "cloud_status", filter.CloudStatus)
 		}
 		if filter.AssetStatus != "" {
 			query = query.Where("asset_status = ?", filter.AssetStatus)
 		}
 		if filter.Engine != "" {
 			query = query.Where("LOWER(engine) = ?", strings.ToLower(filter.Engine))
+		}
+		if filter.NetworkType != "" {
+			query = applyNetworkTypeFilter(query, "network_type", filter.NetworkType)
 		}
 		var rows []assetRow
 		if err := query.Find(&rows).Error; err != nil {
@@ -238,7 +248,7 @@ func (r *Repository) listServerResources(ctx context.Context, projectID uint64, 
 		query = query.Where("assets.region = ?", filter.Region)
 	}
 	if filter.CloudStatus != "" {
-		query = query.Where("LOWER(assets.cloud_status) = ?", strings.ToLower(filter.CloudStatus))
+		query = applyCloudStatusFilter(query, "assets.cloud_status", filter.CloudStatus)
 	}
 	if filter.AssetStatus != "" {
 		query = query.Where("assets.asset_status = ?", filter.AssetStatus)
@@ -284,11 +294,115 @@ func (r *Repository) listServerResources(ctx context.Context, projectID uint64, 
 	return values, total, nil
 }
 
+// listLoadBalancerResources 仅查询列表与详情需要的公开字段，并在数据库中完成端点搜索、计数和分页。
+func (r *Repository) listLoadBalancerResources(ctx context.Context, projectID uint64, filter ResourceListQuery) ([]Resource, int64, error) {
+	query := r.db.WithContext(ctx).Table("resources_load_balancers AS assets").
+		Joins("JOIN resource_sources AS sources ON sources.id = assets.source_id").
+		Joins("JOIN projects ON projects.id = assets.project_id")
+	if projectID > 0 {
+		query = query.Where("assets.project_id = ?", projectID)
+	}
+	if len(filter.Providers) > 0 {
+		query = query.Where("assets.provider IN ?", filter.Providers)
+	}
+	if len(filter.ResourceTypes) > 0 {
+		query = query.Where("assets.resource_type IN ?", filter.ResourceTypes)
+	}
+	if filter.SourceID > 0 {
+		query = query.Where("assets.source_id = ?", filter.SourceID)
+	}
+	if filter.Region != "" {
+		query = query.Where("assets.region = ?", filter.Region)
+	}
+	if filter.CloudStatus != "" {
+		query = applyCloudStatusFilter(query, "assets.cloud_status", filter.CloudStatus)
+	}
+	if filter.AssetStatus != "" {
+		query = query.Where("assets.asset_status = ?", filter.AssetStatus)
+	}
+	if filter.NetworkType != "" {
+		query = applyNetworkTypeFilter(query, "assets.network_type", filter.NetworkType)
+	}
+	if keyword := strings.TrimSpace(filter.Keyword); keyword != "" {
+		query = applyLoadBalancerKeywordFilter(query, r.db.Dialector.Name(), keyword)
+	}
+	var total int64
+	if err := query.Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
+	orderColumn := map[string]string{
+		"name": "LOWER(assets.name)", "project": "LOWER(projects.name)", "source": "LOWER(sources.name)",
+		"resource_type": "assets.resource_type", "region": "LOWER(assets.region)", "cloud_status": "LOWER(assets.cloud_status)",
+		"asset_status": "assets.asset_status", "last_seen_at": "assets.last_seen_at",
+	}[filter.SortBy]
+	if orderColumn == "" {
+		// 不属于负载均衡的合法排序字段视为空值，仍由固定资源身份保证确定顺序。
+		orderColumn = "''"
+	}
+	orderDirection := "ASC"
+	if filter.SortOrder == "desc" {
+		orderDirection = "DESC"
+	}
+	selectColumns := "assets.id, assets.project_id, assets.source_id, assets.provider, assets.resource_type, assets.external_id, assets.name, assets.region, assets.zone, assets.cloud_status, assets.asset_status, assets.first_seen_at, assets.last_seen_at, assets.missing_since, assets.created_at, assets.updated_at, assets.network_type, assets.endpoints, sources.name AS source_name, projects.name AS project_name"
+	var rows []assetRow
+	if err := query.Select(selectColumns).
+		Order(orderColumn + " " + orderDirection).
+		Order("assets.source_id ASC, assets.resource_type ASC, assets.external_id ASC").
+		Offset((filter.Page - 1) * filter.PageSize).Limit(filter.PageSize).Scan(&rows).Error; err != nil {
+		return nil, 0, err
+	}
+	values := make([]Resource, 0, len(rows))
+	for _, row := range rows {
+		value := resourceFromRow(row, "resources_load_balancers")
+		value.SourceName, value.ProjectName = row.SourceName, row.ProjectName
+		values = append(values, value)
+	}
+	return values, total, nil
+}
+
+// applyLoadBalancerKeywordFilter 将 JSON 端点还原为页面同样的 address:port 形式后参与模糊搜索。
+func applyLoadBalancerKeywordFilter(query *gorm.DB, dialect, keyword string) *gorm.DB {
+	pattern := "%" + strings.ToLower(escapedLikeValue(keyword)) + "%"
+	endpointExpression := ""
+	if dialect == "postgres" {
+		endpointExpression = `EXISTS (SELECT 1 FROM jsonb_array_elements(COALESCE(assets.endpoints, '[]'::jsonb)) AS endpoint(value) WHERE LOWER(COALESCE(endpoint.value->>'address', '') || CASE WHEN COALESCE(endpoint.value->>'port', '') IN ('', '0') THEN '' ELSE ':' || endpoint.value->>'port' END) LIKE ? ESCAPE '\')`
+	} else {
+		endpointExpression = `EXISTS (SELECT 1 FROM json_each(COALESCE(assets.endpoints, '[]')) AS endpoint WHERE LOWER(COALESCE(json_extract(endpoint.value, '$.address'), '') || CASE WHEN COALESCE(CAST(json_extract(endpoint.value, '$.port') AS INTEGER), 0) > 0 THEN ':' || CAST(json_extract(endpoint.value, '$.port') AS TEXT) ELSE '' END) LIKE ? ESCAPE '\')`
+	}
+	return query.Where("(LOWER(assets.name) LIKE ? ESCAPE '\\' OR LOWER(assets.external_id) LIKE ? ESCAPE '\\' OR "+endpointExpression+")", pattern, pattern, pattern)
+}
+
+// applyCloudStatusFilter 将不同云产品的同义原始状态归并到页面统一状态，其他状态仍按原值精确筛选。
+func applyCloudStatusFilter(query *gorm.DB, column, status string) *gorm.DB {
+	switch strings.ToLower(status) {
+	case "running":
+		return query.Where("LOWER("+column+") IN ?", []string{"running", "active", "available"})
+	case "stopped":
+		return query.Where("LOWER("+column+") IN ?", []string{"stopped", "inactive"})
+	case "failed":
+		return query.Where("LOWER("+column+") IN ?", []string{"failed", "createfailed", "create_failed"})
+	default:
+		return query.Where("LOWER("+column+") = ?", strings.ToLower(status))
+	}
+}
+
+// applyNetworkTypeFilter 将两家云平台的公网、私网原始值归并到统一筛选值。
+func applyNetworkTypeFilter(query *gorm.DB, column, networkType string) *gorm.DB {
+	switch strings.ToLower(networkType) {
+	case "public":
+		return query.Where("LOWER("+column+") IN ?", []string{"internet", "internet-facing"})
+	case "private":
+		return query.Where("LOWER("+column+") IN ?", []string{"intranet", "internal"})
+	default:
+		return query.Where("LOWER("+column+") = ?", strings.ToLower(networkType))
+	}
+}
+
 func escapedLikeValue(value string) string {
 	return strings.NewReplacer("\\", "\\\\", "%", "\\%", "_", "\\_").Replace(value)
 }
 
-// resourceMatchesKeyword 对列表公开字段做不区分大小写的模糊匹配，服务器 IP 直接使用规范化端点视图。
+// resourceMatchesKeyword 为尚未下推数据库的混合类型查询匹配公开字段与规范化端点地址。
 func resourceMatchesKeyword(value Resource, keyword string) bool {
 	keyword = strings.ToLower(strings.TrimSpace(keyword))
 	if keyword == "" {

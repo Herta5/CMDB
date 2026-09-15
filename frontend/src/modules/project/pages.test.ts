@@ -392,7 +392,7 @@ describe('项目控制台页面', () => {
     expect(refresh.props.disabled).toBe(false)
     app.unmount()
   })
-  it('负载均衡页面继续在标题区提供刷新列表', async () => {
+  it('负载均衡刷新列表位于搜索操作行且不再占用页面标题区', async () => {
     const projectStore = useProjectStore()
     projectStore.projects = [{ id: 2, code: 'platform', name: '平台项目', description: '', status: 'enabled', ownerUsername: null, createdAt: '', updatedAt: '' }]
     projectStore.selectProject(2)
@@ -401,8 +401,12 @@ describe('项目控制台页面', () => {
     const component = { render: () => h(AssetListPage, { category: 'load_balancer' }) }
     const { root, app } = await mount(component, '/assets/load-balancers')
     const heading = all(root).find(n => n.type === 'header' && String(n.props.class).includes('page-heading'))!
+    const searchForm = all(root).find(n => n.type === 'form' && String(n.props.class).includes('server-search'))!
+    const refresh = all(root).find(n => n.type === 'button' && text(n) === '刷新列表')!
 
-    expect(all(heading).some(n => n.type === 'button' && text(n) === '刷新列表')).toBe(true)
+    expect(all(searchForm)).toContain(refresh)
+    expect(all(heading)).not.toContain(refresh)
+    expect(all(searchForm).filter(n => n.type === 'button').map(text)).toEqual(['搜索', '筛选', '列设置', '刷新列表'])
     app.unmount()
   })
   it('服务器搜索操作行允许搜索框收缩以避免平板宽度裁切按钮', () => {
@@ -432,20 +436,17 @@ describe('项目控制台页面', () => {
     expect(text(root)).not.toContain('按资源名称升序')
     app.unmount()
   })
-  it('负载均衡资产页按官方类型分别查询且不查询 ELB', async () => {
+  it('负载均衡资产页以一次服务端分页查询合并官方类型且不查询 ELB', async () => {
     const projectStore = useProjectStore()
     projectStore.projects = [{ id: 2, code: 'platform', name: '平台项目', description: '', status: 'enabled', ownerUsername: null, createdAt: '', updatedAt: '' }]
     projectStore.selectProject(2)
     get.mockResolvedValue({ items: [], total: 0 })
     const component = { render: () => h(AssetListPage, { category: 'load_balancer' }) }
     const { app } = await mount(component, '/assets/load-balancers')
-    const requestedTypes = get.mock.calls
-      .filter(([url]) => url === '/projects/2/resources')
-      .map(([, options]) => options.params.resource_type)
-    expect(requestedTypes).toEqual(['slb', 'clb', 'alb', 'nlb', 'gwlb'])
-    expect(requestedTypes).not.toContain('elb')
-    expect(get).toHaveBeenCalledTimes(5)
-    expect(get.mock.calls.every(([, options]) => options.params.page === 1 && options.params.page_size === 200)).toBe(true)
+    const resourceCalls = get.mock.calls.filter(([url]) => url === '/projects/2/resources')
+    expect(resourceCalls).toHaveLength(1)
+    expect(resourceCalls[0][1].params).toEqual(expect.objectContaining({ resource_type: 'slb,clb,alb,nlb,gwlb', page: 1, page_size: 20, sort_by: 'name', sort_order: 'asc' }))
+    expect(resourceCalls[0][1].params.resource_type).not.toContain('elb,')
     app.unmount()
   })
   it('首页只汇总当前项目的正常服务器、数据库和负载均衡', async () => {
@@ -700,7 +701,7 @@ describe('项目控制台页面', () => {
     const rendered = text(root)
     for (const value of ['db.r6g.large', '2 vCPU', '16 GiB', 'PostgreSQL', '16.3', '200 GiB', 'ap-southeast-1', 'orders-a.example.com:5432', 'orders-b.example.com:5432', '2026-09-09 12:34:56']) expect(rendered).toContain(value)
     expect(rendered).not.toContain('存储类型')
-    expect(rendered).not.toContain('ap-southeast-1a')
+    expect(all(root).some(n => n.text === 'ap-southeast-1a')).toBe(false)
     expect(rendered).not.toContain('10.0.0.8')
     expect(rendered).not.toMatch(/未知|(?:^|\D)0 vCPU|(?:^|\D)0 GiB|— vCPU|— GiB/)
     expect(get).toHaveBeenCalledWith('/projects/2/resources', { params: expect.objectContaining({ resource_type: 'rds', page: 1, page_size: 20, sort_by: 'name', sort_order: 'asc' }) })
@@ -791,6 +792,141 @@ describe('项目控制台页面', () => {
     await copyButtons[1].props.onClick()
     expect(writeText).toHaveBeenNthCalledWith(1, 'db-orders')
     expect(writeText).toHaveBeenNthCalledWith(2, 'orders.example.com:5432')
+    app.unmount()
+  })
+  it('负载均衡按确认列结构展示网络信息并统一缺失值', async () => {
+    const projectStore = useProjectStore()
+    projectStore.projects = [{ id: 2, code: 'platform', name: '平台项目', description: '', status: 'enabled', ownerUsername: null, createdAt: '', updatedAt: '' }]
+    projectStore.selectProject(2)
+    get.mockResolvedValue({ items: [
+      { id: 31, source_name: '生产网络账号', provider: 'aws', resource_type: 'alb', external_id: 'arn:alb:one', name: '公网入口', region: 'ap-southeast-1', zone: 'ap-southeast-1a', cloud_status: 'active', asset_status: 'active', network_type: 'internet-facing', first_seen_at: '2026-09-08T11:22:33', last_seen_at: '2026-09-09T12:34:56', endpoints: [{ kind: 'hostname', address: 'alb.example.com', port: 443, protocol: 'https', resolved_ips: ['8.8.8.8'] }] },
+      { id: 32, source_name: '', provider: 'aliyun', resource_type: 'nlb', external_id: 'nlb-empty', name: '空网络入口', region: '', zone: '', cloud_status: 'CreateFailed', asset_status: 'lost', network_type: '', endpoints: [] },
+    ], total: 2 })
+    const component = { render: () => h(AssetListPage, { category: 'load_balancer' }) }
+    const { root, app } = await mount(component, '/assets/load-balancers')
+
+    expect(all(root).filter(n => n.type === 'th').map(text)).toEqual(['资产', '来源', '类型', '网络类型', '地域', '访问地址', '云端状态', '资产状态', '最近发现时间'])
+    const rendered = text(root)
+    for (const value of ['AWS', '生产网络账号', 'ALB', '公网', 'ap-southeast-1', 'alb.example.com:443', '运行中', '失败', '2026-09-09 12:34:56']) expect(rendered).toContain(value)
+    expect(all(root).some(n => n.text === 'ap-southeast-1a')).toBe(false)
+    expect(rendered).not.toContain('8.8.8.8')
+    expect(rendered).not.toContain('区域 / 可用区')
+    expect(rendered.match(/—/g)?.length).toBeGreaterThanOrEqual(4)
+    app.unmount()
+  })
+  it('负载均衡搜索与七项精确筛选交给后端完整结果集', async () => {
+    const projectStore = useProjectStore()
+    projectStore.projects = [{ id: 2, code: 'platform', name: '平台项目', description: '', status: 'enabled', ownerUsername: null, createdAt: '', updatedAt: '' }]
+    projectStore.selectProject(2)
+    get.mockImplementation((url: string) => Promise.resolve(url.endsWith('/sources') ? [{ id: 9, project_id: 2, provider: 'aws', name: '负载均衡生产来源', enabled: true, sync_interval_minutes: 60 }] : { items: [], total: 0 }))
+    const component = { render: () => h(AssetListPage, { category: 'load_balancer' }) }
+    const { root, app } = await mount(component, '/assets/load-balancers')
+    const searchInput = all(root).find(n => n.type === 'input' && n.props['aria-label'] === '搜索负载均衡')!
+    expect(searchInput.props.placeholder).toContain('访问地址')
+    const updateSearch = searchInput.props.onInput ?? searchInput.props['onUpdate:modelValue']
+    if (searchInput.props.onInput) await updateSearch({ target: { value: 'alb.example.com:443' } })
+    else await updateSearch('alb.example.com:443')
+    await all(root).find(n => n.type === 'form' && String(n.props.class).includes('server-search'))!.props.onSubmit({ preventDefault: () => {} })
+    await flush()
+    expect(get).toHaveBeenLastCalledWith('/projects/2/resources', { params: expect.objectContaining({ keyword: 'alb.example.com:443', resource_type: 'slb,clb,alb,nlb,gwlb', page: 1, page_size: 20 }) })
+
+    await all(root).find(n => n.type === 'button' && text(n) === '筛选')!.props.onClick()
+    await flush()
+    expect(text(root)).toContain('负载均衡生产来源')
+    const providerSelect = all(root).find(n => n.type === 'select' && n.props['aria-label'] === '云平台')!
+    const sourceSelect = all(root).find(n => n.type === 'select' && n.props['aria-label'] === '接入源')!
+    const typeSelect = all(root).find(n => n.type === 'select' && n.props['aria-label'] === '负载均衡类型')!
+    const networkSelect = all(root).find(n => n.type === 'select' && n.props['aria-label'] === '网络类型')!
+    const regionInput = all(root).find(n => n.type === 'input' && n.props['aria-label'] === '地域')!
+    const cloudSelect = all(root).find(n => n.type === 'select' && n.props['aria-label'] === '云端状态')!
+    const assetSelect = all(root).find(n => n.type === 'select' && n.props['aria-label'] === '资产状态')!
+    expect(text(cloudSelect)).toBe('全部运行中已停止启动中创建中配置中停止中已终止运行异常失败已锁定')
+    const selectValue = async (node: Node, value: string) => {
+      const update = node.props.onChange ?? node.props['onUpdate:modelValue']
+      if (node.props.onChange) await update({ target: { value } }); else await update(value)
+    }
+    await selectValue(providerSelect, 'aws')
+    await selectValue(sourceSelect, '9')
+    await selectValue(typeSelect, 'alb')
+    await selectValue(networkSelect, 'private')
+    const updateRegion = regionInput.props.onInput ?? regionInput.props['onUpdate:modelValue']
+    if (regionInput.props.onInput) await updateRegion({ target: { value: 'ap-southeast-1' } }); else await updateRegion('ap-southeast-1')
+    await selectValue(cloudSelect, 'provisioning')
+    await selectValue(assetSelect, 'lost')
+    await all(root).find(n => n.type === 'button' && text(n) === '应用筛选')!.props.onClick()
+    await flush()
+    expect(get).toHaveBeenLastCalledWith('/projects/2/resources', { params: expect.objectContaining({
+      provider: 'aws', source_id: '9', resource_type: 'alb', network_type: 'private', region: 'ap-southeast-1', cloud_status: 'provisioning', asset_status: 'lost', page: 1,
+    }) })
+    expect(text(root)).toContain('类型：ALB')
+    expect(text(root)).toContain('网络类型：私网')
+    app.unmount()
+  })
+  it('负载均衡列设置只允许隐藏来源、类型、网络类型和地域', async () => {
+    const projectStore = useProjectStore()
+    projectStore.projects = [{ id: 2, code: 'platform', name: '平台项目', description: '', status: 'enabled', ownerUsername: null, createdAt: '', updatedAt: '' }]
+    projectStore.selectProject(2)
+    localStorage.setItem('cmdb.resource-columns.operator.load_balancer.2', JSON.stringify({ order: Array(10).fill('asset'), hidden: [] }))
+    get.mockResolvedValue({ items: [], total: 0 })
+    const component = { render: () => h(AssetListPage, { category: 'load_balancer' }) }
+    const { root, app } = await mount(component, '/assets/load-balancers')
+    await all(root).find(n => n.type === 'button' && text(n) === '列设置')!.props.onClick()
+    await flush()
+    const settings = all(root).find(n => n.props['aria-label'] === '列设置')!
+    expect(settings.children.filter(n => n.type === 'div').map(row => text(row).replace(/↑↓/g, ''))).toEqual(['资产', '项目', '来源', '类型', '网络类型', '地域', '访问地址', '云端状态', '资产状态', '最近发现时间'])
+    const state = new Map(settings.children.filter(n => n.type === 'div').map(row => [text(row).replace(/↑↓/g, ''), all(row).find(n => n.type === 'input')!.props.disabled]))
+    expect([...state.entries()].filter(([, disabled]) => !disabled).map(([label]) => label)).toEqual(['来源', '类型', '网络类型', '地域'])
+    for (const label of ['资产', '访问地址', '云端状态', '资产状态', '最近发现时间']) expect(state.get(label)).toBe(true)
+    app.unmount()
+  })
+  it('所有项目负载均衡列表由后端统一分页并显示项目归属', async () => {
+    useAuthStore().acceptSession('管理员会话', { username: 'admin', globalRole: 'system_admin' })
+    const projectStore = useProjectStore()
+    projectStore.projects = [
+      { id: 2, code: 'platform', name: '平台项目', description: '', status: 'enabled', ownerUsername: null, createdAt: '', updatedAt: '' },
+      { id: 3, code: 'payment', name: '支付项目', description: '', status: 'enabled', ownerUsername: null, createdAt: '', updatedAt: '' },
+    ]
+    projectStore.selectAllProjects()
+    get.mockImplementation((url: string) => Promise.resolve(url.endsWith('/sources') ? [] : {
+      items: [{ id: 31, project_name: '支付项目', provider: 'aws', resource_type: 'alb', external_id: 'arn:alb:one', name: '公网入口', asset_status: 'active', endpoints: [] }],
+      total: 21,
+    }))
+    const component = { render: () => h(AssetListPage, { category: 'load_balancer' }) }
+    const { root, app } = await mount(component, '/assets/load-balancers')
+    expect(all(root).filter(n => n.type === 'th').map(text)).toContain('项目')
+    expect(text(root)).toContain('支付项目')
+    expect(get).toHaveBeenCalledWith('/resources', { params: expect.objectContaining({
+      resource_type: 'slb,clb,alb,nlb,gwlb', page: 1, page_size: 20, sort_by: 'name', sort_order: 'asc',
+    }) })
+    await all(root).find(n => n.type === 'button' && text(n) === '下一页')!.props.onClick()
+    await flush()
+    expect(get).toHaveBeenCalledWith('/resources', { params: expect.objectContaining({
+      resource_type: 'slb,clb,alb,nlb,gwlb', page: 2, page_size: 20,
+    }) })
+    app.unmount()
+  })
+  it('点击负载均衡名称打开只读详情抽屉并仅在详情展示解析 IP', async () => {
+    const projectStore = useProjectStore()
+    projectStore.projects = [{ id: 2, code: 'platform', name: '平台项目', description: '', status: 'enabled', ownerUsername: null, createdAt: '', updatedAt: '' }]
+    projectStore.selectProject(2)
+    get.mockResolvedValue({ items: [{ id: 31, source_name: '生产网络账号', provider: 'aws', resource_type: 'alb', external_id: 'arn:alb:one', name: '公网入口', region: 'ap-southeast-1', zone: 'ap-southeast-1a', cloud_status: 'active', asset_status: 'active', network_type: 'internet-facing', first_seen_at: '2026-09-08T11:22:33', last_seen_at: '2026-09-09T12:34:56', endpoints: [{ kind: 'hostname', address: 'alb.example.com', port: 443, protocol: 'https', resolved_ips: ['8.8.8.8'] }], raw_attributes: { secret: '不得展示' } }], total: 1 })
+    const component = { render: () => h(AssetListPage, { category: 'load_balancer' }) }
+    const { root, app } = await mount(component, '/assets/load-balancers')
+    expect(text(root)).not.toContain('8.8.8.8')
+    await all(root).find(n => n.type === 'button' && text(n) === '公网入口')!.props.onClick()
+    await flush()
+    const rendered = text(root)
+    for (const heading of ['负载均衡详情', '基本信息', '网络信息', '状态与时间']) expect(rendered).toContain(heading)
+    const drawer = all(root).find(n => n.props['aria-label'] === '负载均衡详情')!
+    expect(all(drawer).filter(n => n.type === 'th').map(text)).toEqual(['地址', '端口', '协议', '解析 IP', '操作'])
+    for (const value of ['ap-southeast-1a', '公网', 'alb.example.com:443', 'https', '8.8.8.8']) expect(rendered).toContain(value)
+    expect(rendered).not.toContain('原始属性')
+    expect(rendered).not.toContain('不得展示')
+    const copyButtons = all(root).filter(n => n.type === 'button' && text(n) === '复制')
+    await copyButtons[0].props.onClick()
+    await copyButtons[1].props.onClick()
+    expect(writeText).toHaveBeenNthCalledWith(1, 'arn:alb:one')
+    expect(writeText).toHaveBeenNthCalledWith(2, 'alb.example.com:443')
     app.unmount()
   })
   it('系统管理员选择所有项目后汇总资产并显示项目归属', async () => {

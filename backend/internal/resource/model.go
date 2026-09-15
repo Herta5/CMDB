@@ -120,6 +120,7 @@ type Resource struct {
 	ProjectName    string             `gorm:"-" json:"project_name,omitempty"`
 	Engine         string             `gorm:"-" json:"engine,omitempty"`
 	EngineVersion  string             `gorm:"-" json:"engine_version,omitempty"`
+	NetworkType    string             `gorm:"-" json:"network_type,omitempty"`
 	InstanceType   string             `gorm:"-" json:"instance_type,omitempty"`
 	VCPU           int                `gorm:"-" json:"vcpu,omitempty"`
 	Memory         int64              `gorm:"-" json:"memory,omitempty"`
