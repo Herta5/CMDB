@@ -11,6 +11,7 @@
 .brand-mark { display: grid; place-items: center; width: 30px; height: 30px; border-radius: 8px; background: var(--cmdb-accent); color: white; font-weight: 700; font-size: 21px; }
 .brand-caption { color: var(--cmdb-muted); font-size: 11px; width: 100%; padding-left: 39px; margin-top: -12px; }
 .console-nav { padding: 12px; }
+.console-nav .nav-item { color: #68758a; }
 .nav-group-label { padding: 0 12px; margin: 20px 0 8px; font-size: 11px; letter-spacing: .12em; color: var(--cmdb-muted); }
 .nav-item { display: flex; align-items: center; gap: 11px; width: 100%; min-height: 42px; padding: 10px 12px; margin: 3px 0; border: 0; border-radius: 6px; background: transparent; text-align: left; }
 .nav-item.is-active { background: var(--cmdb-accent-soft); font-weight: 600; }

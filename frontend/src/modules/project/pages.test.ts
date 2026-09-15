@@ -268,6 +268,18 @@ describe('项目控制台页面', () => {
     expect(all(root).some(n => n.type === 'a' && n.props.href === '/users')).toBe(true)
     app.unmount()
   })
+  it('首页与其他导航共享默认灰色和选中背景', () => {
+    const navigationRule = baseStyles.match(/\.console-nav\s+\.nav-item\s*\{([^}]*)\}/)?.[1] ?? ''
+    const itemRule = baseStyles.match(/(?:^|\n)\.nav-item\s*\{([^}]*)\}/)?.[1] ?? ''
+    const activeRule = baseStyles.match(/\.nav-item\.is-active\s*\{([^}]*)\}/)?.[1] ?? ''
+    const childRule = baseStyles.match(/\.nav-item\.nav-child\s*\{([^}]*)\}/)?.[1] ?? ''
+
+    expect(navigationRule).toMatch(/color:\s*#68758a/)
+    expect(itemRule).toMatch(/background:\s*transparent/)
+    expect(activeRule).toMatch(/background:\s*var\(--cmdb-accent-soft\)/)
+    expect(activeRule).toMatch(/font-weight:\s*600/)
+    expect(childRule).toMatch(/color:\s*#68758a/)
+  })
   it('系统管理员可在顶部选择所有项目', async () => {
     useAuthStore().acceptSession('管理员会话', { username: 'admin', globalRole: 'system_admin' })
     get.mockResolvedValue([fixture, { ...fixture, id: 3, name: '支付项目' }])
