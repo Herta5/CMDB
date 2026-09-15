@@ -34,6 +34,8 @@ services:
       start_period: 30s
 
   app:
+    # 应用最多等待 15 秒关闭，额外余量供容器退出与日志刷新。
+    stop_grace_period: 30s
     build:
       context: .
       dockerfile: Dockerfile
@@ -50,6 +52,12 @@ services:
       DB_NAME: cmdb
       JWT_SECRET: ${JWT_SECRET:?请设置 JWT_SECRET}
       CMDB_ENCRYPTION_KEY: ${CMDB_ENCRYPTION_KEY:?请设置 CMDB_ENCRYPTION_KEY}
+      # 所有平台共享进程内并发和任务执行时限，排队等待不消耗执行预算。
+      CMDB_SYNC_MAX_CONCURRENT: ${CMDB_SYNC_MAX_CONCURRENT:-4}
+      CMDB_SYNC_TIMEOUT_SECONDS: ${CMDB_SYNC_TIMEOUT_SECONDS:-900}
+      DB_MAX_OPEN_CONNS: ${DB_MAX_OPEN_CONNS:-20}
+      DB_MAX_IDLE_CONNS: ${DB_MAX_IDLE_CONNS:-5}
+      DB_CONN_MAX_LIFETIME_SECONDS: ${DB_CONN_MAX_LIFETIME_SECONDS:-1800}
     ports:
       - "${CMDB_PORT:-80}:80"
     depends_on:

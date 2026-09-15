@@ -116,7 +116,11 @@ corepack pnpm dev
 [开发控制台](http://localhost:3000) 将 `/api` 请求代理至本机后端 `8080` 端口。
 
 ```bash
-# 后端测试使用隔离 SQLite 数据库，需要本机 C 编译器，不依赖真实云账号。
+# 后端完整验证在 Linux/WSL 运行，需要 Go、C 编译器、Docker Compose 与 setsid（util-linux）。
+# 自动创建并清理 PostgreSQL 17 临时环境。
+./scripts/test-backend.sh
+
+# 仅快速运行普通包测试（不等同于完整数据库验收）。
 cd backend
 go test ./...
 
@@ -128,3 +132,9 @@ corepack pnpm build
 ```
 
 后端入口为 `backend/cmd/server`，一次性系统管理员初始化入口为 `backend/cmd/init-admin`；共享资源核心位于 `backend/internal/resource`，平台采集器分别位于 `backend/internal/aliyun`、`aws`。前端共享资源模块位于 `frontend/src/modules/resource`。
+
+### 同步运行参数与诊断
+
+同步默认最多并行 4 个任务，每个任务获得名额后有 900 秒执行预算；分别通过 `CMDB_SYNC_MAX_CONCURRENT` 与 `CMDB_SYNC_TIMEOUT_SECONDS` 调整。共享数据库池默认最多 20 个连接、5 个空闲连接、连接寿命 1800 秒，可使用 `DB_MAX_OPEN_CONNS`、`DB_MAX_IDLE_CONNS`、`DB_CONN_MAX_LIFETIME_SECONDS` 调整。参数范围和异常边界见项目 [同步规范](docs/project/resource-sync.md#同步运行资源与退出边界) 与 [安全规范](docs/project/security.md#安全运行诊断与连接预算)。
+
+使用 `docker compose logs --tail=100 -f app` 查看 JSON 运行诊断；HTTP 响应的 `X-Request-ID` 可关联请求与后台任务。诊断只包含安全事件、状态与耗时，业务变更仍在审计页面查询。应用仅支持单实例同步调度；关闭最多等待 15 秒，Compose 退出余量为 30 秒。

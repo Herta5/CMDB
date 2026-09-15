@@ -49,3 +49,11 @@
 ## 后续更新规则
 
 实现任何“部分实现”或“待实现”项时，必须先满足对应规范和验收场景，再在本文件更新状态、具体证据路径及剩余差距；不得仅因页面入口、模拟调用或单一单元测试存在就改变状态。
+
+## 运行可靠性增量（基线 85cfe2a）
+
+| 能力 | 状态 | 实现与验收证据 | 边界与剩余差距 |
+| --- | --- | --- | --- |
+| 固定 PostgreSQL 集成验证 | 已实现 | `scripts/test-backend.sh`、`.github/workflows/backend.yml`、`backend/test/postgres/docker-compose.yml`、`backend/internal/platform/database/backend_test_entrypoint_test.go`、两份 postgres 标签测试；AC-043 | 修复测试 Compose 被忽略导致干净检出失败的问题；本地入口已实际运行 PostgreSQL 17 与全部后端测试并清理环境。远端 GitHub Actions 要在推送后运行，本次不宣称远端已通过。 |
+| 同步并发、超时与退出 | 已实现 | `backend/internal/resource/execution.go`、`execution_test.go`、`service.go`、`repository.go`、`backend/internal/aliyun/transport_test.go`、`backend/cmd/server/lifecycle.go`；AC-044 | 默认并发 4、运行 900 秒、独立失败收敛 10 秒；前置读写超时、持久化活动互斥、资产保留、排队预算和恢复限额已有回归；仅支持单应用实例，外部强杀或数据库持续不可用仍需重启恢复。 |
+| 安全诊断与连接池预算 | 已实现 | `backend/internal/platform/diagnostics/`、`httpserver/diagnostics_test.go`、`resource/diagnostics_test.go`、`database/pool_test.go`、`config/config_test.go`；AC-045 | HTTP、同步与数据库使用安全事件与关联，异常不输出原文；默认连接池 20/5/1800 秒。没有新增外部日志收集平台、指标监控或日志留存服务。 |

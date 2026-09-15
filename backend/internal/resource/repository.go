@@ -529,6 +529,14 @@ func (r *Repository) CreateJob(ctx context.Context, job *SyncJob) error {
 		if err != nil {
 			return err
 		}
+		// 内存锁无法覆盖工作器异常留下的持久化任务，父锁内再次检查完整活动状态。
+		var active int64
+		if err := tx.Model(&SyncJob{}).Where("source_id = ? AND status IN ?", job.SourceID, []string{"queued", "running"}).Count(&active).Error; err != nil {
+			return err
+		}
+		if active > 0 {
+			return ErrSyncAlreadyRunning
+		}
 		return tx.Create(job).Error
 	})
 }

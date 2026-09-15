@@ -4,6 +4,8 @@ package config
 import (
 	"fmt"
 	"os"
+	"strconv"
+	"time"
 )
 
 // Config 汇总服务启动阶段需要的配置，敏感字段只供内部依赖装配使用。
@@ -12,15 +14,25 @@ type Config struct {
 	JWTSecret     string
 	EncryptionKey string
 	Server        Server
+	Sync          Sync
 }
 
 // Database 描述连接 PostgreSQL 所需的环境配置。
 type Database struct {
-	Host     string
-	Port     string
-	User     string
-	Password string
-	Name     string
+	Host            string
+	Port            string
+	User            string
+	Password        string
+	Name            string
+	MaxOpenConns    int
+	MaxIdleConns    int
+	ConnMaxLifetime time.Duration
+}
+
+// Sync 限制整个 CMDB 进程中同时执行的同步数与单任务执行时长。
+type Sync struct {
+	MaxConcurrent int
+	Timeout       time.Duration
 }
 
 // Server 描述 HTTP 服务监听配置；它不承载业务领域的路由定义。
@@ -65,6 +77,36 @@ func Load() (Config, error) {
 		}
 	}
 
+	values := []struct {
+		name               string
+		fallback, min, max int
+		target             *int
+	}{
+		{"CMDB_SYNC_MAX_CONCURRENT", 4, 1, 64, &config.Sync.MaxConcurrent},
+		{"DB_MAX_OPEN_CONNS", 20, 1, 1000, &config.Database.MaxOpenConns},
+		{"DB_MAX_IDLE_CONNS", 5, 0, 1000, &config.Database.MaxIdleConns},
+	}
+	for _, item := range values {
+		value, err := boundedInteger(item.name, item.fallback, item.min, item.max)
+		if err != nil {
+			return Config{}, err
+		}
+		*item.target = value
+	}
+	if config.Database.MaxIdleConns > config.Database.MaxOpenConns {
+		return Config{}, fmt.Errorf("DB_MAX_IDLE_CONNS 不得超过 DB_MAX_OPEN_CONNS")
+	}
+	timeout, err := boundedInteger("CMDB_SYNC_TIMEOUT_SECONDS", 900, 1, 86400)
+	if err != nil {
+		return Config{}, err
+	}
+	config.Sync.Timeout = time.Duration(timeout) * time.Second
+	lifetime, err := boundedInteger("DB_CONN_MAX_LIFETIME_SECONDS", 1800, 1, 86400)
+	if err != nil {
+		return Config{}, err
+	}
+	config.Database.ConnMaxLifetime = time.Duration(lifetime) * time.Second
+
 	return config, nil
 }
 
@@ -74,4 +116,17 @@ func valueOrDefault(name, fallback string) string {
 		return value
 	}
 	return fallback
+}
+
+// boundedInteger 只报告参数名，禁止把来自环境的任意输入回显到诊断输出。
+func boundedInteger(name string, fallback, min, max int) (int, error) {
+	raw := os.Getenv(name)
+	if raw == "" {
+		return fallback, nil
+	}
+	value, err := strconv.Atoi(raw)
+	if err != nil || value < min || value > max {
+		return 0, fmt.Errorf("运行参数 %s 无效", name)
+	}
+	return value, nil
 }

@@ -2,7 +2,10 @@
 package database
 
 import (
+	"cmdb/internal/platform/diagnostics"
+	"database/sql"
 	"fmt"
+	"log/slog"
 	"strings"
 
 	"cmdb/internal/platform/config"
@@ -13,7 +16,16 @@ import (
 // Open 根据已校验的数据库配置创建 PostgreSQL 连接。
 // 配置校验由 config.Load 负责，此处仅保留连接构造职责，避免启动入口混入基础设施细节。
 func Open(databaseConfig config.Database) (*gorm.DB, error) {
-	return gorm.Open(postgres.Open(dsn(databaseConfig)), &gorm.Config{TranslateError: true})
+	db, err := gorm.Open(postgres.Open(dsn(databaseConfig)), &gorm.Config{TranslateError: true, Logger: diagnostics.NewDatabaseLogger(slog.Default())})
+	if err != nil {
+		return nil, err
+	}
+	sqlDB, err := db.DB()
+	if err != nil {
+		return nil, err
+	}
+	configurePool(sqlDB, databaseConfig)
+	return db, nil
 }
 
 // dsn 按 PostgreSQL 驱动格式构造连接串，并固定首期单机部署的 TLS 与时区约束。
@@ -35,4 +47,11 @@ func dsnValue(value string) string {
 	escapedValue := strings.ReplaceAll(value, `\`, `\\`)
 	escapedValue = strings.ReplaceAll(escapedValue, `'`, `\'`)
 	return "'" + escapedValue + "'"
+}
+
+// configurePool 将采集并发和普通 HTTP 请求约束在共享连接预算内。
+func configurePool(db *sql.DB, configuration config.Database) {
+	db.SetMaxOpenConns(configuration.MaxOpenConns)
+	db.SetMaxIdleConns(configuration.MaxIdleConns)
+	db.SetConnMaxLifetime(configuration.ConnMaxLifetime)
 }

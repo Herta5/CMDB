@@ -67,3 +67,40 @@ func setRequiredEnvironment(t *testing.T) {
 	t.Setenv("JWT_SECRET", "test-jwt-secret")
 	t.Setenv("CMDB_ENCRYPTION_KEY", "test-encryption-key")
 }
+
+// TestLoadExecutionDefaults 验证未设置运行参数时使用有界默认值。
+func TestLoadExecutionDefaults(t *testing.T) {
+	setRequiredEnvironment(t)
+	for _, name := range []string{"CMDB_SYNC_MAX_CONCURRENT", "CMDB_SYNC_TIMEOUT_SECONDS", "DB_MAX_OPEN_CONNS", "DB_MAX_IDLE_CONNS", "DB_CONN_MAX_LIFETIME_SECONDS"} {
+		t.Setenv(name, "")
+	}
+	configuration, err := Load()
+	if err != nil {
+		t.Fatal("加载默认运行参数失败")
+	}
+	if configuration.Sync.MaxConcurrent != 4 || configuration.Sync.Timeout.Seconds() != 900 || configuration.Database.MaxOpenConns != 20 || configuration.Database.MaxIdleConns != 5 || configuration.Database.ConnMaxLifetime.Seconds() != 1800 {
+		t.Fatal("默认运行参数未限制同步和连接池")
+	}
+}
+
+// TestLoadRejectsUnsafeExecutionLimits 验证错误参数不会静默回退或将输入值泄露到错误中。
+func TestLoadRejectsUnsafeExecutionLimits(t *testing.T) {
+	for _, item := range []struct{ name, value string }{
+		{"CMDB_SYNC_MAX_CONCURRENT", "0"}, {"CMDB_SYNC_MAX_CONCURRENT", "65"},
+		{"CMDB_SYNC_TIMEOUT_SECONDS", "0"}, {"CMDB_SYNC_TIMEOUT_SECONDS", "86401"},
+		{"DB_MAX_OPEN_CONNS", "0"}, {"DB_MAX_IDLE_CONNS", "21"},
+		{"DB_CONN_MAX_LIFETIME_SECONDS", "-1"}, {"CMDB_SYNC_MAX_CONCURRENT", "secret-test-input"},
+	} {
+		t.Run(item.name+"/"+item.value, func(t *testing.T) {
+			setRequiredEnvironment(t)
+			t.Setenv(item.name, item.value)
+			_, err := Load()
+			if err == nil || !strings.Contains(err.Error(), item.name) {
+				t.Fatal("非法运行参数必须拒绝启动并指明参数名")
+			}
+			if strings.Contains(err.Error(), "secret-test-input") {
+				t.Fatal("运行配置错误不得回显原始输入")
+			}
+		})
+	}
+}

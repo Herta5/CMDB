@@ -3,9 +3,11 @@ package resource
 
 import (
 	"bytes"
+	"cmdb/internal/platform/diagnostics"
 	"context"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"strconv"
 	"strings"
 	"sync"
@@ -23,6 +25,8 @@ type Service struct {
 	now           func() time.Time
 	sourceLocks   sync.Map
 	auditRecorder audit.Recorder
+	execution     *executionRuntime
+	logger        *slog.Logger
 }
 
 // ErrSyncAlreadyRunning 表示同一接入源已有同步任务正在执行。
@@ -71,10 +75,7 @@ type ConnectionTestResult struct {
 
 // NewService 创建资源服务，调用方必须提供部署密钥派生的凭证加密器。
 func NewService(repository *Repository, cipher *CredentialCipher, adapters map[string]ProviderAdapter, recorders ...audit.Recorder) *Service {
-	service := &Service{repository: repository, cipher: cipher, adapters: adapters, now: time.Now}
-	if len(recorders) > 0 {
-		service.auditRecorder = recorders[0]
-	}
+	service, _ := NewServiceWithExecution(repository, cipher, adapters, DefaultExecutionConfig(), recorders...)
 	return service
 }
 
@@ -389,6 +390,9 @@ func (s *Service) EnqueueSync(ctx context.Context, sourceID uint64, trigger stri
 
 // enqueueSync 允许重试任务记录原任务标识，同时保持普通入队接口简洁。
 func (s *Service) enqueueSync(ctx context.Context, sourceID uint64, trigger string, collector Collector, previousJobID *uint64) (*SyncJob, error) {
+	if !s.acceptingSync() {
+		return nil, ErrSyncStopping
+	}
 	lock, ok := s.trySourceLock(sourceID)
 	if !ok {
 		return nil, ErrSyncAlreadyRunning
@@ -405,7 +409,8 @@ func (s *Service) enqueueSync(ctx context.Context, sourceID uint64, trigger stri
 	}
 	// 后台工作器使用独立快照，避免与 HTTP 正在序列化的 queued 返回值发生数据竞争。
 	workerJob := *job
-	workerContext := audit.DetachedContext(ctx)
+	workerContext := diagnostics.CopyRequestID(audit.DetachedContext(ctx), ctx)
+	s.logSync(ctx, slog.LevelInfo, "同步任务已排队", "sync_queued", sourceID, job, 0)
 	go func() {
 		defer lock.Unlock()
 		// HTTP 请求结束会取消原上下文，后台任务使用独立上下文完成状态落库。
@@ -491,17 +496,28 @@ func (s *Service) trySourceLock(sourceID uint64) (*sync.Mutex, bool) {
 	return lock, lock.TryLock()
 }
 
-// executeSync 执行同步主体；existingJob 非空时承接已返回给调用方的排队任务。
-func (s *Service) executeSync(ctx context.Context, sourceID uint64, trigger string, collector Collector, existingJob *SyncJob) (*SyncJob, error) {
+// executeSyncBody 执行同步主体；existingJob 非空时承接已返回给调用方的排队任务。
+func (s *Service) executeSyncBody(ctx context.Context, sourceID uint64, trigger string, collector Collector, existingJob *SyncJob) (*SyncJob, error) {
 
 	source, err := s.repository.FindSource(ctx, sourceID)
 	if err != nil {
+		if existingJob != nil && existingJob.ID != 0 {
+			existingJob.StartedAt = s.now()
+			summary := "同步准备失败"
+			if ctx.Err() != nil {
+				summary = safeCollectionError(ctx.Err())
+			}
+			return s.finishFailed(ctx, existingJob, summary, err)
+		}
 		return nil, err
 	}
 	now := s.now()
 	job := existingJob
 	if job == nil {
-		job = &SyncJob{ProjectID: source.ProjectID, SourceID: source.ID, Status: "running", Trigger: trigger, StartedAt: now, ErrorSummary: ""}
+		job = &SyncJob{}
+	}
+	if job.ID == 0 {
+		*job = SyncJob{ProjectID: source.ProjectID, SourceID: source.ID, Status: "running", Trigger: trigger, StartedAt: now, ErrorSummary: ""}
 		if err := s.repository.CreateJob(ctx, job); err != nil {
 			return nil, err
 		}
@@ -509,14 +525,29 @@ func (s *Service) executeSync(ctx context.Context, sourceID uint64, trigger stri
 		job.Status = "running"
 		job.StartedAt = now
 		if err := s.repository.SaveJob(ctx, job); err != nil {
-			return nil, err
+			summary := "同步准备失败"
+			if ctx.Err() != nil {
+				summary = safeCollectionError(ctx.Err())
+			}
+			return s.finishFailed(ctx, job, summary, err)
 		}
 	}
+	s.logSync(ctx, slog.LevelInfo, "同步任务开始执行", "sync_started", sourceID, job, 0)
 	credential, err := s.cipher.Decrypt(source.EncryptedCredential)
 	if err != nil {
 		return s.finishFailed(ctx, job, "凭证解密失败", err)
 	}
+	// 使用 defer 保证采集异常或取消时同样清理凭证明文。
+	defer func() {
+		for index := range credential {
+			credential[index] = 0
+		}
+	}()
 	results, collectErr := collector.Collect(ctx, *source, credential)
+	// 即便适配器在取消后返回局部快照，也不得推进任何资产生命周期。
+	if ctx.Err() != nil {
+		results, collectErr = nil, ctx.Err()
+	}
 	for index := range credential {
 		credential[index] = 0
 	}
@@ -575,18 +606,25 @@ func (s *Service) executeSync(ctx context.Context, sourceID uint64, trigger stri
 	if applyErr != nil {
 		// 外层事务已经回滚全部资源变化，失败任务不得保留尚未生效的统计。
 		job.Statistics = nil
-		return s.finishFailed(ctx, job, "资源写入失败", applyErr)
+		summary := "资源写入失败"
+		if ctx.Err() != nil {
+			summary = safeCollectionError(ctx.Err())
+		}
+		return s.finishFailed(ctx, job, summary, applyErr)
 	}
 	return job, nil
 }
 
 // finishFailed 只记录脱敏摘要，不把底层错误或凭证内容写入任务。
 func (s *Service) finishFailed(ctx context.Context, job *SyncJob, summary string, cause error) (*SyncJob, error) {
+	ctx, cancel := failureContext(ctx)
+	defer cancel()
 	source, err := s.repository.FindSource(ctx, job.SourceID)
 	if err != nil {
+		s.logSync(ctx, slog.LevelError, "同步失败结果保存失败，需检查数据库", "sync_failure_persist_failed", job.SourceID, job, 0)
 		return job, err
 	}
-	if err := s.convergeFailedJob(ctx, job, source, summary, nil); err != nil {
+	if err := s.convergeFailedJobWithin(ctx, job, source, summary, nil); err != nil {
 		return job, err
 	}
 	if cause == nil || errors.Is(cause, ErrAuthenticationFailed) || errors.Is(cause, ErrPermissionDenied) {
@@ -597,6 +635,13 @@ func (s *Service) finishFailed(ctx context.Context, job *SyncJob, summary string
 
 // convergeFailedJob 将失败终态、允许保留的统计、自动计划和失败审计原子提交；失败不具备最近成功语义。
 func (s *Service) convergeFailedJob(ctx context.Context, job *SyncJob, source *Source, summary string, statistics json.RawMessage) error {
+	ctx, cancel := failureContext(ctx)
+	defer cancel()
+	return s.convergeFailedJobWithin(ctx, job, source, summary, statistics)
+}
+
+// convergeFailedJobWithin 复用已有失败上下文，保持读取来源和失败事务的总预算。
+func (s *Service) convergeFailedJobWithin(ctx context.Context, job *SyncJob, source *Source, summary string, statistics json.RawMessage) error {
 	finished := s.now()
 	failed := *job
 	failed.Status, failed.ErrorSummary, failed.Statistics, failed.FinishedAt = "failed", summary, statistics, &finished
@@ -606,8 +651,18 @@ func (s *Service) convergeFailedJob(ctx context.Context, job *SyncJob, source *S
 		if err != nil {
 			return err
 		}
-		if err := repository.SaveJob(ctx, &failed); err != nil {
+		// 已获得名额但前置读写失败时，也在失败事务内完成 queued→running→failed。
+		if err := repository.db.WithContext(ctx).Model(&SyncJob{}).Where("id = ? AND status = ?", failed.ID, "queued").Update("status", "running").Error; err != nil {
 			return err
+		}
+		result := repository.db.WithContext(ctx).Model(&SyncJob{}).Where("id = ? AND status = ?", failed.ID, "running").Updates(map[string]any{
+			"status": failed.Status, "error_summary": failed.ErrorSummary, "statistics": failed.Statistics, "finished_at": failed.FinishedAt, "started_at": failed.StartedAt,
+		})
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected != 1 {
+			return errors.New("同步任务状态已改变")
 		}
 		if failed.Trigger == "scheduled" && failed.PreviousJobID == nil {
 			next := finished.Add(time.Duration(current.SyncIntervalMinutes) * time.Minute)
@@ -619,6 +674,8 @@ func (s *Service) convergeFailedJob(ctx context.Context, job *SyncJob, source *S
 	})
 	if err == nil {
 		*job = failed
+	} else {
+		s.logSync(ctx, slog.LevelError, "同步失败结果保存失败，需检查数据库", "sync_failure_persist_failed", job.SourceID, job, 0)
 	}
 	return err
 }
@@ -765,26 +822,29 @@ func (s *Service) recordAudit(ctx context.Context, entry audit.Entry) error {
 func (s *Service) SyncDueSources(ctx context.Context) {
 	sources, err := s.repository.ListDueSources(ctx, s.now())
 	if err != nil {
+		s.logger.ErrorContext(ctx, "读取到期接入源失败", "event", "scheduler_scan_failed")
 		return
 	}
-	var group sync.WaitGroup
+
 	for index := range sources {
+		if ctx.Err() != nil || !s.acceptingSync() {
+			return
+		}
 		source := sources[index]
 		collector := s.adapters[source.Provider]
 		if collector == nil {
+			s.logSync(ctx, slog.LevelError, "同步平台适配器不可用", "scheduler_adapter_unavailable", source.ID, nil, 0)
 			continue
 		}
-		group.Add(1)
-		go func() {
-			defer group.Done()
-			_, _ = s.EnqueueSync(ctx, source.ID, "scheduled", collector)
-		}()
+		if _, err := s.EnqueueSync(ctx, source.ID, "scheduled", collector); err != nil && !errors.Is(err, ErrSyncAlreadyRunning) && !errors.Is(err, ErrSyncStopping) {
+			s.logSync(ctx, slog.LevelError, "自动同步任务入队失败", "scheduler_enqueue_failed", source.ID, nil, 0)
+		}
 	}
-	group.Wait()
 }
 
 // StartScheduler 完成启动恢复后才启动后台工作器，恢复失败必须由调用方阻止 HTTP 开放。
 func (s *Service) StartScheduler(ctx context.Context) error {
+	context.AfterFunc(ctx, s.Stop)
 	// 启动恢复先结束异常中断任务，再继续执行已持久化但尚未开始的排队任务。
 	// 此临时服务只执行同步恢复，复用原有失败事务；长期工作器始终由当前服务及其同源锁管理。
 	recovery := NewService(s.repository.forStartupRecovery(), s.cipher, s.adapters, s.auditRecorder)

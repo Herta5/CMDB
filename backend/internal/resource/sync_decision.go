@@ -2,6 +2,7 @@
 package resource
 
 import (
+	"context"
 	"errors"
 	"strings"
 )
@@ -66,6 +67,10 @@ func DecideSyncResult(expectedTypes []string, results []CollectionResult, collec
 // safeCollectionError 只使用有限领域分类，不将 SDK 文本、请求正文或凭证片段带入任务和审计。
 func safeCollectionError(err error) string {
 	switch {
+	case errors.Is(err, context.DeadlineExceeded):
+		return "同步执行超时，可重新执行"
+	case errors.Is(err, context.Canceled):
+		return "同步执行已中断，可重新执行"
 	case errors.Is(err, ErrCloudAuthentication):
 		return "凭证认证失败"
 	case errors.Is(err, ErrCloudPermission):

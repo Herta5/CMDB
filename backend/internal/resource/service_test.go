@@ -208,8 +208,12 @@ func (loadBalancerTypesAdapter) ResourceTypes() []string {
 	return []string{"ec2", "rds", "clb", "alb", "nlb", "gwlb"}
 }
 
-func newResourceServiceTest(t *testing.T) (*Service, *gorm.DB, *Source, *time.Time) {
-	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{Logger: logger.Default.LogMode(logger.Silent)})
+func newResourceServiceTest(t *testing.T, paths ...string) (*Service, *gorm.DB, *Source, *time.Time) {
+	dsn := ":memory:"
+	if len(paths) > 0 {
+		dsn = paths[0]
+	}
+	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{Logger: logger.Default.LogMode(logger.Silent)})
 	if err != nil {
 		t.Fatal("打开资源测试数据库失败")
 	}

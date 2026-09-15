@@ -68,7 +68,7 @@ func (c *Collector) Collect(ctx context.Context, source resource.Source, plain [
 	if json.Unmarshal(plain, &auth) != nil || auth.AccessKeyID == "" || auth.AccessKeySecret == "" || source.Region == "" {
 		return nil, resource.ErrAuthenticationFailed
 	}
-	clientConfig := newAliyunHTTPSConfig()
+	clientConfig := newAliyunHTTPSConfig(ctx)
 	clientCredential := newAliyunSDKCredential(auth.AccessKeyID, auth.AccessKeySecret)
 	ecsClient, err := ecs.NewClientWithOptions(source.Region, clientConfig, clientCredential)
 	if err != nil {
@@ -160,7 +160,7 @@ func (c *Collector) Probe(ctx context.Context, source resource.Source, plain []b
 	if json.Unmarshal(plain, &auth) != nil || auth.AccessKeyID == "" || auth.AccessKeySecret == "" || source.Region == "" {
 		return nil, resource.ErrAuthenticationFailed
 	}
-	clientConfig := newAliyunHTTPSConfig()
+	clientConfig := newAliyunHTTPSConfig(ctx)
 	clientCredential := newAliyunSDKCredential(auth.AccessKeyID, auth.AccessKeySecret)
 	ecsClient, err := ecs.NewClientWithOptions(source.Region, clientConfig, clientCredential)
 	if err != nil {
