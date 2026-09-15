@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -273,6 +274,7 @@ type ResourceListQuery struct {
 	ResourceTypes []string
 	SourceID      uint64
 	Keyword       string
+	Engine        string
 	Region        string
 	CloudStatus   string
 	AssetStatus   string
@@ -304,6 +306,7 @@ func (s *Service) ListAllResources(ctx context.Context, query ResourceListQuery)
 }
 
 func normalizedResourceListQuery(query ResourceListQuery) (ResourceListQuery, error) {
+	query.Engine = strings.TrimSpace(query.Engine)
 	for _, provider := range query.Providers {
 		if !validProvider(provider) {
 			return query, ErrInvalidResourceQuery

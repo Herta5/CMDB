@@ -904,6 +904,47 @@ func TestListResourcesSupportsServerSearchFiltersAndStableSorting(t *testing.T) 
 	if err != nil || len(values) != 2 || values[0].SourceID != source.ID || values[1].SourceID != secondSource.ID {
 		t.Fatalf("主排序同值时资源身份次级排序必须固定升序：values=%+v err=%v", values, err)
 	}
+	values, total, err = service.ListResources(context.Background(), 1, ResourceListQuery{ResourceTypes: []string{"ecs", "ec2"}, Keyword: "ECS.G7", SortBy: "name", SortOrder: "asc", Page: 1, PageSize: 20})
+	if err != nil || total != 1 || len(values) != 1 || values[0].ExternalID != "i-a" {
+		t.Fatalf("服务器实例类型必须参与不区分大小写的全量搜索：total=%d values=%+v err=%v", total, values, err)
+	}
+}
+
+// TestListResourcesFiltersDatabaseEngine 验证数据库引擎精确筛选参与完整结果集的搜索、计数和分页。
+func TestListResourcesFiltersDatabaseEngine(t *testing.T) {
+	service, db, source, now := newResourceServiceTest(t)
+	databases := []Database{
+		{AssetBase: AssetBase{ProjectID: source.ProjectID, SourceID: source.ID, Provider: ProviderAWS, ResourceType: "rds", ExternalID: "db-postgresql", Name: "订单数据库", AssetStatus: AssetStatusActive, LastSeenAt: *now}, Engine: "PostgreSQL", EngineVersion: "16.3", InstanceType: "db.r6g.large", Endpoints: json.RawMessage(`[{"kind":"hostname","address":"orders.example.com","port":5432,"protocol":"tcp","resolved_ips":[]}]`)},
+		{AssetBase: AssetBase{ProjectID: source.ProjectID, SourceID: source.ID, Provider: ProviderAWS, ResourceType: "rds", ExternalID: "db-mysql", Name: "用户数据库", AssetStatus: AssetStatusActive, LastSeenAt: *now}, Engine: "MySQL", EngineVersion: "8.0.35", InstanceType: "db.m6g.large", Endpoints: json.RawMessage(`[{"kind":"hostname","address":"users.example.com","port":3306,"protocol":"tcp","resolved_ips":[]}]`)},
+	}
+	if err := db.Create(&databases).Error; err != nil {
+		t.Fatalf("准备数据库列表失败：%v", err)
+	}
+	server := Server{AssetBase: AssetBase{ProjectID: source.ProjectID, SourceID: source.ID, Provider: ProviderAWS, ResourceType: "ec2", ExternalID: "i-orders", Name: "订单节点", AssetStatus: AssetStatusActive, LastSeenAt: *now}, InstanceType: "db.r6g.large", PrivateIPs: json.RawMessage(`[]`), PublicIPs: json.RawMessage(`[]`), Disks: json.RawMessage(`[]`)}
+	if err := db.Create(&server).Error; err != nil {
+		t.Fatalf("准备非数据库资产失败：%v", err)
+	}
+
+	values, total, err := service.ListResources(context.Background(), source.ProjectID, ResourceListQuery{
+		ResourceTypes: []string{"rds"}, Engine: "postgresql", Keyword: "orders.example.com:5432", SortBy: "name", SortOrder: "asc", Page: 1, PageSize: 20,
+	})
+	if err != nil || total != 1 || len(values) != 1 || values[0].ExternalID != "db-postgresql" || values[0].Engine != "PostgreSQL" || values[0].EngineVersion != "16.3" {
+		t.Fatalf("数据库引擎和访问地址组合筛选不正确：total=%d values=%+v err=%v", total, values, err)
+	}
+	values, total, err = service.ListResources(context.Background(), source.ProjectID, ResourceListQuery{Engine: "POSTGRESQL", SortBy: "name", SortOrder: "asc", Page: 1, PageSize: 20})
+	if err != nil || total != 1 || len(values) != 1 || values[0].ExternalID != "db-postgresql" {
+		t.Fatalf("引擎筛选不得让非数据库资产进入结果：total=%d values=%+v err=%v", total, values, err)
+	}
+	values, total, err = service.ListResources(context.Background(), source.ProjectID, ResourceListQuery{ResourceTypes: []string{"ec2"}, Engine: "POSTGRESQL", SortBy: "name", SortOrder: "asc", Page: 1, PageSize: 20})
+	if err != nil || total != 0 || len(values) != 0 {
+		t.Fatalf("数据库引擎与服务器类型组合必须返回空结果：total=%d values=%+v err=%v", total, values, err)
+	}
+	values, total, err = service.ListResources(context.Background(), source.ProjectID, ResourceListQuery{
+		ResourceTypes: []string{"rds"}, Keyword: "R6G.LARGE", SortBy: "name", SortOrder: "asc", Page: 1, PageSize: 20,
+	})
+	if err != nil || total != 1 || len(values) != 1 || values[0].ExternalID != "db-postgresql" {
+		t.Fatalf("数据库实例类型必须参与不区分大小写的全量搜索：total=%d values=%+v err=%v", total, values, err)
+	}
 }
 
 // TestListResourcesRejectsUnsupportedQuery 验证未知筛选值和排序字段不会下沉成数据库故障。

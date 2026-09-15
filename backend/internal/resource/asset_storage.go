@@ -426,7 +426,7 @@ func resourceFromRow(row assetRow, table string) Resource {
 	} else if len(row.Endpoints) > 0 {
 		_ = json.Unmarshal(row.Endpoints, &endpoints)
 	}
-	value := Resource{AssetBase: row.AssetBase, InstanceType: row.InstanceType, StorageType: row.StorageType, Endpoints: endpoints, Disks: disks}
+	value := Resource{AssetBase: row.AssetBase, Engine: row.Engine, EngineVersion: row.EngineVersion, InstanceType: row.InstanceType, StorageType: row.StorageType, Endpoints: endpoints, Disks: disks}
 	if row.VCPU.Valid {
 		value.VCPU = int(row.VCPU.Int64)
 	}

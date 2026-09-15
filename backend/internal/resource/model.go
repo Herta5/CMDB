@@ -118,6 +118,8 @@ type Resource struct {
 	AssetBase
 	SourceName     string             `gorm:"-" json:"source_name"`
 	ProjectName    string             `gorm:"-" json:"project_name,omitempty"`
+	Engine         string             `gorm:"-" json:"engine,omitempty"`
+	EngineVersion  string             `gorm:"-" json:"engine_version,omitempty"`
 	InstanceType   string             `gorm:"-" json:"instance_type,omitempty"`
 	VCPU           int                `gorm:"-" json:"vcpu,omitempty"`
 	Memory         int64              `gorm:"-" json:"memory,omitempty"`

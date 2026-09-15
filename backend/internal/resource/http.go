@@ -354,7 +354,7 @@ func resourceListQuery(c *gin.Context) (ResourceListQuery, bool) {
 	}
 	return ResourceListQuery{
 		Providers: splitQueryValues(c.Query("provider")), ResourceTypes: splitQueryValues(c.Query("resource_type")), SourceID: sourceID,
-		Keyword: c.Query("keyword"), Region: c.Query("region"), CloudStatus: c.Query("cloud_status"), AssetStatus: c.Query("asset_status"),
+		Keyword: c.Query("keyword"), Engine: c.Query("engine"), Region: c.Query("region"), CloudStatus: c.Query("cloud_status"), AssetStatus: c.Query("asset_status"),
 		SortBy: c.Query("sort_by"), SortOrder: c.Query("sort_order"), Page: page, PageSize: pageSize,
 	}, true
 }

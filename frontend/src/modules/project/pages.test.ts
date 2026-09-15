@@ -392,17 +392,14 @@ describe('项目控制台页面', () => {
     expect(refresh.props.disabled).toBe(false)
     app.unmount()
   })
-  it.each([
-    ['database', '/assets/databases'],
-    ['load_balancer', '/assets/load-balancers'],
-  ] as const)('%s 页面继续在标题区提供刷新列表', async (category, path) => {
+  it('负载均衡页面继续在标题区提供刷新列表', async () => {
     const projectStore = useProjectStore()
     projectStore.projects = [{ id: 2, code: 'platform', name: '平台项目', description: '', status: 'enabled', ownerUsername: null, createdAt: '', updatedAt: '' }]
     projectStore.selectProject(2)
     get.mockResolvedValue({ items: [], total: 0 })
 
-    const component = { render: () => h(AssetListPage, { category }) }
-    const { root, app } = await mount(component, path)
+    const component = { render: () => h(AssetListPage, { category: 'load_balancer' }) }
+    const { root, app } = await mount(component, '/assets/load-balancers')
     const heading = all(root).find(n => n.type === 'header' && String(n.props.class).includes('page-heading'))!
 
     expect(all(heading).some(n => n.type === 'button' && text(n) === '刷新列表')).toBe(true)
@@ -576,6 +573,7 @@ describe('项目控制台页面', () => {
     const component = { render: () => h(AssetListPage, { category: 'server' }) }
     const { root, app } = await mount(component, '/assets/servers')
     const search = all(root).find(n => n.type === 'input' && n.props['aria-label'] === '搜索服务器')!
+    expect(search.props.placeholder).toContain('实例类型')
     const updateSearch = search.props.onInput ?? search.props['onUpdate:modelValue']
     if (search.props.onInput) await updateSearch({ target: { value: '10.0.0.8' } })
     else await updateSearch('10.0.0.8')
@@ -583,6 +581,18 @@ describe('项目控制台页面', () => {
     await flush()
     expect(get).toHaveBeenLastCalledWith('/projects/2/resources', { params: expect.objectContaining({ keyword: '10.0.0.8', page: 1, page_size: 20 }) })
     expect(text(root)).not.toContain('搜索范围：资源名称、实例 ID、内网 IP、公网 IP')
+    app.unmount()
+  })
+  it('服务器无法确认的规格与磁盘容量只显示占位符', async () => {
+    const projectStore = useProjectStore()
+    projectStore.projects = [{ id: 2, code: 'platform', name: '平台项目', description: '', status: 'enabled', ownerUsername: null, createdAt: '', updatedAt: '' }]
+    projectStore.selectProject(2)
+    get.mockResolvedValue({ items: [{ id: 1, provider: 'aws', resource_type: 'ec2', external_id: 'i-empty', name: '空规格节点', asset_status: 'active', instance_type: '', vcpu: 0, memory: 0, endpoints: [], disks: [] }], total: 1 })
+    const component = { render: () => h(AssetListPage, { category: 'server' }) }
+    const { root, app } = await mount(component, '/assets/servers')
+    const rendered = text(root)
+    expect(rendered).not.toMatch(/未知|(?:^|\D)0 vCPU|(?:^|\D)0 GiB|— vCPU|— GiB/)
+    expect(rendered.match(/—/g)?.length).toBeGreaterThanOrEqual(4)
     app.unmount()
   })
   it('服务器精确筛选折叠展示，生效条件可单项移除', async () => {
@@ -643,19 +653,40 @@ describe('项目控制台页面', () => {
     expect(get).toHaveBeenCalledWith('/projects/2/sources', { params: { provider: undefined } })
     app.unmount()
   })
-  it('数据库资产页展示实例规格和存储容量', async () => {
+  it('资源搜索请求不会让并发加载的完整接入源选项失效', async () => {
+    const projectStore = useProjectStore()
+    projectStore.projects = [{ id: 2, code: 'platform', name: '平台项目', description: '', status: 'enabled', ownerUsername: null, createdAt: '', updatedAt: '' }]
+    projectStore.selectProject(2)
+    let finishSources!: (value: unknown[]) => void
+    get.mockImplementation((url: string) => url.endsWith('/sources') ? new Promise(resolve => { finishSources = resolve }) : Promise.resolve({ items: [], total: 0 }))
+    const component = { render: () => h(AssetListPage, { category: 'database' }) }
+    const { root, app } = await mount(component, '/assets/databases')
+    await all(root).find(n => n.type === 'form' && String(n.props.class).includes('server-search'))!.props.onSubmit({ preventDefault: () => {} })
+    await flush()
+    finishSources([{ id: 9, project_id: 2, provider: 'aws', name: '延迟返回的数据库来源', enabled: true, sync_interval_minutes: 60 }])
+    await flush()
+    await all(root).find(n => n.type === 'button' && text(n) === '筛选')!.props.onClick()
+    await flush()
+    expect(text(root)).toContain('延迟返回的数据库来源')
+    app.unmount()
+  })
+  it('数据库资产页按服务器样式分列展示核心字段并统一缺失值', async () => {
     const projectStore = useProjectStore()
     projectStore.projects = [{ id: 2, code: 'platform', name: '平台项目', description: '', status: 'enabled', ownerUsername: null, createdAt: '', updatedAt: '' }]
     projectStore.selectProject(2)
     get.mockResolvedValue({
       items: [
         {
-          id: 21, provider: 'aws', resource_type: 'rds', external_id: 'db-specification', name: '订单数据库', asset_status: 'active',
-          instance_type: 'db.r6g.large', vcpu: 2, memory: 16384, storage_type: 'gp3', storage_size_gib: 200, endpoints: [],
+          id: 21, source_name: '生产账号', provider: 'aws', resource_type: 'rds', external_id: 'db-specification', name: '订单数据库', asset_status: 'active', cloud_status: 'available', region: 'ap-southeast-1', zone: 'ap-southeast-1a',
+          instance_type: 'db.r6g.large', vcpu: 2, memory: 16384, engine: 'PostgreSQL', engine_version: '16.3', storage_type: 'gp3', storage_size_gib: 200,
+          first_seen_at: '2026-09-08T11:22:33', last_seen_at: '2026-09-09T12:34:56', endpoints: [
+            { kind: 'hostname', address: 'orders-a.example.com', port: 5432, protocol: 'tcp', resolved_ips: ['10.0.0.8'] },
+            { kind: 'hostname', address: 'orders-b.example.com', port: 5432, protocol: 'tcp', resolved_ips: [] },
+          ],
         },
         {
           id: 22, provider: 'aws', resource_type: 'rds', external_id: 'db-serverless', name: '弹性数据库', asset_status: 'active',
-          instance_type: 'db.serverless', vcpu: null, memory: null, storage_type: 'aurora', storage_size_gib: null, endpoints: [],
+          instance_type: '', vcpu: null, memory: null, engine: '', engine_version: '', storage_type: 'aurora', storage_size_gib: null, endpoints: [],
         },
       ],
       total: 2,
@@ -663,12 +694,103 @@ describe('项目控制台页面', () => {
 
     const component = { render: () => h(AssetListPage, { category: 'database' }) }
     const { root, app } = await mount(component, '/assets/databases')
-    expect(text(root)).toContain('实例规格')
-    expect(text(root)).toContain('db.r6g.large · 2 vCPU · 16 GiB')
-    expect(text(root)).toContain('存储')
-    expect(text(root)).toContain('gp3 · 200 GiB')
-    expect(text(root)).toContain('db.serverless · 未知 vCPU · 未知 GiB')
-    expect(text(root)).toContain('aurora · 容量未知')
+    expect(all(root).filter(n => n.type === 'th').map(text)).toEqual([
+      '资产', '来源', '类型', '实例类型', 'vCPU', '内存', '数据库引擎', '引擎版本', '存储容量', '地域', '访问地址', '云端状态', '资产状态', '最近发现时间',
+    ])
+    const rendered = text(root)
+    for (const value of ['db.r6g.large', '2 vCPU', '16 GiB', 'PostgreSQL', '16.3', '200 GiB', 'ap-southeast-1', 'orders-a.example.com:5432', 'orders-b.example.com:5432', '2026-09-09 12:34:56']) expect(rendered).toContain(value)
+    expect(rendered).not.toContain('存储类型')
+    expect(rendered).not.toContain('ap-southeast-1a')
+    expect(rendered).not.toContain('10.0.0.8')
+    expect(rendered).not.toMatch(/未知|(?:^|\D)0 vCPU|(?:^|\D)0 GiB|— vCPU|— GiB/)
+    expect(get).toHaveBeenCalledWith('/projects/2/resources', { params: expect.objectContaining({ resource_type: 'rds', page: 1, page_size: 20, sort_by: 'name', sort_order: 'asc' }) })
+    app.unmount()
+  })
+  it('数据库搜索与引擎筛选交给后端完整结果集并从完整来源列表加载选项', async () => {
+    const projectStore = useProjectStore()
+    projectStore.projects = [{ id: 2, code: 'platform', name: '平台项目', description: '', status: 'enabled', ownerUsername: null, createdAt: '', updatedAt: '' }]
+    projectStore.selectProject(2)
+    get.mockImplementation((url: string) => Promise.resolve(url.endsWith('/sources') ? [{ id: 9, project_id: 2, provider: 'aws', name: '数据库生产来源', enabled: true, sync_interval_minutes: 60 }] : { items: [], total: 0 }))
+    const component = { render: () => h(AssetListPage, { category: 'database' }) }
+    const { root, app } = await mount(component, '/assets/databases')
+
+    const searchInput = all(root).find(n => n.type === 'input' && n.props['aria-label'] === '搜索数据库')!
+    expect(searchInput.props.placeholder).toContain('实例类型')
+    const updateSearch = searchInput.props.onInput ?? searchInput.props['onUpdate:modelValue']
+    if (searchInput.props.onInput) await updateSearch({ target: { value: 'db.r6g.large' } })
+    else await updateSearch('db.r6g.large')
+    await all(root).find(n => n.type === 'form' && String(n.props.class).includes('server-search'))!.props.onSubmit({ preventDefault: () => {} })
+    await flush()
+    expect(get).toHaveBeenLastCalledWith('/projects/2/resources', { params: expect.objectContaining({ keyword: 'db.r6g.large', resource_type: 'rds', page: 1, page_size: 20 }) })
+
+    await all(root).find(n => n.type === 'button' && text(n) === '筛选')!.props.onClick()
+    await flush()
+    expect(text(root)).toContain('数据库生产来源')
+    expect(text(root)).not.toContain('类型ECS + EC2')
+    const engine = all(root).find(n => n.type === 'input' && n.props['aria-label'] === '数据库引擎')!
+    const updateEngine = engine.props.onInput ?? engine.props['onUpdate:modelValue']
+    if (engine.props.onInput) await updateEngine({ target: { value: 'PostgreSQL' } })
+    else await updateEngine('PostgreSQL')
+    await all(root).find(n => n.type === 'button' && text(n) === '应用筛选')!.props.onClick()
+    await flush()
+    expect(get).toHaveBeenLastCalledWith('/projects/2/resources', { params: expect.objectContaining({ engine: 'PostgreSQL', page: 1 }) })
+    expect(get).toHaveBeenCalledWith('/projects/2/sources', { params: { provider: undefined } })
+    app.unmount()
+  })
+  it('数据库列设置只允许隐藏约定的五列', async () => {
+    const projectStore = useProjectStore()
+    projectStore.projects = [{ id: 2, code: 'platform', name: '平台项目', description: '', status: 'enabled', ownerUsername: null, createdAt: '', updatedAt: '' }]
+    projectStore.selectProject(2)
+    get.mockResolvedValue({ items: [], total: 0 })
+    const component = { render: () => h(AssetListPage, { category: 'database' }) }
+    const { root, app } = await mount(component, '/assets/databases')
+    await all(root).find(n => n.type === 'button' && text(n) === '列设置')!.props.onClick()
+    await flush()
+    const settings = all(root).find(n => n.props['aria-label'] === '列设置')!
+    const state = new Map(settings.children.filter(n => n.type === 'div').map(row => [text(row).replace(/↑↓/g, ''), all(row).find(n => n.type === 'input')!.props.disabled]))
+    expect([...state.entries()].filter(([, disabled]) => !disabled).map(([label]) => label)).toEqual(['来源', '类型', '实例类型', '引擎版本', '地域'])
+    for (const label of ['vCPU', '内存', '数据库引擎', '存储容量', '访问地址', '云端状态']) expect(state.get(label)).toBe(true)
+    app.unmount()
+  })
+  it('所有项目数据库列表由后端统一分页并显示项目归属', async () => {
+    useAuthStore().acceptSession('管理员会话', { username: 'admin', globalRole: 'system_admin' })
+    const projectStore = useProjectStore()
+    projectStore.projects = [
+      { id: 2, code: 'platform', name: '平台项目', description: '', status: 'enabled', ownerUsername: null, createdAt: '', updatedAt: '' },
+      { id: 3, code: 'payment', name: '支付项目', description: '', status: 'enabled', ownerUsername: null, createdAt: '', updatedAt: '' },
+    ]
+    projectStore.selectAllProjects()
+    get.mockImplementation((url: string) => Promise.resolve(url.endsWith('/sources') ? [] : { items: [{ id: 21, project_name: '支付项目', provider: 'aws', resource_type: 'rds', external_id: 'db-orders', name: '订单数据库', asset_status: 'active', endpoints: [] }], total: 21 }))
+    const component = { render: () => h(AssetListPage, { category: 'database' }) }
+    const { root, app } = await mount(component, '/assets/databases')
+    expect(all(root).filter(n => n.type === 'th').map(text)).toContain('项目')
+    expect(text(root)).toContain('支付项目')
+    expect(get).toHaveBeenCalledWith('/resources', { params: expect.objectContaining({ resource_type: 'rds', page: 1, page_size: 20, sort_by: 'name', sort_order: 'asc' }) })
+    await all(root).find(n => n.type === 'button' && text(n) === '下一页')!.props.onClick()
+    await flush()
+    expect(get).toHaveBeenCalledWith('/resources', { params: expect.objectContaining({ resource_type: 'rds', page: 2, page_size: 20 }) })
+    app.unmount()
+  })
+  it('点击数据库名称打开只读详情抽屉并仅在详情展示解析 IP', async () => {
+    const projectStore = useProjectStore()
+    projectStore.projects = [{ id: 2, code: 'platform', name: '平台项目', description: '', status: 'enabled', ownerUsername: null, createdAt: '', updatedAt: '' }]
+    projectStore.selectProject(2)
+    get.mockResolvedValue({ items: [{ id: 21, source_name: '生产账号', provider: 'aws', resource_type: 'rds', external_id: 'db-orders', name: '订单数据库', asset_status: 'active', cloud_status: 'available', region: 'ap-southeast-1', zone: 'ap-southeast-1a', instance_type: 'db.r6g.large', vcpu: 2, memory: 16384, engine: 'PostgreSQL', engine_version: '16.3', storage_type: 'gp3', storage_size_gib: 200, first_seen_at: '2026-09-08T11:22:33', last_seen_at: '2026-09-09T12:34:56', endpoints: [{ kind: 'hostname', address: 'orders.example.com', port: 5432, protocol: 'tcp', resolved_ips: ['10.0.0.8'] }], raw_attributes: { secret: '不得展示' } }], total: 1 })
+    const component = { render: () => h(AssetListPage, { category: 'database' }) }
+    const { root, app } = await mount(component, '/assets/databases')
+    expect(text(root)).not.toContain('10.0.0.8')
+    await all(root).find(n => n.type === 'button' && text(n) === '订单数据库')!.props.onClick()
+    await flush()
+    const rendered = text(root)
+    for (const heading of ['数据库详情', '基本信息', '实例配置', '数据库信息', '访问地址', '状态与时间']) expect(rendered).toContain(heading)
+    for (const value of ['ap-southeast-1a', 'gp3', 'orders.example.com:5432', 'tcp', '10.0.0.8']) expect(rendered).toContain(value)
+    expect(rendered).not.toContain('原始属性')
+    expect(rendered).not.toContain('不得展示')
+    const copyButtons = all(root).filter(n => n.type === 'button' && text(n) === '复制')
+    await copyButtons[0].props.onClick()
+    await copyButtons[1].props.onClick()
+    expect(writeText).toHaveBeenNthCalledWith(1, 'db-orders')
+    expect(writeText).toHaveBeenNthCalledWith(2, 'orders.example.com:5432')
     app.unmount()
   })
   it('系统管理员选择所有项目后汇总资产并显示项目归属', async () => {

@@ -120,7 +120,7 @@ func (r *Repository) ListResources(ctx context.Context, projectID uint64, filter
 		}
 	}
 	// 服务器列表是当前高频分页入口，必须由数据库在完整范围筛选、排序后只返回当前页。
-	if len(tables) == 1 && tables[0] == "resources_servers" {
+	if len(tables) == 1 && tables[0] == "resources_servers" && filter.Engine == "" {
 		return r.listServerResources(ctx, projectID, filter)
 	}
 	sourceQuery := r.db.WithContext(ctx)
@@ -152,6 +152,10 @@ func (r *Repository) ListResources(ctx context.Context, projectID uint64, filter
 	}
 	values := make([]Resource, 0)
 	for _, table := range tables {
+		// 引擎是数据库专属属性；指定该条件时其他资产表不可能命中。
+		if filter.Engine != "" && table != "resources_databases" {
+			continue
+		}
 		query := r.db.WithContext(ctx).Table(table)
 		if projectID > 0 {
 			query = query.Where("project_id = ?", projectID)
@@ -173,6 +177,9 @@ func (r *Repository) ListResources(ctx context.Context, projectID uint64, filter
 		}
 		if filter.AssetStatus != "" {
 			query = query.Where("asset_status = ?", filter.AssetStatus)
+		}
+		if filter.Engine != "" {
+			query = query.Where("LOWER(engine) = ?", strings.ToLower(filter.Engine))
 		}
 		var rows []assetRow
 		if err := query.Find(&rows).Error; err != nil {
@@ -238,7 +245,7 @@ func (r *Repository) listServerResources(ctx context.Context, projectID uint64, 
 	}
 	if keyword := strings.TrimSpace(filter.Keyword); keyword != "" {
 		pattern := "%" + strings.ToLower(escapedLikeValue(keyword)) + "%"
-		query = query.Where("(LOWER(assets.name) LIKE ? ESCAPE '\\' OR LOWER(assets.external_id) LIKE ? ESCAPE '\\' OR LOWER(CAST(assets.private_ips AS TEXT)) LIKE ? ESCAPE '\\' OR LOWER(CAST(assets.public_ips AS TEXT)) LIKE ? ESCAPE '\\')", pattern, pattern, pattern, pattern)
+		query = query.Where("(LOWER(assets.name) LIKE ? ESCAPE '\\' OR LOWER(assets.external_id) LIKE ? ESCAPE '\\' OR LOWER(assets.instance_type) LIKE ? ESCAPE '\\' OR LOWER(CAST(assets.private_ips AS TEXT)) LIKE ? ESCAPE '\\' OR LOWER(CAST(assets.public_ips AS TEXT)) LIKE ? ESCAPE '\\')", pattern, pattern, pattern, pattern, pattern)
 	}
 	var total int64
 	if err := query.Count(&total).Error; err != nil {
@@ -287,11 +294,15 @@ func resourceMatchesKeyword(value Resource, keyword string) bool {
 	if keyword == "" {
 		return true
 	}
-	if strings.Contains(strings.ToLower(value.Name), keyword) || strings.Contains(strings.ToLower(value.ExternalID), keyword) {
+	if strings.Contains(strings.ToLower(value.Name), keyword) || strings.Contains(strings.ToLower(value.ExternalID), keyword) || strings.Contains(strings.ToLower(value.InstanceType), keyword) {
 		return true
 	}
 	for _, endpoint := range value.Endpoints {
-		if strings.Contains(strings.ToLower(endpoint.Address), keyword) {
+		address := endpoint.Address
+		if endpoint.Port > 0 {
+			address += ":" + strconv.Itoa(endpoint.Port)
+		}
+		if strings.Contains(strings.ToLower(address), keyword) {
 			return true
 		}
 	}
