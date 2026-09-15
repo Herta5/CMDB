@@ -1105,6 +1105,46 @@ describe('项目控制台页面', () => {
       expect(text(row.children.filter(n => n.type === 'td')[3]!)).toBe(expected)
     } finally { app.unmount() }
   })
+  it('编辑系统管理员仅说明所有项目权限，切换普通用户后恢复原授权', async () => {
+    useAuthStore().acceptSession('管理员会话', { username: 'admin', globalRole: 'system_admin' })
+    get.mockImplementation((url: string) => Promise.resolve(url === '/users' ? [
+      { username: 'other_admin', display_name: '其他管理员', email: '', global_role: 'system_admin', status: 'active', project_permissions: [{ project_id: 2, project_name: '平台项目', role: 'project_admin' }] },
+    ] : [fixture]))
+    const { root, app } = await mount(UserManagementPage, '/users')
+    try {
+      await all(root).find(n => n.type === 'button' && text(n) === '编辑')!.props.onClick()
+      await flush()
+      expect(text(root)).toContain('系统管理员拥有所有项目权限，无需逐项授权')
+      expect(all(root).some(n => n.props.name === 'project-2' || n.props.name === 'project-role-2')).toBe(false)
+      all(root).find(n => n.props.name === 'global-role')!.props.onChange({ target: { value: 'user' } })
+      await flush()
+      expect(all(root).find(n => n.props.name === 'project-2')?.props.checked).toBe(true)
+      expect(all(root).find(n => n.props.name === 'project-role-2')?.value).toBe('project_admin')
+      expect(text(root)).not.toContain('无需逐项授权')
+      all(root).find(n => n.props.name === 'global-role')!.props.onChange({ target: { value: 'system_admin' } })
+      await flush()
+      expect(all(root).some(n => n.props.name === 'project-2')).toBe(false)
+    } finally { app.unmount() }
+  })
+  it('创建时选择系统管理员隐藏逐项目授权，切回普通用户保留未提交选择', async () => {
+    useAuthStore().acceptSession('管理员会话', { username: 'admin', globalRole: 'system_admin' })
+    get.mockImplementation((url: string) => Promise.resolve(url === '/users' ? [] : [fixture]))
+    const { root, app } = await mount(UserManagementPage, '/users')
+    try {
+      await all(root).find(n => n.type === 'button' && text(n) === '创建用户')!.props.onClick()
+      await flush()
+      all(root).find(n => n.props.name === 'project-2')!.props.onChange({ target: { checked: true } })
+      all(root).find(n => n.props.name === 'project-role-2')!.props.onChange({ target: { value: 'project_admin' } })
+      all(root).find(n => n.props.name === 'global-role')!.props.onChange({ target: { value: 'system_admin' } })
+      await flush()
+      expect(all(root).some(n => n.props.name === 'project-2' || n.props.name === 'project-role-2')).toBe(false)
+      expect(text(root)).toContain('系统管理员拥有所有项目权限，无需逐项授权')
+      all(root).find(n => n.props.name === 'global-role')!.props.onChange({ target: { value: 'user' } })
+      await flush()
+      expect(all(root).find(n => n.props.name === 'project-2')?.props.checked).toBe(true)
+      expect(all(root).find(n => n.props.name === 'project-role-2')?.value).toBe('project_admin')
+    } finally { app.unmount() }
+  })
   it('显示名称在用户名上方，自己的编辑窗口和创建窗口没有删除入口', async () => {
     useAuthStore().acceptSession('管理员会话', { username: 'admin', displayName: '系统管理员', globalRole: 'system_admin' })
     get.mockImplementation((url: string) => Promise.resolve(url === '/users' ? [
