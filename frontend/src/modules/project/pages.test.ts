@@ -100,6 +100,20 @@ async function mount(component: Component, path = '/projects') {
 }
 
 describe('个人设置', () => {
+  it.each([
+    ['运维管理员', '运维管理员', '运'],
+    ['😀管理员', '😀管理员', '😀'],
+    ['  云平台管理员  ', '云平台管理员', '云'],
+    ['', 'operator', 'o'],
+    ['   ', 'operator', 'o'],
+    [undefined, 'operator', 'o'],
+  ])('顶部优先显示名称 %s，缺失时回退用户名', async (displayName, expected, initial) => {
+    useAuthStore().acceptSession('测试会话', { username: 'operator', displayName, globalRole: 'user' })
+    const { root, app } = await mount(ConsoleLayout, '/dashboard')
+    const summary = all(root).find(n => n.type === 'summary')!
+    expect(text(summary)).toBe(`${initial}${expected}⌄`)
+    app.unmount()
+  })
   async function openSettings() {
     const mounted = await mount(ConsoleLayout, '/dashboard')
     const entry = all(mounted.root).find(n => n.type === 'button' && text(n) === '个人设置')
@@ -122,6 +136,7 @@ describe('个人设置', () => {
     await flush()
     expect(put).toHaveBeenCalledWith('/me/profile', { display_name: '新名称' })
     expect(useAuthStore().currentUser?.displayName).toBe('新名称')
+    expect(text(all(root).find(n => n.type === 'summary')!)).toBe('新新名称⌄')
     expect(text(root)).toContain('显示名称已更新')
     app.unmount()
   })
@@ -309,7 +324,7 @@ describe('项目控制台页面', () => {
   it('顶部切换项目后保留当前功能页，退出时清除身份与项目', async () => {
     get.mockImplementation((url: string) => Promise.resolve(url === '/projects' ? [fixture, { ...fixture, id: 3, name: '支付项目' }] : { ...fixture, id: 3, name: '支付项目' }))
     const { root, app, router } = await mount(ConsoleLayout, '/assets/servers')
-    expect(text(root)).toContain('operator')
+    expect(text(all(root).find(n => n.type === 'summary')!)).toContain('运维用户')
     expect(text(root)).toContain('资产列表')
     expect(text(root)).toContain('资源管理')
     expect(text(root)).not.toContain('云资源管理')

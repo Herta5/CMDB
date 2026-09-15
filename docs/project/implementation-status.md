@@ -102,3 +102,9 @@
 按 AC-051 增加右上角“个人设置”，全部已登录角色均可单独维护本人显示名称与密码；用户名、权限和项目归属不可编辑。新增两个 OpenAPI 操作及双端生成类型，名称更新仅写对应列，密码变更验证当前密码并通过密码快照条件更新防止并发覆盖，审计同事务提交。会话签名派生绑定密码哈希，密码修改后旧会话失效；本次上线需要已有用户重新登录，不涉及数据库结构变化。
 
 实现证据：`backend/internal/identity/personal_settings.go`、`backend/internal/api/personal_settings_http.go`、`frontend/src/modules/auth/PersonalSettingsDialog.vue`；验收证据为 `backend/internal/platform/httpserver/personal_settings_test.go`、`backend/internal/identity/personal_settings_test.go`、`backend/internal/platform/database/personal_settings_postgres_test.go` 和 `frontend/src/modules/project/pages.test.ts`。覆盖本人边界、匿名和非法输入、审计回滚、密码轮换、并发保护、密码清理及跨会话响应隔离。前端全量 220 项测试、TypeScript 类型检查、生产构建、Docker 应用镜像构建、`scripts/test-backend.sh` 的后端全量与隔离 PostgreSQL 17 验收，以及 `scripts/check-api.sh main` 的生成一致性和接口兼容检查通过。新增交错测试还覆盖管理员旧资料不得恢复旧密码、名称并发回改必须审计，以及跨标签页存储事件延迟的身份保护。其他页面的已记录差距不在本次个人设置范围内。
+
+## 顶部个人菜单显示名称
+
+按用户确认调整 AC-051：右上角优先显示个人显示名称，未设置或仅空白时回退用户名，头像同步取展示名称首字；个人设置保存后立即刷新顶部。稳定用户名仍用于身份关联，并在个人设置弹窗中只读展示。实现为 `frontend/src/layouts/ConsoleLayout.vue`，回归覆盖正常名称、首尾空白、缺失值回退、非 BMP 字符头像及两种角色保存后的实时刷新，位于 `frontend/src/modules/project/pages.test.ts`。
+
+本轮前端全量 226 项测试及生产镜像构建通过，镜像构建同时执行 TypeScript 类型检查和 Vite 生产打包。未修改后端接口或数据库结构。

@@ -19,8 +19,8 @@ const auth = useAuthStore()
 const projects = useProjectStore()
 const route = useRoute()
 const router = useRouter()
-// 用户名是公开身份标识，显示名称只能作为辅助资料，不能遮蔽身份入口中的用户名。
-const userName = computed(() => auth.currentUser?.username || '当前用户')
+// 顶部优先展示个人显示名称；历史资料缺失时回退用户名，身份关联仍使用用户名。
+const userName = computed(() => auth.currentUser?.displayName?.trim() || auth.currentUser?.username || '当前用户')
 const isSystemAdmin = computed(() => auth.currentUser?.globalRole === 'system_admin')
 // 项目管理员权限随顶部当前项目切换，不能因其他项目的角色扩大当前边界。
 const isCurrentProjectAdmin = computed(() => projects.currentProject?.currentRole === 'project_admin')
@@ -99,7 +99,7 @@ async function logout() {
           </select>
         </div>
         <details ref="userMenu" class="user-menu">
-          <summary><span class="user-avatar" aria-hidden="true">{{ userName.slice(0, 1) }}</span><span>{{ userName }}</span><span class="menu-chevron" aria-hidden="true">⌄</span></summary>
+          <summary><span class="user-avatar" aria-hidden="true">{{ Array.from(userName)[0] }}</span><span>{{ userName }}</span><span class="menu-chevron" aria-hidden="true">⌄</span></summary>
           <div class="user-menu-panel">
             <p>{{ auth.currentUser?.globalRole === 'system_admin' ? '系统管理员' : '普通用户' }}</p>
             <button class="menu-action" @click="openPersonalSettings">个人设置</button>
